@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
-import 'screens/events/manage_event_screen.dart';
 import 'package:flutter/services.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
+
+import 'screens/events/manage_event_screen.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import 'theme/app_theme.dart';
+import 'theme/luxe.dart';
 import 'services/app_state.dart';
 import 'services/data_service.dart';
 import 'services/photo_service.dart';
@@ -19,15 +23,29 @@ import 'screens/auth/registration_screen.dart';
 import 'screens/admin/admin_registrations_screen.dart';
 import 'screens/profile/profile_screen.dart';
 
-
 // ── Main ─────────────────────────────────────────────────────────
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]);
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.light,
-  ));
+
+  // Initialize Firebase
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  // Lock app orientation
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+
+  // Configure status bar
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+    ),
+  );
+
   runApp(
     MultiProvider(
       providers: [
@@ -128,7 +146,19 @@ class AppShell extends StatelessWidget {
 
   static const _tabs = ['/lost-found', '/issues', '/events', '/lockers'];
   static const _labels = ['Lost & Found', 'Issues', 'Events', 'Lockers'];
-  static const _icons = [Icons.search_rounded, Icons.warning_amber_rounded, Icons.event_rounded, Icons.lock_rounded];
+  /// Filled variants mark the active tab; outlined variants the rest.
+  static const _iconsActive = [
+    Icons.travel_explore_rounded,
+    Icons.report_problem_rounded,
+    Icons.calendar_month_rounded,
+    Icons.lock_rounded,
+  ];
+  static const _iconsIdle = [
+    Icons.travel_explore_outlined,
+    Icons.report_problem_outlined,
+    Icons.calendar_month_outlined,
+    Icons.lock_outline_rounded,
+  ];
 
   int _activeIndex(BuildContext ctx) {
     final loc = GoRouterState.of(ctx).uri.toString();
@@ -142,112 +172,280 @@ class AppShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final idx = _activeIndex(context);
     return Scaffold(
-      // ── Header ────────────────────────────────────────────────
+      backgroundColor: Luxe.bg,
+      // ── Hero Header ───────────────────────────────────────────
       appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(56),
+        preferredSize: Size.fromHeight(MediaQuery.of(context).padding.top + 78),
         child: Container(
-          decoration: const BoxDecoration(gradient: AppTheme.headerGradient,
-            boxShadow: [BoxShadow(color: Color(0x2A5193B3), blurRadius: 12, offset: Offset(0, 3))]),
-          child: SafeArea(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), child: Row(children: [
-            // Logo
-            Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(10)),
-                child: const Icon(Icons.school_rounded, color: Colors.white, size: 20)),
-            const SizedBox(width: 10),
-            const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
-              Text('Campus Connect', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white, height: 1.1)),
-              Text('City University Malaysia', style: TextStyle(fontSize: 10, color: Color(0xCCFFFFFF), fontWeight: FontWeight.w500)),
-            ])),
-            // Admin toggle - Now requires login
-            Consumer<AppState>(
-              builder: (context, appState, child) {
-                final isAdminMode = appState.isAdmin;
-                return GestureDetector(
-                  onTap: () async {
-                    // If already admin, logout
-                    if (isAdminMode) {
-                      context.read<AppState>().logout();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: const Text('👤 Switched to Student mode'),
-                          behavior: SnackBarBehavior.floating,
-                          backgroundColor: AppTheme.textPrimary,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                          duration: const Duration(seconds: 1),
-                        ),
-                      );
-                      return;
-                    }
-
-                    // Show login dialog to switch to admin
-                    final result = await showDialog(
-                      context: context,
-                      barrierDismissible: false,
-                      builder: (_) => const LoginScreen(isAdminLogin: true, isDialog: true),
-                    );
-
-                    if (result == true) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: const Text('🛡 Admin mode activated'),
-                          behavior: SnackBarBehavior.floating,
-                          backgroundColor: AppTheme.textPrimary,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                          duration: const Duration(seconds: 1),
-                        ),
-                      );
-                    }
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: isAdminMode ? AppTheme.gold : Colors.white.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: Colors.white.withOpacity(0.3)),
-                    ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(isAdminMode ? Icons.shield_rounded : Icons.person_rounded, size: 14, color: isAdminMode ? const Color(0xFF7A5B00) : Colors.white),
-                      const SizedBox(width: 5),
-                      Text(isAdminMode ? 'Admin' : 'Student', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: isAdminMode ? const Color(0xFF7A5B00) : Colors.white)),
-                    ]),
-                  ),
-                );
-              },
-            ),
-            const SizedBox(width: 6),
-            // Profile button
-            GestureDetector(
-              onTap: () => context.push('/profile'),
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.person_rounded, color: Colors.white, size: 20),
+          decoration: BoxDecoration(
+            gradient: Luxe.heroGradient,
+            boxShadow: [
+              BoxShadow(
+                color: Luxe.primaryDeep.withValues(alpha: 0.26),
+                blurRadius: 24,
+                offset: const Offset(0, 8),
+                spreadRadius: -4,
               ),
-            ),
-            const SizedBox(width: 6),
-            // Notification bell with dynamic badge
-            Consumer2<DataService, AppState>(
-              builder: (context, dataService, appState, child) {
-                final unreadCount =
-                    dataService.unreadNotificationCountForUser(appState.userId, appState.isAdmin);
-                return GestureDetector(
-                  onTap: () => context.push('/lost-found/notifications'),
-                  child: Stack(children: [
-                    Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(10)),
-                        child: const Icon(Icons.notifications_rounded, color: Colors.white, size: 20)),
-                    if (unreadCount > 0) Positioned(top: 2, right: 2, child: Container(
-                      padding: const EdgeInsets.all(3),
-                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                      decoration: const BoxDecoration(color: Colors.orange, shape: BoxShape.circle),
-                      child: Text('$unreadCount', textAlign: TextAlign.center, style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: Colors.white)),
-                    )),
-                  ]),
-                );
-              },
-            ),
-          ]))),
+            ],
+          ),
+          child: Stack(
+            children: [
+              // Geometry, ambient light and campus skyline
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(painter: HeaderBackdropPainter()),
+                ),
+              ),
+              SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                      Luxe.s4 + 2, Luxe.s2 + 2, Luxe.s4 + 2, Luxe.s3),
+                  child: Row(
+                    children: [
+                      // Floating logo
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.96),
+                          borderRadius: BorderRadius.circular(Luxe.rSmall),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Luxe.primaryDeep.withValues(alpha: 0.30),
+                              blurRadius: 14,
+                              offset: const Offset(0, 5),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(Icons.school_rounded,
+                            color: Luxe.primary, size: 23),
+                      ),
+                      const SizedBox(width: Luxe.s3),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: Text('Campus Connect',
+                                  maxLines: 1,
+                                  style: TextStyle(
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white,
+                                    letterSpacing: -0.5,
+                                    height: 1.1,
+                                  )),
+                            ),
+                            const SizedBox(height: 2),
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text('City University Malaysia',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 10.5,
+                                        color: Colors.white
+                                            .withValues(alpha: 0.82),
+                                        fontWeight: FontWeight.w500,
+                                      )),
+                                ),
+                                const SizedBox(width: 4),
+                                // Verified badge
+                                Container(
+                                  width: 13,
+                                  height: 13,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white
+                                        .withValues(alpha: 0.92),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(Icons.check_rounded,
+                                      size: 9, color: Luxe.primary),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: Luxe.s2),
+                      // ── Student / Admin selector (frosted glass) ──
+                      Consumer<AppState>(
+                        builder: (context, appState, child) {
+                          final isAdminMode = appState.isAdmin;
+                          return GestureDetector(
+                            onTap: () async {
+                              // If already admin, logout
+                              if (isAdminMode) {
+                                context.read<AppState>().logout();
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: const Text('👤 Switched to Student mode'),
+                                    behavior: SnackBarBehavior.floating,
+                                    backgroundColor: AppTheme.textPrimary,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                                    duration: const Duration(seconds: 1),
+                                  ),
+                                );
+                                return;
+                              }
+
+                              // Show login dialog to switch to admin
+                              final result = await showDialog(
+                                context: context,
+                                barrierDismissible: false,
+                                builder: (_) => const LoginScreen(isAdminLogin: true, isDialog: true),
+                              );
+
+                              if (result == true) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: const Text('🛡 Admin mode activated'),
+                                    behavior: SnackBarBehavior.floating,
+                                    backgroundColor: AppTheme.textPrimary,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                                    duration: const Duration(seconds: 1),
+                                  ),
+                                );
+                              }
+                            },
+                            child: isAdminMode
+                                ? Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 11, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      color: Luxe.accent,
+                                      borderRadius:
+                                          BorderRadius.circular(Luxe.rChip),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Luxe.accent
+                                              .withValues(alpha: 0.45),
+                                          blurRadius: 12,
+                                          offset: const Offset(0, 4),
+                                        ),
+                                      ],
+                                    ),
+                                    child: const Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.shield_rounded,
+                                              size: 13,
+                                              color: Color(0xFF7A4B00)),
+                                          SizedBox(width: 5),
+                                          Text('Admin',
+                                              style: TextStyle(
+                                                  fontSize: 11.5,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: Color(0xFF7A4B00))),
+                                        ]),
+                                  )
+                                : const GlassSurface(
+                                    radius: Luxe.rChip,
+                                    padding: EdgeInsets.symmetric(
+                                        horizontal: 11, vertical: 8),
+                                    child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.school_rounded,
+                                              size: 13, color: Colors.white),
+                                          SizedBox(width: 5),
+                                          Text('Student',
+                                              style: TextStyle(
+                                                  fontSize: 11.5,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: Colors.white)),
+                                          SizedBox(width: 2),
+                                          Icon(Icons.expand_more_rounded,
+                                              size: 14, color: Colors.white),
+                                        ]),
+                                  ),
+                          );
+                        },
+                      ),
+                      const SizedBox(width: 7),
+                      // ── Profile ───────────────────────────────────
+                      GlassSurface(
+                        radius: Luxe.rChip,
+                        padding: const EdgeInsets.all(9),
+                        onTap: () => context.push('/profile'),
+                        child: const Icon(Icons.person_rounded,
+                            color: Colors.white, size: 19),
+                      ),
+                      const SizedBox(width: 7),
+                      // ── Notifications ─────────────────────────────
+                      Consumer2<DataService, AppState>(
+                        builder: (context, dataService, appState, child) {
+                          final unreadCount =
+                              dataService.unreadNotificationCountForUser(
+                                  appState.userId, appState.isAdmin);
+                          return Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              GlassSurface(
+                                radius: Luxe.rChip,
+                                padding: const EdgeInsets.all(9),
+                                onTap: () =>
+                                    context.push('/lost-found/notifications'),
+                                child: const Icon(Icons.notifications_rounded,
+                                    color: Colors.white, size: 19),
+                              ),
+                              if (unreadCount > 0)
+                                Positioned(
+                                  top: -3,
+                                  right: -3,
+                                  child: IgnorePointer(
+                                    child: Container(
+                                      padding: const EdgeInsets.all(3),
+                                      constraints: const BoxConstraints(
+                                          minWidth: 18, minHeight: 18),
+                                      decoration: BoxDecoration(
+                                        color: Luxe.accent,
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.9),
+                                            width: 1.5),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Luxe.accent
+                                                .withValues(alpha: 0.6),
+                                            blurRadius: 8,
+                                          ),
+                                        ],
+                                      ),
+                                      child: Text('$unreadCount',
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                              fontSize: 9,
+                                              height: 1.15,
+                                              fontWeight: FontWeight.w800,
+                                              color: Color(0xFF7A4B00))),
+                                    )
+                                        .animate(
+                                            onPlay: (c) =>
+                                                c.repeat(reverse: true))
+                                        .scaleXY(
+                                            begin: 1.0,
+                                            end: 1.14,
+                                            duration: 1100.ms,
+                                            curve: Curves.easeInOut),
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
       // ── Adaptive body ─────────────────────────────────────────
@@ -262,27 +460,88 @@ class AppShell extends StatelessWidget {
         },
         child: child,
       ),
-      // ── Bottom Nav ────────────────────────────────────────────
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(color: Colors.white, boxShadow: [BoxShadow(color: AppTheme.red.withOpacity(0.12), blurRadius: 20, offset: const Offset(0, -4))]),
-        child: SafeArea(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: List.generate(_tabs.length, (i) {
-            final active = idx == i;
-            return Expanded(child: GestureDetector(
-              onTap: () => context.go(_tabs[i]),
-              child: AnimatedContainer(duration: const Duration(milliseconds: 220), padding: const EdgeInsets.symmetric(vertical: 6),
-                decoration: BoxDecoration(color: active ? AppTheme.red.withOpacity(0.1) : Colors.transparent, borderRadius: BorderRadius.circular(12)),
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  Icon(_icons[i], color: active ? AppTheme.red : AppTheme.textMuted, size: active ? 24 : 22),
-                  const SizedBox(height: 3),
-                  Text(_labels[i], textAlign: TextAlign.center, style: TextStyle(fontSize: 10, fontWeight: active ? FontWeight.w800 : FontWeight.w500, color: active ? AppTheme.red : AppTheme.textMuted)),
-                  if (active) Container(margin: const EdgeInsets.only(top: 3), width: 18, height: 3, decoration: BoxDecoration(gradient: AppTheme.primaryGradient, borderRadius: BorderRadius.circular(99))),
-                ]),
-              ).animate(target: active ? 1 : 0).scaleXY(begin: 0.95, end: 1.0),
-            ));
-          }),
-        ))),
+      // ── Floating Navigation Bar (Material 3) ──────────────────
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+              Luxe.s4, Luxe.s1, Luxe.s4, Luxe.s3),
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: Luxe.s2 - 2, vertical: Luxe.s2 + 2),
+            decoration: BoxDecoration(
+              color: Luxe.surface,
+              borderRadius: BorderRadius.circular(Luxe.rCard),
+              border: Border.all(color: Luxe.primary.withValues(alpha: 0.06)),
+              boxShadow: [
+                BoxShadow(
+                  color: Luxe.primary.withValues(alpha: 0.06),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+                BoxShadow(
+                  color: Luxe.primary.withValues(alpha: 0.10),
+                  blurRadius: 30,
+                  offset: const Offset(0, 12),
+                  spreadRadius: -6,
+                ),
+              ],
+            ),
+            child: Row(
+              children: List.generate(_tabs.length, (i) {
+                final active = idx == i;
+                return Expanded(
+                  child: GestureDetector(
+                    onTap: () => context.go(_tabs[i]),
+                    behavior: HitTestBehavior.opaque,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // M3 pill indicator
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 260),
+                          curve: Curves.easeOutCubic,
+                          height: 30,
+                          width: active ? 54 : 40,
+                          decoration: BoxDecoration(
+                            gradient: active
+                                ? LinearGradient(colors: [
+                                    Luxe.secondary.withValues(alpha: 0.16),
+                                    Luxe.primary.withValues(alpha: 0.13),
+                                  ])
+                                : null,
+                            borderRadius: BorderRadius.circular(Luxe.rChip),
+                          ),
+                          child: Icon(
+                            active ? _iconsActive[i] : _iconsIdle[i],
+                            size: active ? 22 : 21,
+                            color: active ? Luxe.primary : Luxe.inkMuted,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        AnimatedDefaultTextStyle(
+                          duration: const Duration(milliseconds: 220),
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 10,
+                            height: 1.1,
+                            fontWeight:
+                                active ? FontWeight.w800 : FontWeight.w500,
+                            color: active ? Luxe.primary : Luxe.inkMuted,
+                          ),
+                          child: Text(_labels[i],
+                              maxLines: 1,
+                              textAlign: TextAlign.center,
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+        ),
       ),
     );
   }

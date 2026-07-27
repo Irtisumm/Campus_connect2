@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../widgets/common.dart';
 import '../../data/mock_data.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/luxe.dart';
 import '../../services/data_service.dart';
 import '../../services/app_state.dart';
 
@@ -29,22 +30,395 @@ AppBar _gradientAppBar(String title, BuildContext context, {List<Widget>? action
 // ── Screen 1: Hub ────────────────────────────────────────────────
 class LostFoundHubScreen extends StatelessWidget {
   const LostFoundHubScreen({super.key});
+
+  /// Maps a report status onto the semantic palette. Kept tolerant of
+  /// wording so new statuses degrade to neutral rather than crash.
+  static Color _statusColor(String status) {
+    final s = status.toLowerCase();
+    if (s.contains('match') || s.contains('resolved') || s.contains('claimed')) {
+      return Luxe.success;
+    }
+    if (s.contains('review') || s.contains('pending')) return Luxe.warning;
+    if (s.contains('active') || s.contains('inventory')) return Luxe.info;
+    return Luxe.inkMuted;
+  }
+
+  /// 'Matched - Pending' → 'Matched'. Keeps chips to a single word or two.
+  static String _shortStatus(String status) => status.split(' - ').first.trim();
+
+  /// Groups statuses into ordered {label: count} pairs for the chip row.
+  static List<MapEntry<String, int>> _group(Iterable<String> statuses) {
+    final counts = <String, int>{};
+    for (final s in statuses) {
+      final key = _shortStatus(s);
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts.entries.toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<DataService>(
       builder: (context, dataService, child) {
+        final lost = dataService.myLostReports;
+        final found = dataService.myFoundReports;
+
         return Scaffold(
-          body: SafeArea(child: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const NoticeBox(message: 'All item details are kept private. Only university management can view full details.', icon: Icons.lock_outline_rounded),
-            const SectionLabel('Report an Item'),
-            HubButton(icon: Icons.search_rounded, label: 'Report Lost Item', subtitle: "I've lost something on campus", isPrimary: true, onTap: () => context.push('/lost-found/report-lost')).animate().fadeIn(delay: 50.ms).slideY(begin: 0.2),
-            HubButton(icon: Icons.add_box_rounded, label: 'Report Found Item', subtitle: 'I found something on campus', isAmber: true, onTap: () => context.push('/lost-found/report-found')).animate().fadeIn(delay: 100.ms).slideY(begin: 0.2),
-            const SectionLabel('My Reports'),
-            HubButton(icon: Icons.description_rounded, label: 'My Lost Reports', subtitle: '${dataService.myLostReports.length} reports submitted', onTap: () => context.push('/lost-found/my-lost')).animate().fadeIn(delay: 150.ms).slideY(begin: 0.2),
-            HubButton(icon: Icons.upload_file_rounded, label: 'My Found Reports', subtitle: '${dataService.myFoundReports.length} reports submitted', onTap: () => context.push('/lost-found/my-found')).animate().fadeIn(delay: 200.ms).slideY(begin: 0.2),
-          ]))),
+          backgroundColor: Luxe.bg,
+          body: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(
+                parent: AlwaysScrollableScrollPhysics()),
+            padding: const EdgeInsets.fromLTRB(
+                Luxe.s5 - 4, Luxe.s5, Luxe.s5 - 4, Luxe.s6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const _PrivacyCard()
+                    .animate()
+                    .fadeIn(duration: 420.ms)
+                    .slideY(begin: 0.12, curve: Curves.easeOutCubic),
+                const SizedBox(height: Luxe.s6),
+
+                const LuxeSectionHeader('Report an Item'),
+                _HeroActionCard(
+                  title: 'Report Lost Item',
+                  subtitle: "I've lost something on campus",
+                  icon: Icons.search_rounded,
+                  gradient: Luxe.lostGradient,
+                  glow: Luxe.primary,
+                  illustration: const [
+                    Icons.backpack_rounded,
+                    Icons.account_balance_wallet_rounded,
+                    Icons.laptop_mac_rounded,
+                  ],
+                  onTap: () => context.push('/lost-found/report-lost'),
+                )
+                    .animate()
+                    .fadeIn(delay: 80.ms, duration: 420.ms)
+                    .slideY(begin: 0.14, curve: Curves.easeOutCubic),
+                const SizedBox(height: Luxe.s3 + 2),
+                _HeroActionCard(
+                  title: 'Report Found Item',
+                  subtitle: 'I found something on campus',
+                  icon: Icons.inventory_2_rounded,
+                  gradient: Luxe.foundGradient,
+                  glow: Luxe.accent,
+                  illustration: const [
+                    Icons.inventory_2_rounded,
+                    Icons.badge_rounded,
+                    Icons.smartphone_rounded,
+                  ],
+                  onTap: () => context.push('/lost-found/report-found'),
+                )
+                    .animate()
+                    .fadeIn(delay: 150.ms, duration: 420.ms)
+                    .slideY(begin: 0.14, curve: Curves.easeOutCubic),
+
+                const SizedBox(height: Luxe.s6),
+                const LuxeSectionHeader('My Reports'),
+                _ReportSummaryCard(
+                  title: 'My Lost Reports',
+                  icon: Icons.description_rounded,
+                  tint: Luxe.primary,
+                  total: lost.length,
+                  chips: _group(lost.map((r) => r.status)),
+                  colorOf: _statusColor,
+                  onTap: () => context.push('/lost-found/my-lost'),
+                )
+                    .animate()
+                    .fadeIn(delay: 220.ms, duration: 420.ms)
+                    .slideY(begin: 0.14, curve: Curves.easeOutCubic),
+                const SizedBox(height: Luxe.s3 + 2),
+                _ReportSummaryCard(
+                  title: 'My Found Reports',
+                  icon: Icons.upload_file_rounded,
+                  tint: Luxe.accent,
+                  total: found.length,
+                  chips: _group(found.map((r) => r.status)),
+                  colorOf: _statusColor,
+                  onTap: () => context.push('/lost-found/my-found'),
+                )
+                    .animate()
+                    .fadeIn(delay: 290.ms, duration: 420.ms)
+                    .slideY(begin: 0.14, curve: Curves.easeOutCubic),
+              ],
+            ),
+          ),
         );
       },
+    );
+  }
+}
+
+/// ── Privacy card ──────────────────────────────────────────────────
+class _PrivacyCard extends StatelessWidget {
+  const _PrivacyCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(Luxe.s5 - 4),
+      decoration: BoxDecoration(
+        color: Luxe.surface,
+        borderRadius: BorderRadius.circular(Luxe.rCard),
+        border: Border.all(color: Luxe.primary.withValues(alpha: 0.07)),
+        boxShadow: Luxe.lift(),
+      ),
+      child: Stack(
+        children: [
+          // Soft ambient shield glow bleeding from the right edge.
+          Positioned(
+            right: -26,
+            top: -14,
+            child: IgnorePointer(
+              child: Opacity(
+                opacity: 0.10,
+                child: ShieldMark(size: 118, showCheck: false),
+              ),
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const ShieldMark(size: 54),
+                  const SizedBox(width: Luxe.s4),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Privacy Protected',
+                            style: Luxe.title.copyWith(fontSize: 18)),
+                        const SizedBox(height: 5),
+                        Text(
+                          'Your information is securely encrypted and visible '
+                          'only to authorised university staff.',
+                          style: Luxe.body.copyWith(
+                              fontSize: 13, color: Luxe.inkSoft),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: Luxe.s4),
+              Container(height: 1, color: Luxe.hairline),
+              const SizedBox(height: Luxe.s3),
+              const Wrap(
+                spacing: Luxe.s2,
+                runSpacing: Luxe.s2,
+                children: [
+                  LuxeSecurityChip('Secure'),
+                  LuxeSecurityChip('Encrypted'),
+                  LuxeSecurityChip('Trusted'),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// ── Hero action card (Report Lost / Report Found) ─────────────────
+class _HeroActionCard extends StatelessWidget {
+  final String title, subtitle;
+  final IconData icon;
+  final Gradient gradient;
+  final Color glow;
+  final List<IconData> illustration;
+  final VoidCallback onTap;
+
+  const _HeroActionCard({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.gradient,
+    required this.glow,
+    required this.illustration,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Pressable(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: gradient,
+          borderRadius: BorderRadius.circular(Luxe.rCard),
+          boxShadow: Luxe.liftStrong(tint: glow),
+        ),
+        child: Stack(
+          children: [
+            Positioned.fill(child: CardIllustration(icons: illustration)),
+            // Diagonal glass highlight
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: Luxe.glassSheen,
+                    borderRadius: BorderRadius.circular(Luxe.rCard),
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: Luxe.s5 - 4, vertical: Luxe.s5),
+              child: Row(
+                children: [
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.22),
+                      borderRadius: BorderRadius.circular(Luxe.rSmall + 4),
+                      border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.32)),
+                    ),
+                    child: Icon(icon, color: Colors.white, size: 27),
+                  ),
+                  const SizedBox(width: Luxe.s4),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Luxe.cardTitle.copyWith(color: Colors.white)),
+                        const SizedBox(height: 4),
+                        Text(subtitle,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Luxe.body.copyWith(
+                                fontSize: 13,
+                                height: 1.3,
+                                color: Colors.white.withValues(alpha: 0.88))),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: Luxe.s3),
+                  const LuxeArrowButton(onDark: true, size: 44),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// ── Report summary card (My Lost / My Found) ──────────────────────
+class _ReportSummaryCard extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final Color tint;
+  final int total;
+  final List<MapEntry<String, int>> chips;
+  final Color Function(String) colorOf;
+  final VoidCallback onTap;
+
+  const _ReportSummaryCard({
+    required this.title,
+    required this.icon,
+    required this.tint,
+    required this.total,
+    required this.chips,
+    required this.colorOf,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Pressable(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(Luxe.s4 + 2),
+        decoration: BoxDecoration(
+          color: Luxe.surface,
+          borderRadius: BorderRadius.circular(Luxe.rCard),
+          border: Border.all(color: tint.withValues(alpha: 0.08)),
+          boxShadow: Luxe.lift(tint: tint),
+        ),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        tint.withValues(alpha: 0.16),
+                        tint.withValues(alpha: 0.07),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(Luxe.rSmall + 2),
+                    border: Border.all(color: tint.withValues(alpha: 0.14)),
+                  ),
+                  child: Icon(icon, color: tint, size: 24),
+                ),
+                const SizedBox(width: Luxe.s4),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Luxe.title),
+                      const SizedBox(height: 3),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.baseline,
+                        textBaseline: TextBaseline.alphabetic,
+                        children: [
+                          Text('$total',
+                              style: Luxe.display
+                                  .copyWith(fontSize: 22, color: tint)),
+                          const SizedBox(width: 5),
+                          Text('Submitted',
+                              style: Luxe.caption
+                                  .copyWith(color: Luxe.inkMuted)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: Luxe.s2),
+                const LuxeArrowButton(size: 42),
+              ],
+            ),
+            if (chips.isNotEmpty) ...[
+              const SizedBox(height: Luxe.s3 + 2),
+              Container(height: 1, color: Luxe.hairline),
+              const SizedBox(height: Luxe.s3),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: Luxe.s2,
+                  runSpacing: Luxe.s2,
+                  children: [
+                    for (final e in chips)
+                      LuxeStatusChip(
+                          label: '${e.value} ${e.key}',
+                          color: colorOf(e.key)),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
