@@ -296,6 +296,14 @@ class AppState extends ChangeNotifier {
   /// [AuthFailure] for permission/offline failures.
   Stream<Item?> watchReport(String id) => _lostFound.watchItem(id);
 
+  /// Live feed of the signed-in student's own lost AND found reports, for the
+  /// Lost & Found hub's combined summary counts.
+  ///
+  /// One query instead of merging two streams — the hub splits the result into
+  /// lost/found by [Item.isLost] / [Item.isFound] when it needs the breakdown.
+  Stream<List<Item>> watchMyAllReports() =>
+      _lostFound.watchMyAllItems(_firebaseUid ?? '');
+
   // ── REGISTRATION APPROVAL (admin) ─────────────────────────────────
   Stream<List<UserProfile>> watchStudentRegistrations() =>
       _admin.watchStudentRegistrations();

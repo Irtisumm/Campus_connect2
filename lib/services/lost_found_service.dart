@@ -60,6 +60,23 @@ class LostFoundService {
   Stream<List<Item>> watchMyFoundItems(String uid) =>
       _watchMine(uid, ItemType.found);
 
+  /// Live feed of the caller's own lost AND found reports, for the Lost &
+  /// Found hub's combined summary counts.
+  ///
+  /// One query (no `type` filter) instead of merging two, so the hub sees a
+  /// single consistent snapshot rather than two streams that emit
+  /// independently. The caller splits the result into lost/found by
+  /// [Item.isLost] / [Item.isFound] if it needs the breakdown — the hub's
+  /// status chips do exactly that.
+  Stream<List<Item>> watchMyAllItems(String uid) {
+    // An unavailable database or a signed-out caller yields an empty list
+    // rather than an error, matching [watchMyLostItems] / [watchMyFoundItems].
+    if (!isAvailable || uid.isEmpty) return Stream.value(const <Item>[]);
+    // No `type` filter, so this is a different query shape from `_watchMine`;
+    // the body is otherwise identical, so it calls the same private core.
+    return _watchAll(uid);
+  }
+
   /// Live view of a single report by its Firestore document ID, for the detail
   /// screens.
   ///
@@ -105,6 +122,45 @@ class LostFoundService {
     return _items
         .where('reportedByUid', isEqualTo: uid)
         .where('type', isEqualTo: type.wireValue)
+        .where('isDeleted', isEqualTo: false)
+        .snapshots()
+        .map((snapshot) {
+          final items = snapshot.docs
+              .map((doc) => Item.fromMap(doc.id, doc.data()))
+              .toList();
+          // Sorted client-side so no composite Firestore index is required.
+          items.sort((a, b) {
+            final aDate = a.createdAt;
+            final bDate = b.createdAt;
+            if (aDate == null && bDate == null) return 0;
+            if (aDate == null) return 1;
+            if (bDate == null) return -1;
+            return bDate.compareTo(aDate);
+          });
+          return items;
+        })
+        // Stream errors bypass try/catch, so they are translated here. Without
+        // this a raw FirebaseException would surface in `snapshot.error` and
+        // land in the widget tree.
+        .handleError(
+          (Object error) => throw AuthFailure.fromCode((error as FirebaseException).code),
+          test: (Object? error) => error is FirebaseException,
+        );
+  }
+
+  /// The combined-query core behind [watchMyAllItems].
+  ///
+  /// Same contract as [_watchMine] minus the `type` filter, so the hub gets one
+  /// snapshot covering both report kinds in one read rather than merging two
+  /// streams that emit on independent schedules.
+  Stream<List<Item>> _watchAll(String uid) {
+    // An unavailable database or a signed-out caller yields an empty list
+    // rather than an error: the hub shows its normal empty state instead of a
+    // failure it can do nothing about.
+    if (!isAvailable || uid.isEmpty) return Stream.value(const <Item>[]);
+
+    return _items
+        .where('reportedByUid', isEqualTo: uid)
         .where('isDeleted', isEqualTo: false)
         .snapshots()
         .map((snapshot) {

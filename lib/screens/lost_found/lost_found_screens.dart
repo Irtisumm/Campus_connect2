@@ -28,8 +28,23 @@ AppBar _gradientAppBar(String title, BuildContext context, {List<Widget>? action
 );
 
 // ── Screen 1: Hub ────────────────────────────────────────────────
-class LostFoundHubScreen extends StatelessWidget {
+class LostFoundHubScreen extends StatefulWidget {
   const LostFoundHubScreen({super.key});
+  @override
+  State<LostFoundHubScreen> createState() => _LostFoundHubScreenState();
+}
+
+class _LostFoundHubScreenState extends State<LostFoundHubScreen> {
+  /// Held in a field so rebuilds do not re-subscribe to Firestore.
+  late final Stream<List<Item>> _reports;
+
+  @override
+  void initState() {
+    super.initState();
+    // One combined feed for lost + found; AppState resolves the signed-in
+    // caller. The hub never touches DataService or Firestore directly.
+    _reports = context.read<AppState>().watchMyAllReports();
+  }
 
   /// Maps a report status onto the semantic palette. Kept tolerant of
   /// wording so new statuses degrade to neutral rather than crash.
@@ -58,10 +73,17 @@ class LostFoundHubScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final lost = dataService.myLostReports;
-        final found = dataService.myFoundReports;
+    return StreamBuilder<List<Item>>(
+      stream: _reports,
+      builder: (context, snapshot) {
+        // On the first frame the stream has not emitted yet; render the full
+        // layout with zeroed counts so the hub never flashes an empty-state
+        // where its cards should be. Errors are surfaced as chips of zero too
+        // — the hub has no "could not load" body, unlike the list screens, so a
+        // failed read degrades to "0 Submitted" rather than blocking the page.
+        final all = snapshot.data ?? const <Item>[];
+        final lost = all.where((r) => r.isLost).toList(growable: false);
+        final found = all.where((r) => r.isFound).toList(growable: false);
 
         return Scaffold(
           backgroundColor: Luxe.bg,
@@ -121,7 +143,7 @@ class LostFoundHubScreen extends StatelessWidget {
                   icon: Icons.description_rounded,
                   tint: Luxe.primary,
                   total: lost.length,
-                  chips: _group(lost.map((r) => r.status)),
+                  chips: _group(lost.map((r) => r.status.wireValue)),
                   colorOf: _statusColor,
                   onTap: () => context.push('/lost-found/my-lost'),
                 )
@@ -134,7 +156,7 @@ class LostFoundHubScreen extends StatelessWidget {
                   icon: Icons.upload_file_rounded,
                   tint: Luxe.accent,
                   total: found.length,
-                  chips: _group(found.map((r) => r.status)),
+                  chips: _group(found.map((r) => r.status.wireValue)),
                   colorOf: _statusColor,
                   onTap: () => context.push('/lost-found/my-found'),
                 )
