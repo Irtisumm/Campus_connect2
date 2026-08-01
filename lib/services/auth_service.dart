@@ -1,302 +1,168 @@
-import 'dart:convert';
-
-import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-class UserProfile {
-  final String userId;
-  final String role; // 'student' | 'admin'
-  final String name;
-  final String email;
-  final String programme;
-  final String phone;
+import '../models/auth_result.dart';
 
-  const UserProfile({
-    required this.userId,
-    required this.role,
-    required this.name,
-    required this.email,
-    required this.programme,
-    required this.phone,
-  });
+/// Firebase Authentication only.
+///
+/// This service knows nothing about Firestore, profiles, roles or approval —
+/// it creates, verifies and destroys credentials. Profile data lives in
+/// [UserService]; approval lives in [AdminService]; the session is owned by
+/// [AppState].
+///
+/// Every Firebase error is translated into [AuthFailure] so `firebase_auth`
+/// types never escape this file.
+class AuthService {
+  // Remember Me — the login identifier only. Passwords are never persisted.
+  static const String _rememberMeKey = 'remember_me';
+  static const String _savedIdentifierKey = 'saved_user_id';
+  static const String _legacyPasswordKey = 'saved_password';
 
-  UserProfile copyWith({
-    String? name,
-    String? email,
-    String? programme,
-    String? phone,
-  }) {
-    return UserProfile(
-      userId: userId,
-      role: role,
-      name: name ?? this.name,
-      email: email ?? this.email,
-      programme: programme ?? this.programme,
-      phone: phone ?? this.phone,
-    );
+  final FirebaseAuth? _authOrNull;
+
+  AuthService({FirebaseAuth? auth}) : _authOrNull = _resolve(auth);
+
+  /// Resolving the instance can throw when Firebase has not been initialised
+  /// (a plain widget test). Degrade to unavailable instead of taking the app
+  /// down; every entry point below checks [isAvailable].
+  static FirebaseAuth? _resolve(FirebaseAuth? injected) {
+    try {
+      return injected ?? FirebaseAuth.instance;
+    } catch (_) {
+      return null;
+    }
   }
 
-  Map<String, dynamic> toJson() {
-    return {
-      'userId': userId,
-      'role': role,
-      'name': name,
-      'email': email,
-      'programme': programme,
-      'phone': phone,
-    };
-  }
+  bool get isAvailable => _authOrNull != null;
+  FirebaseAuth get _auth => _authOrNull!;
 
-  factory UserProfile.fromJson(Map<String, dynamic> json) {
-    return UserProfile(
-      userId: json['userId']?.toString() ?? '',
-      role: json['role']?.toString() ?? 'student',
-      name: json['name']?.toString() ?? 'User',
-      email: json['email']?.toString() ?? '',
-      programme: json['programme']?.toString() ?? '',
-      phone: json['phone']?.toString() ?? '',
-    );
-  }
-}
+  // ── Session primitives ──────────────────────────────────────────
+  User? getCurrentUser() => isAvailable ? _auth.currentUser : null;
 
-class AuthService extends ChangeNotifier {
-  static const _profilePrefsKey = 'user_profile_overrides_v1';
+  Stream<User?> authStateChanges() =>
+      isAvailable ? _auth.authStateChanges() : const Stream<User?>.empty();
 
-  bool _isAuthenticated = false;
-  bool _isAdmin = false;
-  String? _userId;
-  String? _userName;
-  bool _profilesLoaded = false;
+  /// UID-only view of [authStateChanges], so callers never need to import
+  /// `firebase_auth` just to observe the session.
+  Stream<String?> uidChanges() => authStateChanges().map((user) => user?.uid);
 
-  bool get isAuthenticated => _isAuthenticated;
-  bool get isAdmin => _isAdmin;
-  String? get userId => _userId;
-  String? get userName => _userName;
+  String? get currentUid => getCurrentUser()?.uid;
 
-  // Student accounts (can be expanded via registration approval)
-  final Map<String, Map<String, String>> _studentAccounts = {
-    'S001': {'password': 'pass123', 'name': 'Ahmad Rizwan'},
-    'S002': {'password': 'pass123', 'name': 'Fatima Hassan'},
-    'S003': {'password': 'pass123', 'name': 'Mohammad Ali'},
-  };
-
-  static const _adminAccounts = {
-    'ADMIN001': {'password': 'admin123', 'name': 'Admin Panel'},
-    'ADMIN002': {'password': 'admin123', 'name': 'Manager Account'},
-  };
-
-  final Map<String, UserProfile> _studentProfiles = {
-    'S001': const UserProfile(
-      userId: 'S001',
-      role: 'student',
-      name: 'Ahmad Rizwan',
-      email: 's001@student.city.edu.my',
-      programme: 'Faculty of Engineering',
-      phone: '',
-    ),
-    'S002': const UserProfile(
-      userId: 'S002',
-      role: 'student',
-      name: 'Fatima Hassan',
-      email: 's002@student.city.edu.my',
-      programme: 'Faculty of Business',
-      phone: '',
-    ),
-    'S003': const UserProfile(
-      userId: 'S003',
-      role: 'student',
-      name: 'Mohammad Ali',
-      email: 's003@student.city.edu.my',
-      programme: 'Faculty of Computing',
-      phone: '',
-    ),
-  };
-
-  final Map<String, UserProfile> _adminProfiles = {
-    'ADMIN001': const UserProfile(
-      userId: 'ADMIN001',
-      role: 'admin',
-      name: 'Admin Panel',
-      email: 'admin001@city.edu.my',
-      programme: 'Campus Operations',
-      phone: '',
-    ),
-    'ADMIN002': const UserProfile(
-      userId: 'ADMIN002',
-      role: 'admin',
-      name: 'Manager Account',
-      email: 'admin002@city.edu.my',
-      programme: 'Campus Operations',
-      phone: '',
-    ),
-  };
-
-  // User analytics
-  int get totalStudentAccounts => _studentAccounts.length;
-  int get totalAdminAccounts => _adminAccounts.length;
-  int get totalAccounts => totalStudentAccounts + totalAdminAccounts;
-
-  Future<void> _ensureProfilesLoaded() async {
-    if (_profilesLoaded) return;
-
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_profilePrefsKey);
-    if (raw != null && raw.isNotEmpty) {
-      final decoded = jsonDecode(raw);
-      if (decoded is Map<String, dynamic>) {
-        decoded.forEach((id, value) {
-          if (value is Map<String, dynamic>) {
-            final profile = UserProfile.fromJson(value);
-            if (profile.role == 'admin') {
-              _adminProfiles[id] = profile;
-            } else {
-              _studentProfiles[id] = profile;
-            }
-          }
-        });
+  // ── Credentials ─────────────────────────────────────────────────
+  /// Returns the signed-in user's UID. Throws [AuthFailure] on any failure.
+  Future<String> signIn({required String email, required String password}) async {
+    _assertAvailable();
+    try {
+      final credential = await _auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      final uid = credential.user?.uid;
+      if (uid == null) {
+        throw const AuthFailure('Sign in failed. Please try again.');
       }
+      return uid;
+    } on FirebaseAuthException catch (e) {
+      throw AuthFailure.fromCode(e.code);
     }
-    _profilesLoaded = true;
   }
 
-  Future<void> _persistProfiles() async {
-    final merged = <String, dynamic>{};
-    for (final entry in _studentProfiles.entries) {
-      merged[entry.key] = entry.value.toJson();
+  /// Creates the account and returns its UID. Firebase signs the new user in
+  /// automatically — the caller is responsible for signing back out.
+  Future<String> createAccount({required String email, required String password}) async {
+    _assertAvailable();
+    try {
+      final credential = await _auth.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      final uid = credential.user?.uid;
+      if (uid == null) {
+        throw const AuthFailure('Registration failed. Please try again.');
+      }
+      return uid;
+    } on FirebaseAuthException catch (e) {
+      throw AuthFailure.fromCode(e.code);
     }
-    for (final entry in _adminProfiles.entries) {
-      merged[entry.key] = entry.value.toJson();
-    }
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_profilePrefsKey, jsonEncode(merged));
   }
 
-  Future<bool> login(String id, String password, bool isAdminLogin) async {
-    // Simulate network delay
-    await Future.delayed(const Duration(milliseconds: 500));
-    await _ensureProfilesLoaded();
+  Future<void> signOut() async {
+    if (!isAvailable) return;
+    try {
+      await _auth.signOut();
+    } on FirebaseAuthException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
 
-    final accounts = isAdminLogin ? _adminAccounts : _studentAccounts;
-    final account = accounts[id];
+  Future<void> sendPasswordResetEmail(String email) async {
+    _assertAvailable();
+    try {
+      await _auth.sendPasswordResetEmail(email: email);
+    } on FirebaseAuthException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
 
-    if (account == null || account['password'] != password) {
+  /// Deletes the currently signed-in account. Used to roll back a
+  /// registration whose Firestore profile write failed, so no orphaned
+  /// credential is left behind.
+  ///
+  /// Returns whether the account is gone. Never throws — the caller is
+  /// already handling a failure when it calls this.
+  Future<bool> deleteCurrentAccount() async {
+    final user = _authOrNull?.currentUser;
+    if (user == null) return false;
+    try {
+      await user.delete();
+      return true;
+    } catch (_) {
       return false;
     }
-
-    _isAuthenticated = true;
-    _isAdmin = isAdminLogin;
-    _userId = id;
-    _userName = account['name'];
-    notifyListeners();
-    return true;
   }
 
-  void logout() {
-    _isAuthenticated = false;
-    _isAdmin = false;
-    _userId = null;
-    _userName = null;
-    notifyListeners();
-  }
-
-  void switchRole(String id, String password, bool toAdmin) async {
-    logout();
-    await Future.delayed(const Duration(milliseconds: 300));
-    await login(id, password, toAdmin);
-  }
-
-  // Register a new student account (after admin approval, the account gets added)
-  void addApprovedStudent(
-    String studentId,
-    String password,
-    String name, {
-    String? email,
-    String? programme,
-    String? phone,
-  }) {
-    _studentAccounts[studentId] = {'password': password, 'name': name};
-    _studentProfiles[studentId] = UserProfile(
-      userId: studentId,
-      role: 'student',
-      name: name,
-      email: email ?? '${studentId.toLowerCase()}@student.city.edu.my',
-      programme: programme ?? 'General Studies',
-      phone: phone ?? '',
-    );
-    _persistProfiles();
-    notifyListeners();
-  }
-
-  UserProfile? getCurrentUserProfile() {
-    if (_userId == null) return null;
-    if (_isAdmin) {
-      return _adminProfiles[_userId!];
+  /// Cosmetic; failures are ignored so they can never fail a registration
+  /// that has otherwise succeeded.
+  Future<void> updateDisplayName(String name) async {
+    final user = _authOrNull?.currentUser;
+    if (user == null) return;
+    try {
+      await user.updateDisplayName(name);
+    } catch (_) {
+      // Not worth surfacing.
     }
-    return _studentProfiles[_userId!];
   }
 
-  Future<bool> updateCurrentUserProfile({
-    required String name,
-    required String email,
-    required String programme,
-    required String phone,
-  }) async {
-    if (_userId == null) return false;
-    await _ensureProfilesLoaded();
+  // ── Remember Me (identifier only, never the password) ───────────
+  Future<void> saveRememberedIdentifier(String identifier) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_savedIdentifierKey, identifier.trim());
+    await prefs.setBool(_rememberMeKey, true);
+    // Drop anything written by the old mock implementation.
+    await prefs.remove(_legacyPasswordKey);
+  }
 
-    final existing = getCurrentUserProfile();
-    if (existing == null) return false;
-
-    final updated = existing.copyWith(
-      name: name.trim(),
-      email: email.trim(),
-      programme: programme.trim(),
-      phone: phone.trim(),
-    );
-
-    if (_isAdmin) {
-      _adminProfiles[_userId!] = updated;
-    } else {
-      _studentProfiles[_userId!] = updated;
-      final account = _studentAccounts[_userId!];
-      if (account != null) {
-        account['name'] = updated.name;
-      }
+  Future<String?> loadRememberedIdentifier() async {
+    final prefs = await SharedPreferences.getInstance();
+    // Defensive cleanup: earlier builds stored the password in plain text.
+    if (prefs.containsKey(_legacyPasswordKey)) {
+      await prefs.remove(_legacyPasswordKey);
     }
-
-    _userName = updated.name;
-    await _persistProfiles();
-    notifyListeners();
-    return true;
+    if (!(prefs.getBool(_rememberMeKey) ?? false)) return null;
+    final id = prefs.getString(_savedIdentifierKey);
+    return (id == null || id.isEmpty) ? null : id;
   }
 
-  // Check if a student ID is already taken
-  bool isStudentIdTaken(String studentId) {
-    return _studentAccounts.containsKey(studentId);
-  }
-
-  // Credential persistence (Remember Me)
-  Future<void> saveCredentials(String id, String password) async {
+  Future<void> clearRememberedIdentifier() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('saved_user_id', id);
-    await prefs.setString('saved_password', password);
-    await prefs.setBool('remember_me', true);
+    await prefs.remove(_savedIdentifierKey);
+    await prefs.remove(_legacyPasswordKey);
+    await prefs.setBool(_rememberMeKey, false);
   }
 
-  Future<Map<String, String>?> loadSavedCredentials() async {
-    final prefs = await SharedPreferences.getInstance();
-    final remember = prefs.getBool('remember_me') ?? false;
-    if (!remember) return null;
-    final id = prefs.getString('saved_user_id');
-    final pass = prefs.getString('saved_password');
-    if (id != null && pass != null) return {'id': id, 'password': pass};
-    return null;
-  }
-
-  Future<void> clearSavedCredentials() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('saved_user_id');
-    await prefs.remove('saved_password');
-    await prefs.setBool('remember_me', false);
+  void _assertAvailable() {
+    if (!isAvailable) {
+      throw const AuthFailure('Authentication is unavailable. Please restart the app.');
+    }
   }
 }

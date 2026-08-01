@@ -206,13 +206,9 @@ class EventRole {
   });
 }
 
-class StudentRegistration {
-  final String id, studentId, name, email, faculty, password, status; // status: Pending, Approved, Rejected
-  final String submittedDate;
-  const StudentRegistration({required this.id, required this.studentId, required this.name,
-    required this.email, required this.faculty, required this.password,
-    required this.status, required this.submittedDate});
-}
+// StudentRegistration removed: student registrations now live in the Firestore
+// `users` collection (see UserProfile / AdminService). It carried a plaintext
+// `password` field, which must never exist outside Firebase Authentication.
 
 // ── Mock Data ─────────────────────────────────────────────────────
 class MockData {
@@ -332,9 +328,6 @@ class MockData {
     LockerIssue(id:'LI-001',lockerId:'LK-A02',studentId:'S001',description:'Lock not opening properly',status:'Reported',photoCount:2,reportedDate:'2026-03-20'),
   ];
 
-  // Student Registrations (pending approval)
-  static const List<StudentRegistration> pendingRegistrations = [
-    StudentRegistration(id:'REG-001',studentId:'S220500',name:'Tan Wei Ming',email:'weiming@student.city.edu.my',faculty:'Faculty of Computing',password:'student123',status:'Pending',submittedDate:'2026-03-24'),
-    StudentRegistration(id:'REG-002',studentId:'S220501',name:'Nurul Aina',email:'aina@student.city.edu.my',faculty:'Faculty of Business',password:'student123',status:'Pending',submittedDate:'2026-03-25'),
-  ];
+  // Student registrations are read live from Firestore — see
+  // AdminService.watchStudentRegistrations().
 }

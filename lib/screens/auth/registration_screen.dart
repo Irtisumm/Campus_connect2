@@ -3,9 +3,8 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import '../../widgets/common.dart';
-import '../../data/mock_data.dart';
 import '../../theme/app_theme.dart';
-import '../../services/data_service.dart';
+import '../../services/app_state.dart';
 
 // ── Student Registration Screen ─────────────────────────────────
 class RegistrationScreen extends StatefulWidget {
@@ -25,6 +24,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   bool _obscureConfirm = true;
   bool _agreed = false;
   bool _done = false;
+  bool _submitting = false;
 
   static const _faculties = [
     'Faculty of Computing',
@@ -43,6 +43,39 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     _passCtrl.dispose();
     _confirmPassCtrl.dispose();
     super.dispose();
+  }
+
+  /// Creates the Firebase Auth account and the pending `users/{uid}` profile.
+  /// The password is handed to Firebase Authentication only — it is never
+  /// written to Firestore.
+  Future<void> _handleRegister() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => _submitting = true);
+    final messenger = ScaffoldMessenger.of(context);
+
+    final result = await context.read<AppState>().registerStudent(
+      studentId: _studentIdCtrl.text.trim(),
+      fullName: _nameCtrl.text.trim(),
+      email: _emailCtrl.text.trim(),
+      faculty: _faculty!,
+      password: _passCtrl.text,
+    );
+
+    if (!mounted) return;
+    setState(() => _submitting = false);
+
+    if (result.success) {
+      setState(() => _done = true);
+    } else {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(result.message ?? 'Registration failed. Please try again.'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppTheme.danger,
+        ),
+      );
+    }
   }
 
   @override
@@ -209,23 +242,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   // Submit
                   GradientButton(
                     label: 'Register',
-                    onPressed: _agreed ? () {
-                      if (_formKey.currentState!.validate()) {
-                        final dataService = context.read<DataService>();
-                        final reg = StudentRegistration(
-                          id: 'REG-${DateTime.now().millisecondsSinceEpoch}',
-                          studentId: _studentIdCtrl.text.trim(),
-                          name: _nameCtrl.text.trim(),
-                          email: _emailCtrl.text.trim(),
-                          faculty: _faculty!,
-                          password: _passCtrl.text,
-                          status: 'Pending',
-                          submittedDate: DateTime.now().toString().split(' ')[0],
-                        );
-                        dataService.submitRegistration(reg);
-                        setState(() => _done = true);
-                      }
-                    } : null,
+                    onPressed: (_agreed && !_submitting) ? _handleRegister : null,
                   ),
                 ]),
               ),

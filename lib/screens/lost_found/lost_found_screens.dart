@@ -7,6 +7,7 @@ import '../../data/mock_data.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/luxe.dart';
 import '../../services/data_service.dart';
+import '../../services/lost_found_service.dart';
 import '../../services/app_state.dart';
 
 void _toast(BuildContext context, String msg) {
@@ -167,7 +168,7 @@ class _PrivacyCard extends StatelessWidget {
       child: Stack(
         children: [
           // Soft ambient shield glow bleeding from the right edge.
-          Positioned(
+          const Positioned(
             right: -26,
             top: -14,
             child: IgnorePointer(
@@ -434,9 +435,48 @@ class _ReportLostState extends State<ReportLostScreen> {
   final _titleC = TextEditingController();
   final _descC  = TextEditingController();
   bool _done = false;
+  bool _saving = false;
 
   static const _cats = ['Phone','Wallet','ID Card','Keys','Bag','Laptop','Books','Other'];
   static const _locs = ['Block A','Block B','Block C','Library','Cafeteria','Sports Complex','Main Entrance','Other'];
+
+  /// Persists the report to Firestore through [LostFoundService].
+  ///
+  /// The screen never touches Firestore itself — it hands an [Item] to the
+  /// service and only ever sees an [AuthFailure] with a display-ready message.
+  Future<void> _submit() async {
+    if (!(_key.currentState!.validate() && _cat != null && _loc != null)) {
+      _toast(context, 'Please fill all fields');
+      return;
+    }
+
+    final appState = context.read<AppState>();
+    final service = context.read<LostFoundService>();
+
+    setState(() => _saving = true);
+    try {
+      await service.createItem(Item(
+        type: ItemType.lost,
+        title: _titleC.text,
+        category: _cat!,
+        description: _descC.text,
+        whereLost: _loc!,
+        whenLost: DateTime.now(),
+        reportedByUid: appState.firebaseUid ?? '',
+        reportedByStudentId: appState.userId ?? '',
+      ));
+      if (!mounted) return;
+      setState(() => _done = true);
+    } on AuthFailure catch (failure) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _toast(context, failure.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _toast(context, 'Could not submit your report. Please try again.');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -451,24 +491,7 @@ class _ReportLostState extends State<ReportLostScreen> {
         _Drop(label: 'Where Lost', value: _loc, items: _locs, onChanged: (v) => setState(() => _loc = v)),
         _PhotoBox(),
         const SizedBox(height: 16),
-        GradientButton(label: 'Submit Report', onPressed: () {
-          if (_key.currentState!.validate() && _cat != null && _loc != null) {
-            final dataService = context.read<DataService>();
-            final newReport = LostReport(
-              id: 'LR-${DateTime.now().millisecondsSinceEpoch}',
-              title: _titleC.text,
-              category: _cat!,
-              whereLost: _loc!,
-              whenLost: DateTime.now().toString().split(' ')[0],
-              status: 'Active',
-              description: _descC.text,
-            );
-            dataService.addLostReport(newReport);
-            setState(() => _done = true);
-          } else {
-            _toast(context, 'Please fill all fields');
-          }
-        }),
+        GradientButton(label: 'Submit Report', onPressed: _saving ? null : _submit),
         const SizedBox(height: 10),
         OutlineBtn(label: 'Cancel', onPressed: () => context.pop()),
       ]))),
@@ -526,23 +549,50 @@ class _ReportFoundState extends State<ReportFoundScreen> {
 }
 
 // ── Screen 4: My Lost Reports ────────────────────────────────────
-class MyLostReportsScreen extends StatelessWidget {
+class MyLostReportsScreen extends StatefulWidget {
   const MyLostReportsScreen({super.key});
+  @override State<MyLostReportsScreen> createState() => _MyLostReportsScreenState();
+}
+
+class _MyLostReportsScreenState extends State<MyLostReportsScreen> {
+  /// Held in a field so rebuilds do not re-subscribe to Firestore.
+  late final Stream<List<Item>> _reports;
+
+  @override
+  void initState() {
+    super.initState();
+    _reports = context.read<AppState>().watchMyLostReports();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final data = dataService.myLostReports;
+    return StreamBuilder<List<Item>>(
+      stream: _reports,
+      builder: (context, snapshot) {
+        final data = snapshot.data ?? const <Item>[];
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
+        // The service maps every FirebaseException to an AuthFailure, so this
+        // message is already safe to show — permission denied, offline and
+        // network failures all arrive here with their own wording.
+        final error = snapshot.error;
         return Scaffold(
           appBar: _gradientAppBar('My Lost Reports', context, actions: [
             TextButton.icon(onPressed: () => context.push('/lost-found/report-lost'), icon: const Icon(Icons.add, color: Colors.white, size: 16), label: const Text('Report', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700))),
           ]),
-          body: data.isEmpty
-              ? const EmptyState(title: 'No Lost Reports', icon: Icons.search_off_rounded)
-              : ListView.builder(padding: const EdgeInsets.all(16), itemCount: data.length, itemBuilder: (ctx, i) {
-                  final r = data[i];
-                  return CardRow(title: r.title, subtitle: '${r.category} · ${r.whereLost}', extra: relativeTime(r.whenLost), status: r.status, onTap: () => context.push('/lost-found/lost/${r.id}')).animate().fadeIn(delay: (i*60).ms).slideY(begin: 0.15);
-                }),
+          body: isLoading && data.isEmpty
+              ? const Center(child: CircularProgressIndicator(color: AppTheme.red))
+              : error != null
+                  ? EmptyState(
+                      title: 'Could Not Load Reports',
+                      subtitle: error is AuthFailure ? error.message : 'Something went wrong. Please try again.',
+                      icon: Icons.cloud_off_rounded,
+                    )
+                  : data.isEmpty
+                      ? const EmptyState(title: 'No Lost Reports', icon: Icons.search_off_rounded)
+                      : ListView.builder(padding: const EdgeInsets.all(16), itemCount: data.length, itemBuilder: (ctx, i) {
+                          final r = data[i];
+                          return CardRow(title: r.title, subtitle: '${r.category} · ${r.whereLost}', extra: relativeTime(r.whenLostLabel), status: r.status.wireValue, onTap: () => context.push('/lost-found/lost/${r.id}')).animate().fadeIn(delay: (i*60).ms).slideY(begin: 0.15);
+                        }),
         );
       },
     );
@@ -822,7 +872,7 @@ class AdminLFDashboardScreen extends StatelessWidget {
             HubButton(icon: Icons.inventory_rounded, label: 'Found / Inventory', subtitle: '${dataService.myFoundReports.length} items', isAmber: true, onTap: () => context.push('/admin/lost-found/found-list')).animate().fadeIn(delay:150.ms),
             HubButton(icon: Icons.compare_arrows_rounded, label: 'Review Matches', subtitle: '$pending pending', onTap: () => context.push('/admin/lost-found/match-list')).animate().fadeIn(delay:200.ms),
             const SectionLabel('Admin Tools'),
-            HubButton(icon: Icons.person_add_rounded, label: 'Student Registrations', subtitle: '${dataService.pendingRegistrations.where((r) => r.status == "Pending").length} pending approval', onTap: () => context.push('/admin/registrations')).animate().fadeIn(delay:250.ms),
+            HubButton(icon: Icons.person_add_rounded, label: 'Student Registrations', subtitle: '${appState.pendingStudentAccounts} pending approval', onTap: () => context.push('/admin/registrations')).animate().fadeIn(delay:250.ms),
             // ── User Analytics Section ──
             const SectionLabel('User Analytics'),
             Row(children: [

@@ -1,0 +1,153 @@
+rules_version = '2';
+
+// Campus Connect — Firestore security rules for the `users` and `items`
+// collections.
+//
+// Deploy with:  firebase deploy --only firestore:rules
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    match /users/{uid} {
+
+      // The login screen accepts a campus ID (S001 / ADMIN001) rather than an
+      // email, so it must resolve ID -> email BEFORE the user is authenticated.
+      // That single-document lookup is the only anonymous read allowed here.
+      //
+      // Trade-off: someone who guesses a valid student ID can read that one
+      // profile document. If that matters for your deployment, move the lookup
+      // to a dedicated `studentIndex/{studentId}` collection holding only
+      // { email } and drop this `list` rule entirely.
+      allow list: if request.query.limit <= 1;
+
+      // A signed-in user reads their own profile; admins read anyone's.
+      allow get: if isSelf(uid) || isAdmin();
+
+      // Registration: a user may only create their OWN document, and may not
+      // self-approve or self-promote. Passwords must never be written here.
+      //
+      // `authEmail` is pinned to the address on the caller's ID token so it
+      // cannot be pointed at somebody else's account. If registration ever
+      // fails with permission-denied on a platform whose token omits `email`,
+      // relax that one line to `request.resource.data.authEmail is string`.
+      allow create: if isSelf(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.role == 'student'
+        && request.resource.data.status == 'Pending'
+        && request.resource.data.authEmail == request.auth.token.email
+        && !request.resource.data.keys().hasAny(['password']);
+
+      // Profile edits: the owner may change contact details only. authEmail,
+      // role, status, uid and studentId are immutable from the client.
+      //
+      // authEmail immutability is what keeps sign-in working: the login screen
+      // resolves a Student ID to authEmail, so if a profile edit could change
+      // it the user would lock themselves out.
+      allow update: if isSelf(uid)
+        && request.resource.data.authEmail == resource.data.authEmail
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.studentId == resource.data.studentId
+        && !request.resource.data.keys().hasAny(['password']);
+
+      // Approve / reject: admins may move a student between lifecycle states,
+      // but may not rewrite their identity either.
+      allow update: if isAdmin()
+        && request.resource.data.authEmail == resource.data.authEmail
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.status in ['Pending', 'Active', 'Rejected'];
+
+      // Accounts are never deleted from the app.
+      allow delete: if false;
+    }
+
+    match /items/{itemId} {
+
+      // Reads are owner-or-admin, mirroring the `users` get rule above.
+      //
+      // Requirement 8 asks for admin read access; it does NOT ask for a public
+      // noticeboard, and two things in the app argue against one: the Lost &
+      // Found hub tells students "visible only to authorised university staff",
+      // and there is no browse-all screen — `MyLostReportsScreen` shows your own
+      // reports and `AdminLostListScreen` is admin-only. Matching is mediated by
+      // staff through the admin match screens, not by students browsing each
+      // other's reports.
+      //
+      // On `list`: rules are not filters. Firestore evaluates this condition
+      // against each document a query would return and fails the whole query if
+      // any document fails. So a query filtered by `reportedByUid == <caller>`
+      // succeeds, an admin's unfiltered query succeeds via isAdmin(), and a
+      // student's attempt to list everyone's reports is denied — which is the
+      // intended outcome. Phase 3B's `watchMyLostItems(uid)` must therefore keep
+      // its `where('reportedByUid', '==', uid)` filter, or it will be rejected.
+      //
+      // If a peer-visible noticeboard is ever wanted, widen this one line to
+      // `signedIn()` rather than loosening anything else.
+      allow get, list: if isSelf(resource.data.reportedByUid) || isAdmin();
+
+      // Reporter identity is pinned to the caller's own token, so a report can
+      // only ever be filed in your own name (requirements 3 and 4).
+      // `_items.add()` generates the document ID, so ownership cannot be
+      // checked from the path — `reportedByUid` is the owner key.
+      //
+      // `status` is pinned to 'Active' and `isDeleted` to false for the same
+      // reason registration pins 'Pending': a new record starts at the
+      // beginning of its lifecycle and cannot be born already resolved or
+      // already deleted. If a later feature needs to create a report in
+      // another state, relax that one line to the same enum list used below.
+      allow create: if isSelf(request.resource.data.reportedByUid)
+        && request.resource.data.reportedByStudentId is string
+        && request.resource.data.type in ['lost', 'found']
+        && request.resource.data.status == 'Active'
+        && request.resource.data.isDeleted == false;
+
+      // Edits by the reporter. `isSelf(resource.data.reportedByUid)` reads the
+      // owner off the STORED document, so it is the existing owner who is
+      // checked — not whatever the incoming payload claims (requirement 5).
+      //
+      // reportedByUid and reportedByStudentId are then held equal to their
+      // stored values, so a report can never be reassigned to someone else
+      // (requirement 6). `type` is immutable for the same reason it is fixed in
+      // the Item model: flipping lost <-> found would invalidate any match
+      // already made against the report.
+      //
+      // This rule is also the soft-delete path — `isDeleted` is not pinned, so
+      // the owner may flip it to true (requirement 7).
+      allow update: if isSelf(resource.data.reportedByUid)
+        && request.resource.data.reportedByUid == resource.data.reportedByUid
+        && request.resource.data.reportedByStudentId == resource.data.reportedByStudentId
+        && request.resource.data.type == resource.data.type
+        && request.resource.data.isDeleted is bool
+        && request.resource.data.status in ['Active', 'Matched - Pending', 'Resolved', 'Closed'];
+
+      // Admins moderate any report — resolve it, close it, or soft-delete it —
+      // but may not rewrite who filed it either (requirements 6 and 8).
+      allow update: if isAdmin()
+        && request.resource.data.reportedByUid == resource.data.reportedByUid
+        && request.resource.data.reportedByStudentId == resource.data.reportedByStudentId
+        && request.resource.data.type == resource.data.type
+        && request.resource.data.isDeleted is bool
+        && request.resource.data.status in ['Active', 'Matched - Pending', 'Resolved', 'Closed'];
+
+      // Reports are never hard-deleted, by students or by admins. Removal is
+      // `isDeleted: true` through the update rules above, so admin history and
+      // any match already made against a report survive (requirement 7).
+      allow delete: if false;
+    }
+  }
+}

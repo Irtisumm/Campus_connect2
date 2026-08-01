@@ -1,93 +1,356 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import '../models/auth_result.dart';
+import '../models/item.dart';
+import '../models/user_profile.dart';
+import 'admin_service.dart';
 import 'auth_service.dart';
+import 'lost_found_service.dart';
+import 'user_service.dart';
 
+// Re-exported so screens keep importing a single file for session types.
+export '../models/auth_result.dart' show AuthResult, AuthFailure;
+export '../models/item.dart' show Item, ItemStatus, ItemType;
+export '../models/user_profile.dart' show UserProfile, UserRole, AccountStatus;
+
+/// App-wide session state and the orchestrator across the three services:
+/// [AuthService] (credentials), [UserService] (profile documents) and
+/// [AdminService] (approval).
+///
+/// This is the only object the widget tree talks to, and the only
+/// `ChangeNotifier` in the auth stack — the Provider graph is unchanged.
+/// No Firebase type crosses this boundary.
 class AppState extends ChangeNotifier {
-  late AuthService _authService;
+  final AuthService _auth;
+  final UserService _users;
+  final AdminService _admin;
+  final LostFoundService _lostFound;
 
-  bool get isAuthenticated => _authService.isAuthenticated;
-  bool get isAdmin => _authService.isAdmin;
-  String? get userId => _authService.userId;
-  UserProfile? get currentUserProfile => _authService.getCurrentUserProfile();
+  String? _firebaseUid;
+  UserProfile? _profile;
+  AccountCounts _counts = AccountCounts.empty;
+  StreamSubscription<String?>? _authSub;
+
+  AppState({
+    AuthService? authService,
+    UserService? userService,
+    AdminService? adminService,
+    LostFoundService? lostFoundService,
+  })  : _auth = authService ?? AuthService(),
+        _users = userService ?? UserService(),
+        _admin = adminService ?? AdminService(),
+        _lostFound = lostFoundService ?? LostFoundService() {
+    _firebaseUid = _auth.currentUid;
+    // Firebase auth state can change without a UI action (token refresh,
+    // cold-start session restore), so mirror it into the widget tree.
+    _authSub = _auth.uidChanges().listen(_onUidChanged);
+  }
+
+  bool get _servicesReady =>
+      _auth.isAvailable && _users.isAvailable && _admin.isAvailable;
+
+  // ── Session ───────────────────────────────────────────────────────
+  /// True only when a Firebase user is signed in, their profile has loaded,
+  /// and the account is approved.
+  bool get isAuthenticated => _firebaseUid != null && (_profile?.isActive ?? false);
+
+  bool get isAdmin => _profile?.isAdmin ?? false;
+
+  /// Campus-issued Student / Admin ID (e.g. `S001`). The rest of the app keys
+  /// its records off this, so it is deliberately NOT the Firebase UID.
+  String? get userId => _profile?.userId;
+
+  /// Firebase Authentication UID — also the `users` document ID.
+  String? get firebaseUid => _firebaseUid;
+
+  String? get userName => _profile?.fullName;
+  UserRole? get userRole => _profile?.role;
+  AccountStatus? get userStatus => _profile?.status;
+  UserProfile? get currentUserProfile => _profile;
 
   // ── USER ANALYTICS ────────────────────────────────────────────────
-  int get totalAccounts => _authService.totalAccounts;
-  int get totalStudentAccounts => _authService.totalStudentAccounts;
-  int get totalAdminAccounts => _authService.totalAdminAccounts;
+  int get totalAccounts => _counts.total;
+  int get totalStudentAccounts => _counts.students;
+  int get totalAdminAccounts => _counts.admins;
 
-  AppState() {
-    _authService = AuthService();
-  }
+  /// Students still awaiting approval on the Student Registrations screen.
+  int get pendingStudentAccounts => _counts.pendingStudents;
 
-  Future<bool> loginUser(String id, String password, bool isAdmin) async {
-    final result = await _authService.login(id, password, isAdmin);
-    if (result) notifyListeners();
-    return result;
-  }
-
-  void logout() {
-    _authService.logout();
-    _authService.clearSavedCredentials();
+  Future<void> refreshAccountStats() async {
+    final counts = await _admin.fetchAccountCounts();
+    _counts = counts;
     notifyListeners();
   }
 
-  Future<bool> switchRole(String id, String password, bool toAdmin) async {
-    final result = await _authService.login(id, password, toAdmin);
-    if (result) notifyListeners();
-    return result;
-  }
-
-  // Register a new student account (called after admin approval)
-  void addApprovedStudent(
-    String studentId,
-    String password,
-    String name, {
-    String? email,
-    String? programme,
-    String? phone,
-  }) {
-    _authService.addApprovedStudent(
-      studentId,
-      password,
-      name,
-      email: email,
-      programme: programme,
-      phone: phone,
-    );
+  Future<void> _onUidChanged(String? uid) async {
+    _firebaseUid = uid;
+    if (uid == null) {
+      _profile = null;
+      notifyListeners();
+      return;
+    }
+    // Restore the profile after a cold start where Firebase kept the session.
+    if (_profile == null || _profile!.uid != uid) {
+      try {
+        _profile = await _users.fetchProfile(uid);
+      } on AuthFailure {
+        _profile = null;
+      }
+    }
     notifyListeners();
   }
 
-  bool isStudentIdTaken(String studentId) {
-    return _authService.isStudentIdTaken(studentId);
+  // ── SIGN IN ───────────────────────────────────────────────────────
+  /// [id] accepts a Student/Admin ID or an email address.
+  Future<AuthResult> loginUser(String id, String password, bool isAdminLogin) async {
+    if (!_servicesReady) return _unavailable;
+
+    final identifier = id.trim();
+    if (identifier.isEmpty || password.isEmpty) {
+      return const AuthResult.failure('Please fill all fields');
+    }
+
+    try {
+      final authEmail = await _users.resolveAuthEmail(identifier);
+      if (authEmail == null) {
+        return const AuthResult.failure('No account exists with this ID.');
+      }
+
+      final uid = await _auth.signIn(email: authEmail, password: password);
+      final profile = await _users.fetchProfile(uid);
+
+      if (profile == null) {
+        await _auth.signOut();
+        return const AuthResult.failure(
+          'Your profile could not be found. Please contact the administrator.',
+        );
+      }
+
+      final rejection = _gateFor(profile, requireAdmin: isAdminLogin);
+      if (rejection != null) {
+        await _auth.signOut();
+        return AuthResult.failure(rejection);
+      }
+
+      _firebaseUid = uid;
+      _profile = profile;
+      notifyListeners();
+      unawaited(refreshAccountStats());
+      return AuthResult.success(profile: profile);
+    } on AuthFailure catch (failure) {
+      return AuthResult.failure(failure.message);
+    }
   }
 
-  // ── CREDENTIAL PERSISTENCE (Remember Me) ─────────────────────────
-  Future<void> saveCredentials(String id, String password) async {
-    await _authService.saveCredentials(id, password);
+  /// Returns the reason this profile may not enter the app, or null if it may.
+  String? _gateFor(UserProfile profile, {required bool requireAdmin}) {
+    switch (profile.status) {
+      case AccountStatus.pending:
+        return 'Your account is waiting for administrator approval.';
+      case AccountStatus.rejected:
+        return 'Your registration was rejected.';
+      case AccountStatus.active:
+        break;
+    }
+    if (requireAdmin && !profile.isAdmin) {
+      return 'This account does not have administrator access.';
+    }
+    if (!requireAdmin && profile.isAdmin) {
+      return 'This is an administrator account. Use the admin login.';
+    }
+    return null;
   }
 
-  Future<Map<String, String>?> loadSavedCredentials() async {
-    return await _authService.loadSavedCredentials();
+  // ── REGISTER ──────────────────────────────────────────────────────
+  /// Creates the credential and the profile document as one atomic unit.
+  ///
+  /// Firestore has no cross-service transaction with Firebase Auth, so if the
+  /// profile write fails the newly created credential is deleted — an account
+  /// can never exist in Authentication without a matching `users` document.
+  Future<AuthResult> registerStudent({
+    required String studentId,
+    required String fullName,
+    required String email,
+    required String faculty,
+    required String password,
+  }) async {
+    if (!_servicesReady) return _unavailable;
+
+    final normalisedId = studentId.trim().toUpperCase();
+    final normalisedEmail = email.trim();
+
+    try {
+      if (await _users.isStudentIdTaken(normalisedId)) {
+        return const AuthResult.failure('This Student ID is already registered.');
+      }
+
+      // Step 1 — credential. Firebase signs the new user in automatically.
+      final uid = await _auth.createAccount(
+        email: normalisedEmail,
+        password: password,
+      );
+
+      final profile = UserProfile(
+        uid: uid,
+        studentId: normalisedId,
+        fullName: fullName.trim(),
+        // Immutable from here on; sign-in always resolves to this address.
+        authEmail: normalisedEmail,
+        email: normalisedEmail,
+        faculty: faculty.trim(),
+        role: UserRole.student,
+        status: AccountStatus.pending,
+      );
+
+      // Step 2 — profile document, with rollback if it fails.
+      try {
+        await _users.createProfile(profile);
+      } on AuthFailure catch (failure) {
+        final rolledBack = await _auth.deleteCurrentAccount();
+        if (!rolledBack) await _auth.signOut();
+        _firebaseUid = null;
+        _profile = null;
+        notifyListeners();
+        return AuthResult.failure(
+          rolledBack
+              ? 'Could not complete registration: ${failure.message} Please try again.'
+              : 'Registration could not be completed. Please contact the '
+                  'administrator before registering again.',
+        );
+      }
+
+      await _auth.updateDisplayName(profile.fullName);
+
+      // A pending account must not hold a live session.
+      await _auth.signOut();
+      _firebaseUid = null;
+      _profile = null;
+      notifyListeners();
+
+      return AuthResult.success(
+        profile: profile,
+        message: 'Your account is waiting for administrator approval.',
+      );
+    } on AuthFailure catch (failure) {
+      return AuthResult.failure(failure.message);
+    }
   }
 
-  Future<void> clearSavedCredentials() async {
-    await _authService.clearSavedCredentials();
+  // ── SIGN OUT / RESET ──────────────────────────────────────────────
+  Future<void> logout() async {
+    try {
+      await _auth.signOut();
+    } on AuthFailure {
+      // Clearing local state matters more than a clean remote sign-out.
+    }
+    await _auth.clearRememberedIdentifier();
+    _firebaseUid = null;
+    _profile = null;
+    notifyListeners();
   }
 
+  Future<AuthResult> switchRole(String id, String password, bool toAdmin) =>
+      loginUser(id, password, toAdmin);
+
+  Future<AuthResult> sendPasswordReset(String identifier) async {
+    if (!_servicesReady) return _unavailable;
+    final trimmed = identifier.trim();
+    if (trimmed.isEmpty) {
+      return const AuthResult.failure('Enter your Student ID or email first.');
+    }
+    try {
+      final authEmail = await _users.resolveAuthEmail(trimmed);
+      if (authEmail == null) {
+        return const AuthResult.failure('No account exists with this ID.');
+      }
+      await _auth.sendPasswordResetEmail(authEmail);
+      return AuthResult.success(message: 'Password reset link sent to $authEmail');
+    } on AuthFailure catch (failure) {
+      return AuthResult.failure(failure.message);
+    }
+  }
+
+  // ── LOST & FOUND ──────────────────────────────────────────────────
+  /// Live feed of the signed-in student's own lost reports, newest first.
+  ///
+  /// The screen never has to know the Firebase UID — it is read from the
+  /// session here, so the UI keeps its single dependency on [AppState].
+  /// Signed out yields an empty list, matching the screen's empty state.
+  Stream<List<Item>> watchMyLostReports() =>
+      _lostFound.watchMyLostItems(_firebaseUid ?? '');
+
+  // ── REGISTRATION APPROVAL (admin) ─────────────────────────────────
+  Stream<List<UserProfile>> watchStudentRegistrations() =>
+      _admin.watchStudentRegistrations();
+
+  Future<bool> approveRegistration(String uid) =>
+      _setStatus(uid, AccountStatus.active);
+
+  Future<bool> rejectRegistration(String uid) =>
+      _setStatus(uid, AccountStatus.rejected);
+
+  Future<bool> _setStatus(String uid, AccountStatus status) async {
+    try {
+      await _admin.setAccountStatus(uid, status);
+      if (_profile?.uid == uid) {
+        _profile = _profile!.copyWith(status: status);
+      }
+      notifyListeners();
+      unawaited(refreshAccountStats());
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  Future<bool> isStudentIdTaken(String studentId) async {
+    try {
+      return await _users.isStudentIdTaken(studentId);
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  // ── REMEMBER ME (identifier only — never the password) ────────────
+  Future<void> saveRememberedIdentifier(String id) =>
+      _auth.saveRememberedIdentifier(id);
+
+  Future<String?> loadRememberedIdentifier() => _auth.loadRememberedIdentifier();
+
+  Future<void> clearRememberedIdentifier() => _auth.clearRememberedIdentifier();
+
+  // ── PROFILE ───────────────────────────────────────────────────────
   Future<bool> updateCurrentUserProfile({
     required String name,
     required String email,
     required String programme,
     required String phone,
   }) async {
-    final result = await _authService.updateCurrentUserProfile(
-      name: name,
-      email: email,
-      programme: programme,
-      phone: phone,
-    );
-    if (result) {
+    final current = _profile;
+    if (current == null || !_servicesReady) return false;
+    try {
+      _profile = await _users.updateContactDetails(
+        current: current,
+        fullName: name,
+        email: email,
+        faculty: programme,
+        phone: phone,
+      );
       notifyListeners();
+      return true;
+    } on AuthFailure {
+      return false;
     }
-    return result;
+  }
+
+  static const AuthResult _unavailable =
+      AuthResult.failure('Authentication is unavailable. Please restart the app.');
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
   }
 }

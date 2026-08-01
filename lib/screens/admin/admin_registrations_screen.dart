@@ -3,9 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import '../../widgets/common.dart';
-import '../../data/mock_data.dart';
 import '../../theme/app_theme.dart';
-import '../../services/data_service.dart';
 import '../../services/app_state.dart';
 
 void _toast(BuildContext ctx, String msg) => ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
@@ -27,14 +25,26 @@ class AdminRegistrationsScreen extends StatefulWidget {
 class _AdminRegistrationsScreenState extends State<AdminRegistrationsScreen> {
   bool _showPending = true;
 
+  /// Held in a field so toggling the Pending/Processed tab does not
+  /// re-subscribe to Firestore on every rebuild.
+  late final Stream<List<UserProfile>> _registrations;
+
+  @override
+  void initState() {
+    super.initState();
+    _registrations = context.read<AppState>().watchStudentRegistrations();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final allRegs = dataService.pendingRegistrations;
-        final pending = allRegs.where((r) => r.status == 'Pending').toList();
-        final processed = allRegs.where((r) => r.status != 'Pending').toList();
+    return StreamBuilder<List<UserProfile>>(
+      stream: _registrations,
+      builder: (context, snapshot) {
+        final allRegs = snapshot.data ?? const <UserProfile>[];
+        final pending = allRegs.where((r) => r.isPending).toList();
+        final processed = allRegs.where((r) => !r.isPending).toList();
         final data = _showPending ? pending : processed;
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
 
         return Scaffold(
           appBar: _appBar('Student Registrations', context),
@@ -47,9 +57,9 @@ class _AdminRegistrationsScreenState extends State<AdminRegistrationsScreen> {
               child: Row(children: [
                 Expanded(child: StatCard(value: '${pending.length}', label: 'Pending', valueColor: AppTheme.goldDark, bgColor: AppTheme.gold.withOpacity(0.15))),
                 const SizedBox(width: 10),
-                Expanded(child: StatCard(value: '${allRegs.where((r) => r.status == 'Approved').length}', label: 'Approved', valueColor: AppTheme.redDark, bgColor: AppTheme.red.withOpacity(0.07))),
+                Expanded(child: StatCard(value: '${allRegs.where((r) => r.isActive).length}', label: 'Approved', valueColor: AppTheme.redDark, bgColor: AppTheme.red.withOpacity(0.07))),
                 const SizedBox(width: 10),
-                Expanded(child: StatCard(value: '${allRegs.where((r) => r.status == 'Rejected').length}', label: 'Rejected', valueColor: const Color(0xFFB03030), bgColor: const Color(0x08D65E5E))),
+                Expanded(child: StatCard(value: '${allRegs.where((r) => r.isRejected).length}', label: 'Rejected', valueColor: const Color(0xFFB03030), bgColor: const Color(0x08D65E5E))),
               ]),
             ),
 
@@ -86,7 +96,9 @@ class _AdminRegistrationsScreenState extends State<AdminRegistrationsScreen> {
             ),
 
             // List
-            Expanded(child: data.isEmpty
+            Expanded(child: isLoading && allRegs.isEmpty
+              ? const Center(child: CircularProgressIndicator(color: AppTheme.red))
+              : data.isEmpty
               ? Center(child: EmptyState(
                   title: _showPending ? 'No Pending Registrations' : 'No Processed Registrations',
                   subtitle: _showPending ? 'All registrations have been reviewed.' : 'No registrations have been processed yet.',
@@ -109,12 +121,12 @@ class _AdminRegistrationsScreenState extends State<AdminRegistrationsScreen> {
 }
 
 class _RegistrationCard extends StatelessWidget {
-  final StudentRegistration reg;
+  final UserProfile reg;
   const _RegistrationCard({required this.reg});
 
   @override
   Widget build(BuildContext context) {
-    final isPending = reg.status == 'Pending';
+    final isPending = reg.isPending;
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -138,7 +150,8 @@ class _RegistrationCard extends StatelessWidget {
               Text(reg.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
               Text('${reg.studentId} · ${reg.faculty}', style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
             ])),
-            StatusBadge(reg.status),
+            // Firestore stores `Active`; this screen has always said `Approved`.
+            StatusBadge(reg.status.displayLabel),
           ]),
 
           const SizedBox(height: 10),
@@ -153,7 +166,7 @@ class _RegistrationCard extends StatelessWidget {
             ),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               _DetailRow('Email', reg.email),
-              _DetailRow('Submitted', fmtDate(reg.submittedDate)),
+              _DetailRow('Submitted', fmtDate(reg.createdAt?.toIso8601String())),
             ]),
           ),
 
@@ -178,7 +191,7 @@ class _RegistrationCard extends StatelessWidget {
     );
   }
 
-  void _showApproveDialog(BuildContext context, StudentRegistration reg) {
+  void _showApproveDialog(BuildContext context, UserProfile reg) {
     showDialog(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -202,19 +215,14 @@ class _RegistrationCard extends StatelessWidget {
           TextButton(onPressed: () => Navigator.of(dialogCtx).pop(), child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted))),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.red),
-            onPressed: () {
+            onPressed: () async {
               Navigator.of(dialogCtx).pop();
-              // Approve registration in DataService
-              context.read<DataService>().approveRegistration(reg.id);
-              // Create login account in AuthService via AppState
-              context.read<AppState>().addApprovedStudent(
-                reg.studentId,
-                reg.password,
-                reg.name,
-                email: reg.email,
-                programme: reg.faculty,
-              );
-              _toast(context, '${reg.name} approved! Account created.');
+              // Flips users/{uid}.status to Active so the login gate opens.
+              final ok = await context.read<AppState>().approveRegistration(reg.uid);
+              if (!context.mounted) return;
+              _toast(context, ok
+                  ? '${reg.name} approved! Account activated.'
+                  : 'Could not approve ${reg.name}. Please try again.');
             },
             child: const Text('Approve', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
           ),
@@ -223,7 +231,7 @@ class _RegistrationCard extends StatelessWidget {
     );
   }
 
-  void _showRejectDialog(BuildContext context, StudentRegistration reg) {
+  void _showRejectDialog(BuildContext context, UserProfile reg) {
     showDialog(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -234,10 +242,13 @@ class _RegistrationCard extends StatelessWidget {
           TextButton(onPressed: () => Navigator.of(dialogCtx).pop(), child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted))),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () {
+            onPressed: () async {
               Navigator.of(dialogCtx).pop();
-              context.read<DataService>().rejectRegistration(reg.id);
-              _toast(context, '${reg.name} registration rejected.');
+              final ok = await context.read<AppState>().rejectRegistration(reg.uid);
+              if (!context.mounted) return;
+              _toast(context, ok
+                  ? '${reg.name} registration rejected.'
+                  : 'Could not reject ${reg.name}. Please try again.');
             },
             child: const Text('Reject', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
           ),

@@ -36,11 +36,11 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _loadSavedCredentials() async {
     if (widget.isDialog) return; // Don't auto-fill in dialog mode
     final appState = context.read<AppState>();
-    final creds = await appState.loadSavedCredentials();
-    if (creds != null && mounted) {
+    // Only the identifier is remembered — passwords are never persisted.
+    final savedId = await appState.loadRememberedIdentifier();
+    if (savedId != null && mounted) {
       setState(() {
-        _idCtrl.text = creds['id']!;
-        _passCtrl.text = creds['password']!;
+        _idCtrl.text = savedId;
         _rememberMe = true;
       });
     }
@@ -62,22 +62,21 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() { _isLoading = true; _errorMsg = null; });
     final appState = context.read<AppState>();
 
-    final success = await appState.loginUser(
+    final result = await appState.loginUser(
       _idCtrl.text.trim(),
       _passCtrl.text,
       _isAdmin,
     );
 
+    if (!mounted) return;
     setState(() => _isLoading = false);
 
-    if (success) {
-      if (!mounted) return;
-
-      // Save or clear credentials based on Remember Me
+    if (result.success) {
+      // Remember the identifier only — never the password.
       if (_rememberMe) {
-        appState.saveCredentials(_idCtrl.text.trim(), _passCtrl.text);
+        appState.saveRememberedIdentifier(_idCtrl.text.trim());
       } else {
-        appState.clearSavedCredentials();
+        appState.clearRememberedIdentifier();
       }
 
       if (widget.isDialog) {
@@ -86,8 +85,22 @@ class _LoginScreenState extends State<LoginScreen> {
         context.go('/lost-found');
       }
     } else {
-      setState(() => _errorMsg = 'Invalid ID or password');
+      setState(() => _errorMsg = result.message ?? 'Invalid ID or password');
     }
+  }
+
+  /// Sends a Firebase password-reset email to the address behind the ID
+  /// currently typed in the form.
+  Future<void> _handleForgotPassword() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final result = await context.read<AppState>().sendPasswordReset(_idCtrl.text);
+    if (!mounted) return;
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(result.message ?? 'Password reset email sent'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   @override
@@ -198,9 +211,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     Align(
                       alignment: Alignment.centerRight,
                       child: GestureDetector(
-                        onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Contact admin to reset password'), behavior: SnackBarBehavior.floating),
-                        ),
+                        onTap: _isLoading ? null : _handleForgotPassword,
                         child: const Text('Forgot Password?', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.red)),
                       ),
                     ),

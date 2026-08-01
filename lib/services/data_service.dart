@@ -21,7 +21,6 @@ class DataService extends ChangeNotifier {
   late List<LockerIssue> lockerIssues;
   late Map<String, List<LockerHistory>> lockerHistory;
   late List<mockdata.Notification> notifications;
-  late List<StudentRegistration> pendingRegistrations;
   final List<EventRole> eventRoles = [];
 
   DataService() {
@@ -43,7 +42,6 @@ class DataService extends ChangeNotifier {
     lockerIssues = List.from(MockData.lockerIssues);
     lockerHistory = Map.from(MockData.lockerHistory.map((k, v) => MapEntry(k, List<LockerHistory>.from(v))));
     notifications = List.from(MockData.notifications);
-    pendingRegistrations = List.from(MockData.pendingRegistrations);
 
     // Initialize mutable issueHistory from mock data
     issueHistory = Map.from(MockData.issueHistory.map((k, v) => MapEntry(k, List<IssueHistory>.from(v))));
@@ -1861,38 +1859,12 @@ class DataService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void submitRegistration(StudentRegistration reg) {
-    pendingRegistrations.add(reg);
-    _addNotification('New student registration: ${reg.name} (${reg.studentId})', 'admin');
+  /// Raises the admin notification for a new sign-up. The registration record
+  /// itself lives in Firestore (`users`), not here — this only restores the
+  /// in-app badge that the mock flow used to produce.
+  void notifyNewRegistration(String name, String studentId) {
+    _addNotification('New student registration: $name ($studentId)', 'admin');
     notifyListeners();
-  }
-
-  void approveRegistration(String regId) {
-    final index = pendingRegistrations.indexWhere((r) => r.id == regId);
-    if (index != -1) {
-      final reg = pendingRegistrations[index];
-      pendingRegistrations[index] = StudentRegistration(
-        id: reg.id, studentId: reg.studentId, name: reg.name,
-        email: reg.email, faculty: reg.faculty, password: reg.password,
-        status: 'Approved', submittedDate: reg.submittedDate,
-      );
-      _addNotification('Registration approved for ${reg.name} (${reg.studentId}).', 'admin');
-      notifyListeners();
-    }
-  }
-
-  void rejectRegistration(String regId) {
-    final index = pendingRegistrations.indexWhere((r) => r.id == regId);
-    if (index != -1) {
-      final reg = pendingRegistrations[index];
-      pendingRegistrations[index] = StudentRegistration(
-        id: reg.id, studentId: reg.studentId, name: reg.name,
-        email: reg.email, faculty: reg.faculty, password: reg.password,
-        status: 'Rejected', submittedDate: reg.submittedDate,
-      );
-      _addNotification('Registration rejected for ${reg.name} (${reg.studentId}).', 'admin');
-      notifyListeners();
-    }
   }
 
   int get unreadNotificationCount => notifications.where((n) => !n.read).length;

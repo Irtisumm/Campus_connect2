@@ -11,6 +11,7 @@ import 'theme/app_theme.dart';
 import 'theme/luxe.dart';
 import 'services/app_state.dart';
 import 'services/data_service.dart';
+import 'services/lost_found_service.dart';
 import 'services/photo_service.dart';
 import 'screens/auth/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
@@ -52,6 +53,9 @@ Future<void> main() async {
         ChangeNotifierProvider(create: (_) => AppState()),
         ChangeNotifierProvider(create: (_) => DataService()),
         ChangeNotifierProvider(create: (_) => PhotoUploadService()),
+        // Stateless Firestore gateway — nothing listens to it, so a plain
+        // Provider rather than a ChangeNotifierProvider.
+        Provider(create: (_) => LostFoundService()),
       ],
       child: const CampusConnectApp(),
     ),
