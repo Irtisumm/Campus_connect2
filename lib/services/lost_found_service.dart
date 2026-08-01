@@ -49,6 +49,45 @@ class LostFoundService {
   }
 
   /// Live feed of the caller's own lost reports, newest first.
+  Stream<List<Item>> watchMyLostItems(String uid) =>
+      _watchMine(uid, ItemType.lost);
+
+  /// Live feed of the caller's own found reports, newest first.
+  ///
+  /// Identical to [watchMyLostItems] apart from the `type` filter — both read
+  /// the same `items` collection, so a found report is just a document whose
+  /// `type` is `found`.
+  Stream<List<Item>> watchMyFoundItems(String uid) =>
+      _watchMine(uid, ItemType.found);
+
+  /// Live view of a single report by its Firestore document ID, for the detail
+  /// screens.
+  ///
+  /// Emits `null` when the document does not exist — the screen renders its
+  /// "not found" state from that. A soft-deleted report still exists and is
+  /// readable (the `items` read rule checks ownership, not `isDeleted`), so it
+  /// is emitted as an [Item] with [Item.isDeleted] `true`; the screen renders
+  /// its "deleted" state from that flag rather than treating it as missing.
+  ///
+  /// Like the `watchMy*` feeds, raw [FirebaseException]s are translated to
+  /// [AuthFailure] here so a permission-denied or offline failure reaches the
+  /// widget tree as a display-ready message — never a Firebase type.
+  Stream<Item?> watchItem(String id) {
+    // An unavailable database or an empty ID yields `null` (the "not found"
+    // state) instead of an error: the detail screen can do nothing about either.
+    if (!isAvailable || id.isEmpty) return Stream.value(null);
+
+    return _items
+        .doc(id)
+        .snapshots()
+        .map((doc) => doc.exists ? Item.fromMap(doc.id, doc.data()!) : null)
+        .handleError(
+          (Object error) => throw AuthFailure.fromCode((error as FirebaseException).code),
+          test: (Object? error) => error is FirebaseException,
+        );
+  }
+
+  /// The shared query behind both `watchMy*` feeds.
   ///
   /// The `reportedByUid` filter is not optional. Firestore rules are not
   /// filters — the `items` read rule is evaluated against every document the
@@ -57,7 +96,7 @@ class LostFoundService {
   ///
   /// Soft-deleted reports are excluded here rather than in the UI, so no screen
   /// has to remember to check [Item.isDeleted].
-  Stream<List<Item>> watchMyLostItems(String uid) {
+  Stream<List<Item>> _watchMine(String uid, ItemType type) {
     // An unavailable database or a signed-out caller yields an empty list
     // rather than an error: the screen shows its normal empty state instead of
     // a failure the user can do nothing about.
@@ -65,7 +104,7 @@ class LostFoundService {
 
     return _items
         .where('reportedByUid', isEqualTo: uid)
-        .where('type', isEqualTo: ItemType.lost.wireValue)
+        .where('type', isEqualTo: type.wireValue)
         .where('isDeleted', isEqualTo: false)
         .snapshots()
         .map((snapshot) {

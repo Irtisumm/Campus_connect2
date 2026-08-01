@@ -281,6 +281,21 @@ class AppState extends ChangeNotifier {
   Stream<List<Item>> watchMyLostReports() =>
       _lostFound.watchMyLostItems(_firebaseUid ?? '');
 
+  /// Live feed of the signed-in student's own found reports, newest first.
+  ///
+  /// Same contract as [watchMyLostReports] — the screen supplies no UID and
+  /// signing out yields an empty list.
+  Stream<List<Item>> watchMyFoundReports() =>
+      _lostFound.watchMyFoundItems(_firebaseUid ?? '');
+
+  /// Live view of a single report (lost or found) by its Firestore document ID.
+  ///
+  /// The detail screens call this with only the ID from the route — they never
+  /// touch the service or Firestore, and they never see a Firebase type: the
+  /// stream emits the [Item], `null` for "not found", or throws an
+  /// [AuthFailure] for permission/offline failures.
+  Stream<Item?> watchReport(String id) => _lostFound.watchItem(id);
+
   // ── REGISTRATION APPROVAL (admin) ─────────────────────────────────
   Stream<List<UserProfile>> watchStudentRegistrations() =>
       _admin.watchStudentRegistrations();

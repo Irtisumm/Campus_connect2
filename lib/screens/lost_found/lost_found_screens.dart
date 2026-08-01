@@ -3,7 +3,6 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import '../../widgets/common.dart';
-import '../../data/mock_data.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/luxe.dart';
 import '../../services/data_service.dart';
@@ -508,9 +507,56 @@ class _ReportFoundState extends State<ReportFoundScreen> {
   String? _cat, _loc;
   final _descC = TextEditingController();
   bool _done = false;
+  bool _saving = false;
 
   static const _cats = ['Phone','Wallet','ID Card','Keys','Bag','Laptop','Books','Other'];
   static const _locs = ['Block A','Block B','Block C','Library','Cafeteria','Sports Complex','Main Entrance','Other'];
+
+  /// Persists the found report to Firestore through [LostFoundService].
+  ///
+  /// Mirrors `_ReportLostState._submit` — the only difference is
+  /// [ItemType.found]. The screen never touches Firestore itself and only ever
+  /// sees an [AuthFailure] carrying a display-ready message.
+  Future<void> _submit() async {
+    // Validation unchanged: this form has no Form/validator, so the three
+    // fields are checked inline exactly as before.
+    if (!(_cat != null && _loc != null && _descC.text.isNotEmpty)) {
+      _toast(context, 'Please fill all fields');
+      return;
+    }
+
+    final appState = context.read<AppState>();
+    final service = context.read<LostFoundService>();
+
+    setState(() => _saving = true);
+    try {
+      await service.createItem(Item(
+        type: ItemType.found,
+        // This form collects one free-text field. It is the item's headline in
+        // every list that shows found reports, so it fills `title` as well —
+        // `Item.title` is shared with the lost flow and the admin screens.
+        title: _descC.text,
+        category: _cat!,
+        description: _descC.text,
+        // `Item` has one location/date pair for both report types; for a found
+        // report these hold where and when it was found.
+        whereLost: _loc!,
+        whenLost: DateTime.now(),
+        reportedByUid: appState.firebaseUid ?? '',
+        reportedByStudentId: appState.userId ?? '',
+      ));
+      if (!mounted) return;
+      setState(() => _done = true);
+    } on AuthFailure catch (failure) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _toast(context, failure.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _toast(context, 'Could not submit your report. Please try again.');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -524,23 +570,7 @@ class _ReportFoundState extends State<ReportFoundScreen> {
         _Drop(label: 'Where Found', value: _loc, items: _locs, onChanged: (v) => setState(() => _loc = v)),
         _PhotoBox(),
         const SizedBox(height: 16),
-        GradientButton(label: 'Submit Report', onPressed: () {
-          if (_cat != null && _loc != null && _descC.text.isNotEmpty) {
-            final dataService = context.read<DataService>();
-            final newReport = FoundReport(
-              id: 'FR-${DateTime.now().millisecondsSinceEpoch}',
-              description: _descC.text,
-              category: _cat!,
-              whereFound: _loc!,
-              whenFound: DateTime.now().toString().split(' ')[0],
-              status: 'In Inventory',
-            );
-            dataService.addFoundReport(newReport);
-            setState(() => _done = true);
-          } else {
-            _toast(context, 'Please fill all fields');
-          }
-        }),
+        GradientButton(label: 'Submit Report', onPressed: _saving ? null : _submit),
         const SizedBox(height: 10),
         OutlineBtn(label: 'Cancel', onPressed: () => context.pop()),
       ])),
@@ -600,27 +630,54 @@ class _MyLostReportsScreenState extends State<MyLostReportsScreen> {
 }
 
 // ── Screen 5: My Found Reports ───────────────────────────────────
-class MyFoundReportsScreen extends StatelessWidget {
+class MyFoundReportsScreen extends StatefulWidget {
   const MyFoundReportsScreen({super.key});
+  @override State<MyFoundReportsScreen> createState() => _MyFoundReportsScreenState();
+}
+
+class _MyFoundReportsScreenState extends State<MyFoundReportsScreen> {
+  /// Held in a field so rebuilds do not re-subscribe to Firestore.
+  late final Stream<List<Item>> _reports;
+
+  @override
+  void initState() {
+    super.initState();
+    _reports = context.read<AppState>().watchMyFoundReports();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final data = dataService.myFoundReports;
+    return StreamBuilder<List<Item>>(
+      stream: _reports,
+      builder: (context, snapshot) {
+        final data = snapshot.data ?? const <Item>[];
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
+        // The service maps every FirebaseException to an AuthFailure, so this
+        // message is already safe to show — permission denied, offline and
+        // network failures all arrive here with their own wording.
+        final error = snapshot.error;
         return Scaffold(
           appBar: _gradientAppBar('My Found Reports', context),
-          body: data.isEmpty
-              ? const EmptyState(title: 'No Found Reports', icon: Icons.upload_file_rounded)
-              : ListView.builder(padding: const EdgeInsets.all(16), itemCount: data.length, itemBuilder: (ctx, i) {
-                  final r = data[i];
-                  return CardRow(
-                    title: r.description,
-                    subtitle: '${r.category} · ${r.whereFound}${r.handoverStatus != null ? ' · ${r.handoverStatus}' : ''}',
-                    extra: relativeTime(r.whenFound),
-                    status: r.status,
-                    onTap: () => context.push('/lost-found/found/${r.id}'),
-                  ).animate().fadeIn(delay: (i*60).ms).slideY(begin: 0.15);
-                }),
+          body: isLoading && data.isEmpty
+              ? const Center(child: CircularProgressIndicator(color: AppTheme.red))
+              : error != null
+                  ? EmptyState(
+                      title: 'Could Not Load Reports',
+                      subtitle: error is AuthFailure ? error.message : 'Something went wrong. Please try again.',
+                      icon: Icons.cloud_off_rounded,
+                    )
+                  : data.isEmpty
+                      ? const EmptyState(title: 'No Found Reports', icon: Icons.upload_file_rounded)
+                      : ListView.builder(padding: const EdgeInsets.all(16), itemCount: data.length, itemBuilder: (ctx, i) {
+                          final r = data[i];
+                          return CardRow(
+                            title: r.description,
+                            subtitle: '${r.category} · ${r.whereLost}',
+                            extra: relativeTime(r.whenLostLabel),
+                            status: r.status.wireValue,
+                            onTap: () => context.push('/lost-found/found/${r.id}'),
+                          ).animate().fadeIn(delay: (i*60).ms).slideY(begin: 0.15);
+                        }),
         );
       },
     );
@@ -628,38 +685,111 @@ class MyFoundReportsScreen extends StatelessWidget {
 }
 
 // ── Screen 6: Lost Detail (Student) ─────────────────────────────
-class LostDetailScreen extends StatelessWidget {
+class LostDetailScreen extends StatefulWidget {
   final String id;
   const LostDetailScreen({super.key, required this.id});
   @override
+  State<LostDetailScreen> createState() => _LostDetailScreenState();
+}
+
+class _LostDetailScreenState extends State<LostDetailScreen> {
+  /// Held in a field so rebuilds do not re-subscribe to Firestore.
+  late final Stream<Item?> _report;
+
+  @override
+  void initState() {
+    super.initState();
+    // The screen knows only the document ID from the route; AppState resolves
+    // the stream against the signed-in caller. No Firebase import here.
+    _report = context.read<AppState>().watchReport(widget.id);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final r = dataService.myLostReports.firstWhere((x) => x.id == id, orElse: () => dataService.myLostReports.first);
+    return StreamBuilder<Item?>(
+      stream: _report,
+      builder: (context, snapshot) {
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
+        final error = snapshot.error;
+        final r = snapshot.data;
+
         return Scaffold(
-          appBar: _gradientAppBar(r.id, context),
-          body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (r.matchStatus != null) NoticeBox(message: r.matchStatus!, borderColor: AppTheme.red, icon: Icons.link_rounded),
-            Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [Expanded(child: Text(r.title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800))), StatusBadge(r.status)]),
-              const Divider(height: 20),
-              InfoRow(label: 'Category', value: r.category),
-              InfoRow(label: 'Where Lost', value: r.whereLost),
-              InfoRow(label: 'When Lost', value: fmtDate(r.whenLost)),
-              const Divider(height: 12),
-              const Text('Description', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textMuted)),
-              const SizedBox(height: 8),
-              Text(r.description, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary, height: 1.65)),
-            ]))),
-            const SizedBox(height: 10),
-            if (r.status == 'Active') OutlineBtn(label: 'Close Report', color: AppTheme.danger, onPressed: () {
-              dataService.updateLostReportStatus(r.id, 'Closed');
-              _toast(context, 'Report closed');
-              context.pop();
-            }),
-          ])),
+          appBar: _gradientAppBar(r?.id ?? widget.id, context),
+          body: isLoading && r == null
+              ? const Center(child: CircularProgressIndicator(color: AppTheme.red))
+              : error != null
+                  ? EmptyState(
+                      title: 'Could Not Load Report',
+                      subtitle: error is AuthFailure
+                          ? error.message
+                          : 'Something went wrong. Please try again.',
+                      icon: Icons.cloud_off_rounded,
+                    )
+                  : r == null
+                      ? const EmptyState(
+                          title: 'Report Not Found',
+                          subtitle: 'This report may have been removed.',
+                          icon: Icons.search_off_rounded,
+                        )
+                      : r.isDeleted
+                          ? const EmptyState(
+                              title: 'Report Deleted',
+                              subtitle: 'This report is no longer available.',
+                              icon: Icons.delete_outline_rounded,
+                            )
+                          : _lostDetailBody(context, r),
         );
       },
+    );
+  }
+
+  Widget _lostDetailBody(BuildContext context, Item r) {
+    // `matchStatus` (AI match banner) has no Firestore counterpart yet — AI
+    // matching is out of scope for this phase. Held as an inert local so the
+    // original NoticeBox keeps its place in the tree but renders only when a
+    // match exists, which is never for a plain Firestore document today.
+    const String? matchStatus = null;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (matchStatus != null) NoticeBox(message: matchStatus, borderColor: AppTheme.red, icon: Icons.link_rounded),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Expanded(child: Text(r.title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800))),
+                    StatusBadge(r.status.wireValue),
+                  ]),
+                  const Divider(height: 20),
+                  InfoRow(label: 'Category', value: r.category),
+                  InfoRow(label: 'Where Lost', value: r.whereLost),
+                  InfoRow(label: 'When Lost', value: fmtDate(r.whenLostLabel)),
+                  const Divider(height: 12),
+                  const Text('Description', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textMuted)),
+                  const SizedBox(height: 8),
+                  Text(r.description, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary, height: 1.65)),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          // The "Close Report" action is mock-backed and out of scope for this
+          // phase (no Firestore write path exists yet). The button is kept
+          // visually unchanged per the no-redesign rule, but its tap surfaces the
+          // situation instead of calling DataService or fabricating a write.
+          if (r.status == ItemStatus.active) OutlineBtn(
+            label: 'Close Report',
+            color: AppTheme.danger,
+            onPressed: () => _toast(context, 'Closing reports is not available yet.'),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -675,6 +805,17 @@ class FoundDetailScreen extends StatefulWidget {
 class _FoundDetailScreenState extends State<FoundDetailScreen> {
   final _qrController = TextEditingController();
 
+  /// Held in a field so rebuilds do not re-subscribe to Firestore.
+  late final Stream<Item?> _report;
+
+  @override
+  void initState() {
+    super.initState();
+    // Only the route's document ID is needed; AppState resolves the stream. No
+    // Firebase import reaches this file.
+    _report = context.read<AppState>().watchReport(widget.id);
+  }
+
   @override
   void dispose() {
     _qrController.dispose();
@@ -683,97 +824,150 @@ class _FoundDetailScreenState extends State<FoundDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final r = dataService.myFoundReports.firstWhere((x) => x.id == widget.id, orElse: () => dataService.myFoundReports.first);
+    return StreamBuilder<Item?>(
+      stream: _report,
+      builder: (context, snapshot) {
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
+        final error = snapshot.error;
+        final r = snapshot.data;
+
         return Scaffold(
-          appBar: _gradientAppBar(r.id, context),
-          body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(children: [Expanded(child: Text(r.description, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800))), StatusBadge(r.status)]),
-              const Divider(height: 20),
-              InfoRow(label: 'Category', value: r.category),
-              InfoRow(label: 'Where Found', value: r.whereFound),
-              InfoRow(label: 'When Found', value: fmtDate(r.whenFound)),
-              if (r.handoverStatus != null) ...[
-                const Divider(height: 16),
-                InfoRow(label: 'Handover Status', value: r.handoverStatus!),
-              ],
-              if (r.qrScanned) ...[
-                const SizedBox(height: 8),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.green.withOpacity(0.3)),
-                  ),
-                  child: const Row(children: [
-                    Icon(Icons.check_circle_rounded, color: Colors.green, size: 18),
-                    SizedBox(width: 8),
-                    Expanded(child: Text('QR Code verified - Item handover confirmed', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.green))),
-                  ]),
-                ),
-              ],
-            ]))),
-
-            // Handover Progress Stepper
-            const SizedBox(height: 10),
-            _HandoverStepper(currentStep: r.handoverStep),
-
-            // QR Scan section - shown when handover is pending (QR generated by admin but not yet scanned)
-            if (r.qrCode != null && !r.qrScanned) ...[
-              const SectionLabel('Scan QR Code'),
-              Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const NoticeBox(
-                  message: 'The admin has generated a QR code for item handover. Enter the code below to confirm you have handed over the item.',
-                  icon: Icons.qr_code_scanner_rounded,
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _qrController,
-                  decoration: InputDecoration(
-                    hintText: 'Enter QR code here...',
-                    prefixIcon: const Icon(Icons.qr_code_rounded, color: AppTheme.red),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.red.withOpacity(0.3))),
-                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.red, width: 2)),
-                  ),
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 1),
-                ),
-                const SizedBox(height: 14),
-                GradientButton(
-                  label: 'Verify & Confirm Handover',
-                  onPressed: () {
-                    final code = _qrController.text.trim();
-                    if (code.isEmpty) {
-                      _toast(context, 'Please enter the QR code');
-                      return;
-                    }
-                    final success = dataService.scanReceiveQR(r.id, code);
-                    if (success) {
-                      _qrController.clear();
-                      _showHandoverSuccessDialog(context);
-                    } else {
-                      _toast(context, 'Invalid QR code. Please check and try again.');
-                    }
-                  },
-                ),
-              ]))),
-            ],
-
-            // Show info when no QR generated yet
-            if (r.qrCode == null && !r.qrScanned && r.status == 'In Inventory') ...[
-              const SizedBox(height: 10),
-              const NoticeBox(
-                message: 'Please hand the item to the Lost & Found Office (Block A, Level 1). The admin will generate a QR code for you to scan as proof of handover.',
-                icon: Icons.info_outline_rounded,
-              ),
-            ],
-          ])),
+          appBar: _gradientAppBar(r?.id ?? widget.id, context),
+          body: isLoading && r == null
+              ? const Center(child: CircularProgressIndicator(color: AppTheme.red))
+              : error != null
+                  ? EmptyState(
+                      title: 'Could Not Load Report',
+                      subtitle: error is AuthFailure
+                          ? error.message
+                          : 'Something went wrong. Please try again.',
+                      icon: Icons.cloud_off_rounded,
+                    )
+                  : r == null
+                      ? const EmptyState(
+                          title: 'Report Not Found',
+                          subtitle: 'This report may have been removed.',
+                          icon: Icons.search_off_rounded,
+                        )
+                      : r.isDeleted
+                          ? const EmptyState(
+                              title: 'Report Deleted',
+                              subtitle: 'This report is no longer available.',
+                              icon: Icons.delete_outline_rounded,
+                            )
+                          : _foundDetailBody(context, r),
         );
       },
+    );
+  }
+
+  Widget _foundDetailBody(BuildContext context, Item r) {
+    // QR / handover fields (`qrCode`, `qrScanned`, `handoverStatus`,
+    // `handoverStep`) exist only in mock_data.dart — they have no Firestore
+    // counterpart yet, and QR handover is out of scope for this phase. The
+    // original widgets are kept in the tree per the no-redesign rule; with no
+    // backing data the QR section and handover notice simply do not render,
+    // and the stepper sits at its initial step.
+    final String? qrCode = null;
+    final bool qrScanned = false;
+    final String? handoverStatus = null;
+    // Found reports store their location/date in the shared `whereLost` /
+    // `whenLost` fields (see Phase 4's `_ReportFoundState._submit`), so those
+    // back the "Where Found" / "When Found" rows here.
+    final String whereFound = r.whereLost;
+    final String whenFound = r.whenLostLabel;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Expanded(child: Text(r.description, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800))),
+                    StatusBadge(r.status.wireValue),
+                  ]),
+                  const Divider(height: 20),
+                  InfoRow(label: 'Category', value: r.category),
+                  InfoRow(label: 'Where Found', value: whereFound),
+                  InfoRow(label: 'When Found', value: fmtDate(whenFound)),
+                  if (handoverStatus != null) ...[
+                    const Divider(height: 16),
+                    InfoRow(label: 'Handover Status', value: handoverStatus),
+                  ],
+                  if (qrScanned) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.green.withOpacity(0.3)),
+                      ),
+                      child: const Row(children: [
+                        Icon(Icons.check_circle_rounded, color: Colors.green, size: 18),
+                        SizedBox(width: 8),
+                        Expanded(child: Text('QR Code verified - Item handover confirmed', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.green))),
+                      ]),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+
+          // Handover Progress Stepper
+          const SizedBox(height: 10),
+          const _HandoverStepper(currentStep: 1),
+
+          // QR Scan section - shown when handover is pending (QR generated by admin but not yet scanned)
+          if (qrCode != null && !qrScanned) ...[
+            const SectionLabel('Scan QR Code'),
+            Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const NoticeBox(
+                message: 'The admin has generated a QR code for item handover. Enter the code below to confirm you have handed over the item.',
+                icon: Icons.qr_code_scanner_rounded,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _qrController,
+                decoration: InputDecoration(
+                  hintText: 'Enter QR code here...',
+                  prefixIcon: const Icon(Icons.qr_code_rounded, color: AppTheme.red),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.red.withOpacity(0.3))),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppTheme.red, width: 2)),
+                ),
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 1),
+              ),
+              const SizedBox(height: 14),
+              GradientButton(
+                label: 'Verify & Confirm Handover',
+                // QR handover is mock-backed and out of scope for this phase.
+                // The button never renders (its `if` guard is false without a
+                // Firestore QR field), but to stay free of DataService it
+                // surfaces the situation if it ever did.
+                onPressed: () => _toast(context, 'QR handover is not available yet.'),
+              ),
+            ]))),
+          ],
+
+          // Show info when no QR generated yet
+          if (qrCode == null && !qrScanned && r.status.wireValue == 'In Inventory') ...[
+            const SizedBox(height: 10),
+            const NoticeBox(
+              message: 'Please hand the item to the Lost & Found Office (Block A, Level 1). The admin will generate a QR code for you to scan as proof of handover.',
+              icon: Icons.info_outline_rounded,
+            ),
+          ],
+        ],
+      ),
     );
   }
 
