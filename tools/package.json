@@ -1,0 +1,13 @@
+{
+  "name": "campus-connect-seed-admin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "One-time admin seeder for Campus Connect. Creates the Firebase Auth account and the matching users/{uid} Firestore document.",
+  "type": "module",
+  "scripts": {
+    "seed": "node seed_admin.mjs"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0"
+  }
+}

@@ -1,0 +1,6 @@
+# Firebase service-account key (downloaded from Firebase Console).
+# Keep this secret. Never commit it.
+serviceAccount.json
+
+# Node modules for the seeder only.
+node_modules/

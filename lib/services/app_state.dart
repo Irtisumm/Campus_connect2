@@ -304,6 +304,16 @@ class AppState extends ChangeNotifier {
   Stream<List<Item>> watchMyAllReports() =>
       _lostFound.watchMyAllItems(_firebaseUid ?? '');
 
+  /// Live feed of every lost report across all students, for the admin list
+  /// screen. No UID — an admin sees everyone's reports.
+  Stream<List<Item>> watchAdminLostReports() =>
+      _lostFound.watchAllLostItems();
+
+  /// Live feed of every found report across all students, for the admin list
+  /// screen. Same contract as [watchAdminLostReports] with `type` `found`.
+  Stream<List<Item>> watchAdminFoundReports() =>
+      _lostFound.watchAllFoundItems();
+
   // ── REGISTRATION APPROVAL (admin) ─────────────────────────────────
   Stream<List<UserProfile>> watchStudentRegistrations() =>
       _admin.watchStudentRegistrations();

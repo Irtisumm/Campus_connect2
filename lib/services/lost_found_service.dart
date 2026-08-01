@@ -50,7 +50,7 @@ class LostFoundService {
 
   /// Live feed of the caller's own lost reports, newest first.
   Stream<List<Item>> watchMyLostItems(String uid) =>
-      _watchMine(uid, ItemType.lost);
+      _watch(uid: uid, type: ItemType.lost);
 
   /// Live feed of the caller's own found reports, newest first.
   ///
@@ -58,7 +58,7 @@ class LostFoundService {
   /// the same `items` collection, so a found report is just a document whose
   /// `type` is `found`.
   Stream<List<Item>> watchMyFoundItems(String uid) =>
-      _watchMine(uid, ItemType.found);
+      _watch(uid: uid, type: ItemType.found);
 
   /// Live feed of the caller's own lost AND found reports, for the Lost &
   /// Found hub's combined summary counts.
@@ -66,16 +66,21 @@ class LostFoundService {
   /// One query (no `type` filter) instead of merging two, so the hub sees a
   /// single consistent snapshot rather than two streams that emit
   /// independently. The caller splits the result into lost/found by
-  /// [Item.isLost] / [Item.isFound] if it needs the breakdown — the hub's
-  /// status chips do exactly that.
-  Stream<List<Item>> watchMyAllItems(String uid) {
-    // An unavailable database or a signed-out caller yields an empty list
-    // rather than an error, matching [watchMyLostItems] / [watchMyFoundItems].
-    if (!isAvailable || uid.isEmpty) return Stream.value(const <Item>[]);
-    // No `type` filter, so this is a different query shape from `_watchMine`;
-    // the body is otherwise identical, so it calls the same private core.
-    return _watchAll(uid);
-  }
+  /// [Item.isLost] / [Item.isFound] if it needs the breakdown.
+  Stream<List<Item>> watchMyAllItems(String uid) => _watch(uid: uid);
+
+  /// Live feed of every lost report across all students, for the admin lists.
+  ///
+  /// No `reportedByUid` filter — unlike the `watchMy*` feeds, an admin sees
+  /// everyone's reports. The `items` read rule admits this via `isAdmin()`
+  /// (rules are not filters: the rule is evaluated against each returned
+  /// document, and `isAdmin()` passes them all).
+  Stream<List<Item>> watchAllLostItems() => _watch(type: ItemType.lost);
+
+  /// Live feed of every found report across all students, for the admin lists.
+  ///
+  /// Same contract as [watchAllLostItems] with `type` `found`.
+  Stream<List<Item>> watchAllFoundItems() => _watch(type: ItemType.found);
 
   /// Live view of a single report by its Firestore document ID, for the detail
   /// screens.
@@ -104,41 +109,40 @@ class LostFoundService {
         );
   }
 
-  /// The shared query behind both `watchMy*` feeds.
+  /// The single query core behind every `watchMy*` / `watchAll*` feed.
   ///
-  /// The `reportedByUid` filter is not optional. Firestore rules are not
-  /// filters — the `items` read rule is evaluated against every document the
-  /// query would return and rejects the whole query if any document fails, so
-  /// an unfiltered query is denied outright for a non-admin caller.
+  /// Both the student feeds (filtered by `reportedByUid`) and the admin feeds
+  /// (no owner filter) run through here, so the mapping, client-side sort and
+  /// error translation exist in exactly one place.
+  ///
+  /// The `reportedByUid` filter is not optional for a *student* caller:
+  /// Firestore rules are not filters, so the `items` read rule is evaluated
+  /// against every document the query would return and rejects the whole query
+  /// if any document fails — an unfiltered-by-uid query is denied outright for
+  /// a non-admin. An admin's unfiltered query passes via `isAdmin()`. Passing
+  /// `uid: null` selects the admin shape.
   ///
   /// Soft-deleted reports are excluded here rather than in the UI, so no screen
   /// has to remember to check [Item.isDeleted].
-  Stream<List<Item>> _watchMine(String uid, ItemType type) {
-    // An unavailable database or a signed-out caller yields an empty list
-    // rather than an error: the screen shows its normal empty state instead of
-    // a failure the user can do nothing about.
-    if (!isAvailable || uid.isEmpty) return Stream.value(const <Item>[]);
+  Stream<List<Item>> _watch({String? uid, ItemType? type}) {
+    // An unavailable database, or a signed-out caller when filtering by uid,
+    // yields an empty list rather than an error: the screen shows its normal
+    // empty state instead of a failure the user can do nothing about.
+    if (!isAvailable) return Stream.value(const <Item>[]);
+    if (uid != null && uid.isEmpty) return Stream.value(const <Item>[]);
 
-    return _items
-        .where('reportedByUid', isEqualTo: uid)
-        .where('type', isEqualTo: type.wireValue)
-        .where('isDeleted', isEqualTo: false)
+    Query<Map<String, dynamic>> query =
+        _items.where('isDeleted', isEqualTo: false);
+    if (uid != null) {
+      query = query.where('reportedByUid', isEqualTo: uid);
+    }
+    if (type != null) {
+      query = query.where('type', isEqualTo: type.wireValue);
+    }
+
+    return query
         .snapshots()
-        .map((snapshot) {
-          final items = snapshot.docs
-              .map((doc) => Item.fromMap(doc.id, doc.data()))
-              .toList();
-          // Sorted client-side so no composite Firestore index is required.
-          items.sort((a, b) {
-            final aDate = a.createdAt;
-            final bDate = b.createdAt;
-            if (aDate == null && bDate == null) return 0;
-            if (aDate == null) return 1;
-            if (bDate == null) return -1;
-            return bDate.compareTo(aDate);
-          });
-          return items;
-        })
+        .map(_sortedNewestFirst)
         // Stream errors bypass try/catch, so they are translated here. Without
         // this a raw FirebaseException would surface in `snapshot.error` and
         // land in the widget tree.
@@ -148,43 +152,25 @@ class LostFoundService {
         );
   }
 
-  /// The combined-query core behind [watchMyAllItems].
+  /// Maps a snapshot to a list sorted newest-first by `createdAt`.
   ///
-  /// Same contract as [_watchMine] minus the `type` filter, so the hub gets one
-  /// snapshot covering both report kinds in one read rather than merging two
-  /// streams that emit on independent schedules.
-  Stream<List<Item>> _watchAll(String uid) {
-    // An unavailable database or a signed-out caller yields an empty list
-    // rather than an error: the hub shows its normal empty state instead of a
-    // failure it can do nothing about.
-    if (!isAvailable || uid.isEmpty) return Stream.value(const <Item>[]);
-
-    return _items
-        .where('reportedByUid', isEqualTo: uid)
-        .where('isDeleted', isEqualTo: false)
-        .snapshots()
-        .map((snapshot) {
-          final items = snapshot.docs
-              .map((doc) => Item.fromMap(doc.id, doc.data()))
-              .toList();
-          // Sorted client-side so no composite Firestore index is required.
-          items.sort((a, b) {
-            final aDate = a.createdAt;
-            final bDate = b.createdAt;
-            if (aDate == null && bDate == null) return 0;
-            if (aDate == null) return 1;
-            if (bDate == null) return -1;
-            return bDate.compareTo(aDate);
-          });
-          return items;
-        })
-        // Stream errors bypass try/catch, so they are translated here. Without
-        // this a raw FirebaseException would surface in `snapshot.error` and
-        // land in the widget tree.
-        .handleError(
-          (Object error) => throw AuthFailure.fromCode((error as FirebaseException).code),
-          test: (Object? error) => error is FirebaseException,
-        );
+  /// Client-side so no composite Firestore index is required; null dates sort
+  /// last so a report whose server timestamp has not resolved yet does not jump
+  /// to the top of the list.
+  static List<Item> _sortedNewestFirst(
+      QuerySnapshot<Map<String, dynamic>> snapshot) {
+    final items = snapshot.docs
+        .map((doc) => Item.fromMap(doc.id, doc.data()))
+        .toList();
+    items.sort((a, b) {
+      final aDate = a.createdAt;
+      final bDate = b.createdAt;
+      if (aDate == null && bDate == null) return 0;
+      if (aDate == null) return 1;
+      if (bDate == null) return -1;
+      return bDate.compareTo(aDate);
+    });
+    return items;
   }
 
   void _assertAvailable() {
