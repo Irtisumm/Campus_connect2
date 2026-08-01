@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/app_notification.dart';
 import '../models/auth_result.dart';
 import '../models/item.dart';
 import '../models/user_profile.dart';
@@ -11,6 +12,7 @@ import 'lost_found_service.dart';
 import 'user_service.dart';
 
 // Re-exported so screens keep importing a single file for session types.
+export '../models/app_notification.dart' show AppNotification;
 export '../models/auth_result.dart' show AuthResult, AuthFailure;
 export '../models/item.dart' show Item, ItemStatus, ItemType;
 export '../models/user_profile.dart' show UserProfile, UserRole, AccountStatus;
@@ -313,6 +315,37 @@ class AppState extends ChangeNotifier {
   /// screen. Same contract as [watchAdminLostReports] with `type` `found`.
   Stream<List<Item>> watchAdminFoundReports() =>
       _lostFound.watchAllFoundItems();
+
+  /// Live feed of every lost AND found report across all students, for the
+  /// admin dashboard's combined summary counts. One query instead of merging
+  /// two streams — the dashboard splits the result into lost/found by
+  /// [Item.isLost] / [Item.isFound] when it needs the breakdown.
+  Stream<List<Item>> watchAdminAllReports() =>
+      _lostFound.watchAllItems();
+
+  /// Live feed behind the Notifications screen, newest first.
+  ///
+  /// Notifications are derived from the reports themselves rather than read
+  /// from a `notifications` collection — `firestore.rules` governs only
+  /// `users` and `items`, and Firestore is default-deny, so no such collection
+  /// can exist yet. Each report the caller may already see becomes one row,
+  /// and because the query is a live snapshot a status change re-emits its row
+  /// without a refresh.
+  ///
+  /// The screen supplies no UID and no role: the admin/student split is
+  /// resolved here, so an admin sees every report attributed to its reporter
+  /// and a student sees only their own. Signed out yields an empty list,
+  /// matching the screen's empty state.
+  Stream<List<AppNotification>> watchNotifications() {
+    final admin = isAdmin;
+    return _lostFound
+        .watchNotificationItems(uid: admin ? null : (_firebaseUid ?? ''))
+        .map((items) => items
+            .map((item) => admin
+                ? AppNotification.forAdmin(item)
+                : AppNotification.forOwner(item))
+            .toList(growable: false));
+  }
 
   // ── REGISTRATION APPROVAL (admin) ─────────────────────────────────
   Stream<List<UserProfile>> watchStudentRegistrations() =>

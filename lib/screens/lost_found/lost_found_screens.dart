@@ -1019,88 +1019,202 @@ class _FoundDetailScreenState extends State<FoundDetailScreen> {
 }
 
 // ── Screen 8: Notifications ──────────────────────────────────────
-class NotificationsScreen extends StatelessWidget {
+class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
   @override
+  State<NotificationsScreen> createState() => _NotificationsScreenState();
+}
+
+class _NotificationsScreenState extends State<NotificationsScreen> {
+  /// Held in a field so rebuilds do not re-subscribe to Firestore.
+  late final Stream<List<AppNotification>> _notifications;
+
+  /// Rows the user has tapped, by report ID.
+  ///
+  /// Read state lives here rather than in Firestore: notifications are derived
+  /// from the `items` documents, and `Item` has no `read` field to write to
+  /// (the model is fixed for this phase). Marking a row read is therefore
+  /// session-local — it survives rebuilds and stream updates, not a restart.
+  final Set<String> _read = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _notifications = context.read<AppState>().watchNotifications();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final appState = context.watch<AppState>();
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final ns = dataService.getNotificationsForUser(appState.userId, appState.isAdmin);
+    return StreamBuilder<List<AppNotification>>(
+      stream: _notifications,
+      builder: (context, snapshot) {
+        final ns = snapshot.data ?? const <AppNotification>[];
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
+        // The service maps every FirebaseException to an AuthFailure, so this
+        // message is already safe to show — permission denied, offline and
+        // network failures all arrive here with their own wording.
+        final error = snapshot.error;
         return Scaffold(
           appBar: _gradientAppBar('Notifications', context),
-          body: ns.isEmpty
-              ? const EmptyState(title: 'No Notifications', icon: Icons.notifications_off_rounded)
-              : ListView.builder(padding: const EdgeInsets.all(16), itemCount: ns.length, itemBuilder: (ctx, i) {
-                  final n = ns[i];
-                  return GestureDetector(
-                    onTap: () {
-                      if (!n.read) {
-                        dataService.markNotificationAsRead(n.id);
-                      }
-                    },
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      decoration: BoxDecoration(
-                        color: n.read ? AppTheme.bgCard : AppTheme.red.withOpacity(0.05),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: n.read ? AppTheme.red.withOpacity(0.1) : AppTheme.red.withOpacity(0.25)),
-                      ),
-                      child: ListTile(
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                        leading: CircleAvatar(backgroundColor: n.type == 'personal' ? AppTheme.red.withOpacity(0.12) : AppTheme.gold.withOpacity(0.2),
-                            child: Icon(n.type == 'personal' ? Icons.person_rounded : Icons.campaign_rounded, color: n.type == 'personal' ? AppTheme.red : AppTheme.goldDark, size: 20)),
-                        title: Text(n.text, style: TextStyle(fontSize: 13, fontWeight: n.read ? FontWeight.w500 : FontWeight.w700, color: AppTheme.textPrimary)),
-                        subtitle: Text(n.time, style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
-                        trailing: n.read ? null : Container(width: 8, height: 8, decoration: const BoxDecoration(color: AppTheme.red, shape: BoxShape.circle)),
-                      ),
-                    ),
-                  ).animate().fadeIn(delay: (i*55).ms).slideX(begin: 0.1);
-                }),
+          body: isLoading && ns.isEmpty
+              ? const Center(child: CircularProgressIndicator(color: AppTheme.red))
+              : error != null
+                  ? EmptyState(
+                      title: 'Could Not Load Notifications',
+                      subtitle: error is AuthFailure ? error.message : 'Something went wrong. Please try again.',
+                      icon: Icons.cloud_off_rounded,
+                    )
+                  : ns.isEmpty
+                      ? const EmptyState(title: 'No Notifications', icon: Icons.notifications_off_rounded)
+                      : ListView.builder(padding: const EdgeInsets.all(16), itemCount: ns.length, itemBuilder: (ctx, i) {
+                          final n = ns[i];
+                          final read = _read.contains(n.id);
+                          return GestureDetector(
+                            onTap: () {
+                              if (!read) {
+                                setState(() => _read.add(n.id));
+                              }
+                            },
+                            child: Container(
+                              margin: const EdgeInsets.only(bottom: 10),
+                              decoration: BoxDecoration(
+                                color: read ? AppTheme.bgCard : AppTheme.red.withOpacity(0.05),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: read ? AppTheme.red.withOpacity(0.1) : AppTheme.red.withOpacity(0.25)),
+                              ),
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                                // The mock branched this on `type == 'personal'`, a value
+                                // nothing ever produced ('public'/'private'/'admin' only),
+                                // so every row has always rendered the gold variant.
+                                leading: CircleAvatar(backgroundColor: AppTheme.gold.withOpacity(0.2),
+                                    child: const Icon(Icons.campaign_rounded, color: AppTheme.goldDark, size: 20)),
+                                title: Text(n.text, style: TextStyle(fontSize: 13, fontWeight: read ? FontWeight.w500 : FontWeight.w700, color: AppTheme.textPrimary)),
+                                subtitle: Text(_notificationTime(n), style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+                                trailing: read ? null : Container(width: 8, height: 8, decoration: const BoxDecoration(color: AppTheme.red, shape: BoxShape.circle)),
+                              ),
+                            ),
+                          ).animate().fadeIn(delay: (i*55).ms).slideX(begin: 0.1);
+                        }),
         );
       },
     );
   }
+
+  /// Same wording as every other Lost & Found list ('Today' / 'Yesterday' /
+  /// 'N days ago'). A report whose server timestamp has not resolved yet has
+  /// no date to show.
+  static String _notificationTime(AppNotification n) =>
+      n.at == null ? '—' : relativeTime(n.at!.toIso8601String());
 }
 
 // ── Screen 9: Admin L&F Dashboard ───────────────────────────────
-class AdminLFDashboardScreen extends StatelessWidget {
+class AdminLFDashboardScreen extends StatefulWidget {
   const AdminLFDashboardScreen({super.key});
+  @override
+  State<AdminLFDashboardScreen> createState() => _AdminLFDashboardScreenState();
+}
+
+class _AdminLFDashboardScreenState extends State<AdminLFDashboardScreen> {
+  /// Held in a field so rebuilds do not re-subscribe to Firestore. One combined
+  /// feed for lost + found, mirroring the student hub on the admin side: the
+  /// dashboard splits the result into lost/found by [Item.isLost] /
+  /// [Item.isFound] when it needs the breakdown, rather than running two
+  /// queries.
+  late final Stream<List<Item>> _reports;
+
+  @override
+  void initState() {
+    super.initState();
+    _reports = context.read<AppState>().watchAdminAllReports();
+  }
+
   @override
   Widget build(BuildContext context) {
     final appState = context.watch<AppState>();
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final active = dataService.allLostReports.where((r) => r.status == 'Active').length;
-        final pending = dataService.matches.where((m) => m.status == 'Pending').length;
-        return Scaffold(
-          body: SafeArea(child: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const AdminBar(), const SizedBox(height: 10),
-            Row(children: [
-              Expanded(child: StatCard(value: '$active', label: 'Active Lost')),
-              const SizedBox(width: 10),
-              Expanded(child: StatCard(value: '${dataService.myFoundReports.length}', label: 'In Inventory', valueColor: AppTheme.redDark, bgColor: AppTheme.red.withOpacity(0.07))),
-              const SizedBox(width: 10),
-              Expanded(child: StatCard(value: '$pending', label: 'Pending Matches', valueColor: const Color(0xFFB03030), bgColor: const Color(0x08D65E5E))),
-            ]).animate().fadeIn(delay: 50.ms),
-            const SectionLabel('Quick Actions'),
-            HubButton(icon: Icons.list_alt_rounded, label: 'View Lost Reports', subtitle: '${dataService.allLostReports.length} total', onTap: () => context.push('/admin/lost-found/lost-list')).animate().fadeIn(delay:100.ms),
-            HubButton(icon: Icons.inventory_rounded, label: 'Found / Inventory', subtitle: '${dataService.myFoundReports.length} items', isAmber: true, onTap: () => context.push('/admin/lost-found/found-list')).animate().fadeIn(delay:150.ms),
-            HubButton(icon: Icons.compare_arrows_rounded, label: 'Review Matches', subtitle: '$pending pending', onTap: () => context.push('/admin/lost-found/match-list')).animate().fadeIn(delay:200.ms),
-            const SectionLabel('Admin Tools'),
-            HubButton(icon: Icons.person_add_rounded, label: 'Student Registrations', subtitle: '${appState.pendingStudentAccounts} pending approval', onTap: () => context.push('/admin/registrations')).animate().fadeIn(delay:250.ms),
-            // ── User Analytics Section ──
-            const SectionLabel('User Analytics'),
-            Row(children: [
-              Expanded(child: StatCard(value: '${appState.totalAccounts}', label: 'Total Accounts', valueColor: const Color(0xFF1B5E20), bgColor: const Color(0x0A4CAF50))),
-              const SizedBox(width: 10),
-              Expanded(child: StatCard(value: '${appState.totalStudentAccounts}', label: 'Students', valueColor: const Color(0xFF0D47A1), bgColor: const Color(0x0A2196F3))),
-              const SizedBox(width: 10),
-              Expanded(child: StatCard(value: '${appState.totalAdminAccounts}', label: 'Admins', valueColor: const Color(0xFF6A1B9A), bgColor: const Color(0x0A9C27B0))),
-            ]).animate().fadeIn(delay: 300.ms),
-          ]))),
-        );
-      },
+    return Scaffold(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const AdminBar(), const SizedBox(height: 10),
+              // Lost & Found statistics + Quick Actions come from the live
+              // Firestore feed. The dashboard shell (AdminBar, Admin Tools,
+              // User Analytics) renders immediately and never blocks on this
+              // stream, so an admin can still navigate while the counts load.
+              StreamBuilder<List<Item>>(
+                stream: _reports,
+                builder: (context, snapshot) {
+                  final isLoading = snapshot.connectionState ==
+                          ConnectionState.waiting &&
+                      snapshot.data == null;
+                  final error = snapshot.error;
+                  final all = snapshot.data ?? const <Item>[];
+
+                  // Soft-deleted reports are already excluded by the service
+                  // query, so no screen-side isDeleted check is needed here.
+                  final lost = all.where((r) => r.isLost).length;
+                  final found = all.where((r) => r.isFound).length;
+                  final activeLost = all
+                      .where((r) => r.isLost && r.status == ItemStatus.active)
+                      .length;
+                  // AI matching has no Firestore collection yet, so this stays
+                  // a placeholder (0) rather than a fabricated count.
+                  const pendingMatches = 0;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (error != null)
+                        // Permission denied / Firestore error — both arrive as
+                        // an AuthFailure with a display-ready message.
+                        EmptyState(
+                          title: 'Could Not Load Statistics',
+                          subtitle: error is AuthFailure
+                              ? error.message
+                              : 'Something went wrong. Please try again.',
+                          icon: Icons.cloud_off_rounded,
+                        )
+                      else if (isLoading)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 18),
+                          child: Center(
+                            child: CircularProgressIndicator(color: AppTheme.red),
+                          ),
+                        )
+                      else
+                        Row(children: [
+                          Expanded(child: StatCard(value: '$activeLost', label: 'Active Lost')),
+                          const SizedBox(width: 10),
+                          Expanded(child: StatCard(value: '$found', label: 'In Inventory', valueColor: AppTheme.redDark, bgColor: AppTheme.red.withOpacity(0.07))),
+                          const SizedBox(width: 10),
+                          Expanded(child: StatCard(value: '$pendingMatches', label: 'Pending Matches', valueColor: const Color(0xFFB03030), bgColor: const Color(0x08D65E5E))),
+                        ]).animate().fadeIn(delay: 50.ms),
+                      const SectionLabel('Quick Actions'),
+                      HubButton(icon: Icons.list_alt_rounded, label: 'View Lost Reports', subtitle: isLoading || error != null ? 'Loading…' : '$lost total', onTap: () => context.push('/admin/lost-found/lost-list')).animate().fadeIn(delay: 100.ms),
+                      HubButton(icon: Icons.inventory_rounded, label: 'Found / Inventory', subtitle: isLoading || error != null ? 'Loading…' : '$found items', isAmber: true, onTap: () => context.push('/admin/lost-found/found-list')).animate().fadeIn(delay: 150.ms),
+                      HubButton(icon: Icons.compare_arrows_rounded, label: 'Review Matches', subtitle: '$pendingMatches pending', onTap: () => context.push('/admin/lost-found/match-list')).animate().fadeIn(delay: 200.ms),
+                    ],
+                  );
+                },
+              ),
+              const SectionLabel('Admin Tools'),
+              HubButton(icon: Icons.person_add_rounded, label: 'Student Registrations', subtitle: '${appState.pendingStudentAccounts} pending approval', onTap: () => context.push('/admin/registrations')).animate().fadeIn(delay: 250.ms),
+              // ── User Analytics Section ──
+              const SectionLabel('User Analytics'),
+              Row(children: [
+                Expanded(child: StatCard(value: '${appState.totalAccounts}', label: 'Total Accounts', valueColor: const Color(0xFF1B5E20), bgColor: const Color(0x0A4CAF50))),
+                const SizedBox(width: 10),
+                Expanded(child: StatCard(value: '${appState.totalStudentAccounts}', label: 'Students', valueColor: const Color(0xFF0D47A1), bgColor: const Color(0x0A2196F3))),
+                const SizedBox(width: 10),
+                Expanded(child: StatCard(value: '${appState.totalAdminAccounts}', label: 'Admins', valueColor: const Color(0xFF6A1B9A), bgColor: const Color(0x0A9C27B0))),
+              ]).animate().fadeIn(delay: 300.ms),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

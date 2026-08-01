@@ -82,6 +82,28 @@ class LostFoundService {
   /// Same contract as [watchAllLostItems] with `type` `found`.
   Stream<List<Item>> watchAllFoundItems() => _watch(type: ItemType.found);
 
+  /// Live feed of every lost AND found report across all students, for the
+  /// admin dashboard's combined summary counts.
+  ///
+  /// One query (no `type` filter) instead of merging two streams, mirroring
+  /// [watchMyAllItems] on the admin side: the dashboard sees a single
+  /// consistent snapshot and splits the result into lost/found by
+  /// [Item.isLost] / [Item.isFound] when it needs the breakdown.
+  Stream<List<Item>> watchAllItems() => _watch();
+
+  /// Live feed behind the Notifications screen.
+  ///
+  /// There is no `notifications` collection: `firestore.rules` governs only
+  /// `users` and `items`, and Firestore is default-deny, so one could be
+  /// neither read nor written. The feed is therefore derived from the reports
+  /// themselves — every report the caller may already see is one notification
+  /// row, and any change to it (a status transition, an edit) re-emits the row
+  /// live.
+  ///
+  /// Passing `uid` selects the student shape (own reports only); omitting it
+  /// selects the admin shape, exactly as the list feeds do.
+  Stream<List<Item>> watchNotificationItems({String? uid}) => _watch(uid: uid);
+
   /// Live view of a single report by its Firestore document ID, for the detail
   /// screens.
   ///
