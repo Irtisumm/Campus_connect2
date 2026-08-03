@@ -1,5 +1,6 @@
 {
   "github.copilot.chat.agentMode": true,
   "workbench.browser.enableChatTools": true,
-  "github.copilot.enableAutoCompletions": true
+  "github.copilot.enableAutoCompletions": true,
+  "git.ignoreLimitWarning": true
 }

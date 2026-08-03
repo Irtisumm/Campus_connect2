@@ -149,5 +149,65 @@ service cloud.firestore {
       // any match already made against a report survive (requirement 7).
       allow delete: if false;
     }
+
+    match /issues/{issueId} {
+
+      // Reads are owner-or-admin, mirroring the `items` read rule above. The
+      // owner key here is `studentId` (the campus ID, e.g. S001) rather than a
+      // Firebase UID, because that is what the Issue model carries. Ownership
+      // is resolved by looking up the caller's profile and comparing its
+      // studentId to the document's — the same trust anchor `isAdmin()` uses.
+      function ownsIssue() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+               == resource.data.studentId;
+      }
+
+      // On `list`: rules are not filters. A query filtered by
+      // `studentId == <caller's>` succeeds, an admin's unfiltered query
+      // succeeds via isAdmin(), and a student's attempt to list everyone's
+      // issues is denied — the intended outcome. Phase 3B's
+      // `watchMyIssues(studentId)` must therefore keep its
+      // `where('studentId', '==', studentId)` filter, or it will be rejected.
+      allow get, list: if ownsIssue() || isAdmin();
+
+      // Reporter identity is pinned to the caller's own profile studentId, so
+      // an issue can only ever be filed in your own name. `_issues.add()`
+      // generates the document ID, so ownership cannot be checked from the
+      // path — `studentId` is the owner key.
+      //
+      // `status` is pinned to 'New' for the same reason registration pins
+      // 'Pending' and items pin 'Active': a new record starts at the beginning
+      // of its lifecycle and cannot be born already triaged or resolved.
+      function ownsNewIssue() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+               == request.resource.data.studentId;
+      }
+      allow create: if ownsNewIssue()
+        && request.resource.data.status == 'New';
+
+      // Edits by the reporter. `studentId` is held equal to its stored value,
+      // so an issue can never be reassigned to someone else, and status moves
+      // only through the known lifecycle. 'Closed - Verified' is the terminal
+      // state a student sets from IssueDetailScreen when their resolved issue
+      // is confirmed fixed.
+      allow update: if ownsIssue()
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.status
+             in ['New', 'Triaged', 'Assigned', 'In Progress', 'Resolved', 'Closed - Verified'];
+
+      // Admins moderate any issue — triage, assign, progress, resolve, close
+      // — but may not rewrite who filed it either.
+      allow update: if isAdmin()
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.status
+             in ['New', 'Triaged', 'Assigned', 'In Progress', 'Resolved', 'Closed - Verified'];
+
+      // Issues are never hard-deleted from the app.
+      allow delete: if false;
+    }
   }
 }

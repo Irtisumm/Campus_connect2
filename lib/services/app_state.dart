@@ -4,16 +4,19 @@ import 'package:flutter/material.dart';
 
 import '../models/app_notification.dart';
 import '../models/auth_result.dart';
+import '../models/issue.dart';
 import '../models/item.dart';
 import '../models/user_profile.dart';
 import 'admin_service.dart';
 import 'auth_service.dart';
+import 'issue_service.dart';
 import 'lost_found_service.dart';
 import 'user_service.dart';
 
 // Re-exported so screens keep importing a single file for session types.
 export '../models/app_notification.dart' show AppNotification;
 export '../models/auth_result.dart' show AuthResult, AuthFailure;
+export '../models/issue.dart' show Issue, IssueHistory;
 export '../models/item.dart' show Item, ItemStatus, ItemType;
 export '../models/user_profile.dart' show UserProfile, UserRole, AccountStatus;
 
@@ -29,6 +32,7 @@ class AppState extends ChangeNotifier {
   final UserService _users;
   final AdminService _admin;
   final LostFoundService _lostFound;
+  final IssueService _issues;
 
   String? _firebaseUid;
   UserProfile? _profile;
@@ -40,10 +44,12 @@ class AppState extends ChangeNotifier {
     UserService? userService,
     AdminService? adminService,
     LostFoundService? lostFoundService,
+    IssueService? issueService,
   })  : _auth = authService ?? AuthService(),
         _users = userService ?? UserService(),
         _admin = adminService ?? AdminService(),
-        _lostFound = lostFoundService ?? LostFoundService() {
+        _lostFound = lostFoundService ?? LostFoundService(),
+        _issues = issueService ?? IssueService() {
     _firebaseUid = _auth.currentUid;
     // Firebase auth state can change without a UI action (token refresh,
     // cold-start session restore), so mirror it into the widget tree.
@@ -345,6 +351,68 @@ class AppState extends ChangeNotifier {
                 ? AppNotification.forAdmin(item)
                 : AppNotification.forOwner(item))
             .toList(growable: false));
+  }
+
+  // ── ISSUES ────────────────────────────────────────────────────────
+  /// Live feed of the signed-in student's own issues, newest first.
+  ///
+  /// The screen never supplies an ID — the campus Student ID is read from the
+  /// session here, so the UI keeps its single dependency on [AppState].
+  /// Signed out yields an empty list, matching the screen's empty state.
+  Stream<List<Issue>> watchMyIssues() =>
+      _issues.watchMyIssues(userId ?? '');
+
+  /// Live feed of every issue across all students, for the admin list screen.
+  /// No ID — an admin sees everyone's issues.
+  Stream<List<Issue>> watchAllIssues() => _issues.watchAllIssues();
+
+  /// Live view of a single issue by its Firestore document ID. Emits the
+  /// [Issue], `null` for "not found", or throws an [AuthFailure].
+  Stream<Issue?> watchIssue(String id) => _issues.watchIssue(id);
+
+  /// Live feed of an issue's status-transition history, oldest first, for the
+  /// detail screen's timeline. Emits an empty list when there is no history.
+  Stream<List<IssueHistory>> watchIssueHistory(String id) =>
+      _issues.watchIssueHistory(id);
+
+  /// Submits a new issue on behalf of the signed-in student, stamping the
+  /// campus Student ID from the session. Returns the issue with its
+  /// Firestore ID, or `null` on failure.
+  Future<Issue?> createIssue({
+    required String title,
+    required String category,
+    required String location,
+    required String description,
+    List<String> imagePaths = const [],
+  }) async {
+    final now = DateTime.now().toIso8601String();
+    final issue = Issue(
+      id: '',
+      title: title,
+      category: category,
+      location: location,
+      status: 'New',
+      createdDate: now,
+      updatedDate: now,
+      description: description,
+      studentId: userId,
+      imagePaths: imagePaths,
+    );
+    try {
+      return await _issues.createIssue(issue);
+    } on AuthFailure {
+      return null;
+    }
+  }
+
+  /// Moves an issue to a new status. Returns `true` on success.
+  Future<bool> updateIssueStatus(String id, String status) async {
+    try {
+      await _issues.updateIssueStatus(id, status);
+      return true;
+    } on AuthFailure {
+      return false;
+    }
   }
 
   // ── REGISTRATION APPROVAL (admin) ─────────────────────────────────

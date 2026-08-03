@@ -1,6 +1,12 @@
 // ── Mock Data ─────────────────────────────────────────────────────
 // Mirrors the data.js from the web prototype
 
+// Issue and IssueHistory moved to lib/models/issue.dart for Firestore. The
+// import makes them usable inside this file; the export keeps every existing
+// `import '.../mock_data.dart'` working unchanged.
+import '../models/issue.dart';
+export '../models/issue.dart' show Issue, IssueHistory;
+
 // ── Models ────────────────────────────────────────────────────────
 class LostReport {
   final String id, title, category, whereLost, whenLost, status, description;
@@ -51,21 +57,6 @@ class Notification {
   const Notification({required this.id, required this.type, required this.text,
     required this.time, this.visibility = 'all', this.detailText, this.read = false,
     this.relatedScreen, this.relatedId, this.targetUserId, this.source = 'system'});
-}
-
-class Issue {
-  final String id, title, category, location, status, createdDate, updatedDate, description;
-  final String? studentId;
-  final List<String> imagePaths;
-  const Issue({required this.id, required this.title, required this.category,
-    required this.location, required this.status, required this.createdDate,
-    required this.updatedDate, required this.description, this.studentId, this.imagePaths = const []});
-}
-
-class IssueHistory {
-  final String date, to;
-  final String? from, note;
-  const IssueHistory({required this.date, required this.to, this.from, this.note});
 }
 
 class Event {
