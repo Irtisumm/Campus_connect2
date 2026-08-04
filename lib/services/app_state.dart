@@ -99,11 +99,23 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    // Restore the profile after a cold start where Firebase kept the session.
+    // Restore the profile after a cold start or Firebase session restore.
     if (_profile == null || _profile!.uid != uid) {
       try {
         _profile = await _users.fetchProfile(uid);
       } on AuthFailure {
+        _profile = null;
+      }
+    }
+    // Apply the same gate checks as loginUser so a restored session
+    // cannot bypass role or account-status validation.
+    if (_profile != null) {
+      final rejection = _gateFor(_profile!, requireAdmin: _profile!.isAdmin);
+      if (rejection != null) {
+        try {
+          await _auth.signOut();
+        } on AuthFailure { /* clear local state regardless */ }
+        _firebaseUid = null;
         _profile = null;
       }
     }
@@ -409,6 +421,20 @@ class AppState extends ChangeNotifier {
   Future<bool> updateIssueStatus(String id, String status) async {
     try {
       await _issues.updateIssueStatus(id, status);
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Hard-deletes an issue. Returns `true` on success.
+  ///
+  /// Kept for parity with the admin detail screen's delete button; the current
+  /// Firestore rules deny client deletes, so this will return `false` until
+  /// the rules are relaxed.
+  Future<bool> deleteIssue(String id) async {
+    try {
+      await _issues.deleteIssue(id);
       return true;
     } on AuthFailure {
       return false;

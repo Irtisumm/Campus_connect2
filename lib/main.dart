@@ -33,6 +33,12 @@ Future<void> main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
+  // Build the AppState instance first — the router needs it for the auth guard.
+  final appState = AppState();
+
+  // Build the router with the auth guard wired to AppState.
+  _buildRouter(appState);
+
   // Lock app orientation
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
@@ -50,7 +56,7 @@ Future<void> main() async {
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => AppState()),
+        ChangeNotifierProvider.value(value: appState),
         ChangeNotifierProvider(create: (_) => DataService()),
         ChangeNotifierProvider(create: (_) => PhotoUploadService()),
         // Stateless Firestore gateway — nothing listens to it, so a plain
@@ -63,9 +69,21 @@ Future<void> main() async {
 }
 
 // ── Router ────────────────────────────────────────────────────────
-final _router = GoRouter(
-  initialLocation: '/',
-  routes: [
+late final GoRouter _router;
+
+void _buildRouter(AppState appState) {
+  _router = GoRouter(
+    refreshListenable: appState,
+    initialLocation: '/',
+    redirect: (context, state) {
+      final loc = state.uri.toString();
+      // Public routes — always accessible, no auth check.
+      if (loc == '/' || loc == '/login' || loc == '/register') return null;
+      // Every other route requires an active session.
+      if (!appState.isAuthenticated) return '/login';
+      return null;
+    },
+    routes: [
     // ── Splash & Auth ──────────────────────────────────────────
     GoRoute(path: '/',      builder: (_, __) => const SplashScreen()),
     GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
@@ -128,6 +146,7 @@ final _router = GoRouter(
     GoRoute(path: '/profile', builder: (_, __) => const ProfileScreen()),
   ],
 );
+}
 
 // ── App Root ──────────────────────────────────────────────────────
 class CampusConnectApp extends StatelessWidget {
@@ -283,18 +302,12 @@ class AppShell extends StatelessWidget {
                           final isAdminMode = appState.isAdmin;
                           return GestureDetector(
                             onTap: () async {
-                              // If already admin, logout
+                              // If already admin, sign out and redirect to login.
                               if (isAdminMode) {
                                 context.read<AppState>().logout();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: const Text('👤 Switched to Student mode'),
-                                    behavior: SnackBarBehavior.floating,
-                                    backgroundColor: AppTheme.textPrimary,
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-                                    duration: const Duration(seconds: 1),
-                                  ),
-                                );
+                                if (context.mounted) {
+                                  context.go('/login');
+                                }
                                 return;
                               }
 

@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:io';
 import '../../widgets/common.dart';
-import '../../data/mock_data.dart';
 import '../../theme/app_theme.dart';
 import '../../services/data_service.dart';
 import '../../services/app_state.dart';
@@ -21,20 +20,35 @@ AppBar _appBar(String t, BuildContext ctx) => AppBar(
   leading: IconButton(icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white), onPressed: () => ctx.pop()));
 
 // ── Screen 15: Issues Hub ────────────────────────────────────────
-class IssuesHubScreen extends StatelessWidget {
+class IssuesHubScreen extends StatefulWidget {
   const IssuesHubScreen({super.key});
+  @override State<IssuesHubScreen> createState() => _IssuesHubScreenState();
+}
+
+class _IssuesHubScreenState extends State<IssuesHubScreen> {
+  late final Stream<List<Issue>> _issues;
+
+  @override
+  void initState() {
+    super.initState();
+    _issues = context.read<AppState>().watchMyIssues();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final inProg = dataService.myIssues.where((i) => i.status == 'In Progress').length;
-        final res    = dataService.myIssues.where((i) => i.status == 'Resolved').length;
-        final newC   = dataService.myIssues.where((i) => i.status == 'New').length;
+    return StreamBuilder<List<Issue>>(
+      stream: _issues,
+      builder: (context, snapshot) {
+        final issues = snapshot.data ?? const <Issue>[];
+        final inProg = issues.where((i) => i.status == 'In Progress').length;
+        final res    = issues.where((i) => i.status == 'Resolved').length;
+        final newC   = issues.where((i) => i.status == 'New').length;
+        final count  = issues.length;
         return Scaffold(
           body: SafeArea(child: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const NoticeBox(message: 'Use this to report facility, safety, IT, or other campus problems. Max 5 reports per day.'),
             HubButton(icon: Icons.warning_amber_rounded, label: 'Report an Issue', subtitle: 'Submit a new campus issue', isPrimary: true, onTap: () => context.push('/issues/report')).animate().fadeIn(delay:50.ms).slideY(begin:0.2),
-            HubButton(icon: Icons.description_rounded, label: 'My Issues', subtitle: '${dataService.myIssues.length} submitted', onTap: () => context.push('/issues/my-issues')).animate().fadeIn(delay:100.ms).slideY(begin:0.2),
+            HubButton(icon: Icons.description_rounded, label: 'My Issues', subtitle: '$count submitted', onTap: () => context.push('/issues/my-issues')).animate().fadeIn(delay:100.ms).slideY(begin:0.2),
             const SectionLabel('My Stats'),
             Row(children: [
               Expanded(child: StatCard(value: '$inProg', label: 'In Progress', valueColor: AppTheme.red, bgColor: AppTheme.red.withOpacity(0.06))),
@@ -334,33 +348,52 @@ class _IssueDetailScreenState extends State<IssueDetailScreen> {
 // ── Screen 19: Issues Dashboard (Admin) ─────────────────────────
 class AdminIssuesDashboardScreen extends StatelessWidget {
   const AdminIssuesDashboardScreen({super.key});
+
+  /// Held in a field so the widget is const-constructible while still
+  /// subscribing once per AppState instance.
+  static Stream<List<Issue>> _stream(BuildContext ctx) =>
+      ctx.read<AppState>().watchAllIssues();
+
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final all = dataService.allIssues;
+    return StreamBuilder<List<Issue>>(
+      stream: _stream(context),
+      builder: (context, snapshot) {
+        final all = snapshot.data ?? const <Issue>[];
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
+        final error = snapshot.error;
         final cats = ['Facilities','Safety','IT','Cleanliness','Other'];
         return Scaffold(
           body: SafeArea(child: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const AdminBar(), const SizedBox(height: 10),
-            Row(children: [
-              Expanded(child: StatCard(value: '${all.where((i) => i.status=='New').length}', label: 'New')),
-              const SizedBox(width: 10),
-              Expanded(child: StatCard(value: '${all.where((i) => i.status=='In Progress' || i.status=='Assigned').length}', label: 'In Progress', valueColor: AppTheme.red, bgColor: AppTheme.red.withOpacity(0.06))),
-              const SizedBox(width: 10),
-              Expanded(child: StatCard(value: '${all.where((i) => i.status=='Resolved').length}', label: 'Resolved', valueColor: AppTheme.redDark, bgColor: AppTheme.red.withOpacity(0.07))),
-            ]).animate().fadeIn(delay:50.ms),
-            const SectionLabel('Category Breakdown'),
-            Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(children: cats.map((cat) {
-              final count = all.where((i) => i.category == cat).length;
-              final pct   = all.isNotEmpty ? count / all.length : 0.0;
-              return Padding(padding: const EdgeInsets.only(bottom: 12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(cat, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)), Text('$count', style: const TextStyle(fontSize: 12, color: AppTheme.textMuted))]),
-                const SizedBox(height: 5),
-                ClipRRect(borderRadius: BorderRadius.circular(3), child: LinearProgressIndicator(value: pct, backgroundColor: AppTheme.red.withOpacity(0.08), color: AppTheme.red, minHeight: 6)),
-              ]));
-            }).toList()))),
-            GradientButton(label: 'View All Issues', onPressed: () => context.push('/admin/issues/list')),
+            if (error != null)
+              EmptyState(
+                title: 'Could Not Load Issues',
+                subtitle: error is AuthFailure ? error.message : 'Something went wrong. Please try again.',
+                icon: Icons.cloud_off_rounded,
+              )
+            else ...[
+              Row(children: [
+                Expanded(child: StatCard(value: '${all.where((i) => i.status=='New').length}', label: 'New')),
+                const SizedBox(width: 10),
+                Expanded(child: StatCard(value: '${all.where((i) => i.status=='In Progress' || i.status=='Assigned').length}', label: 'In Progress', valueColor: AppTheme.red, bgColor: AppTheme.red.withOpacity(0.06))),
+                const SizedBox(width: 10),
+                Expanded(child: StatCard(value: '${all.where((i) => i.status=='Resolved').length}', label: 'Resolved', valueColor: AppTheme.redDark, bgColor: AppTheme.red.withOpacity(0.07))),
+              ]).animate().fadeIn(delay:50.ms),
+              if (isLoading && all.isEmpty)
+                const Padding(padding: EdgeInsets.only(top: 24), child: Center(child: CircularProgressIndicator(color: AppTheme.red))),
+              const SectionLabel('Category Breakdown'),
+              Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(children: cats.map((cat) {
+                final count = all.where((i) => i.category == cat).length;
+                final pct   = all.isNotEmpty ? count / all.length : 0.0;
+                return Padding(padding: const EdgeInsets.only(bottom: 12), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(cat, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)), Text('$count', style: const TextStyle(fontSize: 12, color: AppTheme.textMuted))]),
+                  const SizedBox(height: 5),
+                  ClipRRect(borderRadius: BorderRadius.circular(3), child: LinearProgressIndicator(value: pct, backgroundColor: AppTheme.red.withOpacity(0.08), color: AppTheme.red, minHeight: 6)),
+                ]));
+              }).toList()))),
+              GradientButton(label: 'View All Issues', onPressed: () => context.push('/admin/issues/list')),
+            ],
           ]))),
         );
       },
@@ -371,21 +404,36 @@ class AdminIssuesDashboardScreen extends StatelessWidget {
 // ── Screen 20: Issues List (Admin) ───────────────────────────────
 class AdminIssuesListScreen extends StatelessWidget {
   const AdminIssuesListScreen({super.key});
+
+  static Stream<List<Issue>> _stream(BuildContext ctx) =>
+      ctx.read<AppState>().watchAllIssues();
+
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final data = dataService.allIssues;
+    return StreamBuilder<List<Issue>>(
+      stream: _stream(context),
+      builder: (context, snapshot) {
+        final data = snapshot.data ?? const <Issue>[];
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
+        final error = snapshot.error;
         return Scaffold(
           appBar: _appBar('All Issues', context),
           body: Column(children: [
             const Padding(padding: EdgeInsets.fromLTRB(16,8,16,0), child: AdminBar()),
-            Expanded(child: data.isEmpty
-                ? const EmptyState(title: 'No Issues', subtitle: 'No issues have been reported yet.', icon: Icons.task_alt_rounded)
-                : ListView.builder(padding: const EdgeInsets.all(16), itemCount: data.length, itemBuilder: (ctx, i) {
-                    final it = data[i];
-                    return CardRow(title: it.title, subtitle: '${it.studentId ?? ''} · ${it.category} · ${it.location}', extra: fmtDate(it.createdDate), status: it.status, onTap: () => context.push('/admin/issues/detail/${it.id}')).animate().fadeIn(delay: (i*55).ms).slideY(begin:0.12);
-                  }),
+            Expanded(child: error != null
+                ? EmptyState(
+                    title: 'Could Not Load Issues',
+                    subtitle: error is AuthFailure ? error.message : 'Something went wrong. Please try again.',
+                    icon: Icons.cloud_off_rounded,
+                  )
+                : isLoading && data.isEmpty
+                    ? const Center(child: CircularProgressIndicator(color: AppTheme.red))
+                    : data.isEmpty
+                        ? const EmptyState(title: 'No Issues', subtitle: 'No issues have been reported yet.', icon: Icons.task_alt_rounded)
+                        : ListView.builder(padding: const EdgeInsets.all(16), itemCount: data.length, itemBuilder: (ctx, i) {
+                            final it = data[i];
+                            return CardRow(title: it.title, subtitle: '${it.studentId ?? ''} · ${it.category} · ${it.location}', extra: fmtDate(it.createdDate), status: it.status, onTap: () => context.push('/admin/issues/detail/${it.id}')).animate().fadeIn(delay: (i*55).ms).slideY(begin:0.12);
+                          }),
             ),
           ]),
         );
@@ -409,7 +457,19 @@ class _AdminIssueDetailScreenState extends State<AdminIssueDetailScreen> {
   String? _selectedStatus;
   bool _initialized = false;
 
-  void _confirmDelete(BuildContext context, DataService dataService, Issue issue) {
+  /// Held in fields so rebuilds do not re-subscribe to Firestore.
+  late final Stream<Issue?> _issue;
+  late final Stream<List<IssueHistory>> _history;
+
+  @override
+  void initState() {
+    super.initState();
+    final appState = context.read<AppState>();
+    _issue = appState.watchIssue(widget.id);
+    _history = appState.watchIssueHistory(widget.id);
+  }
+
+  void _confirmDelete(BuildContext context, Issue issue) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -422,11 +482,12 @@ class _AdminIssueDetailScreenState extends State<AdminIssueDetailScreen> {
             child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.of(ctx).pop();
-              dataService.deleteIssue(issue.id);
-              _toast(context, 'Issue "${issue.title}" deleted');
-              context.pop(); // Go back to issues list
+              final ok = await context.read<AppState>().deleteIssue(issue.id);
+              if (!mounted) return;
+              _toast(context, ok ? 'Issue "${issue.title}" deleted' : 'Could not delete the issue. Please try again.');
+              if (ok) context.pop(); // Go back to issues list
             },
             child: const Text('Delete', style: TextStyle(color: AppTheme.danger, fontWeight: FontWeight.w700)),
           ),
@@ -437,27 +498,32 @@ class _AdminIssueDetailScreenState extends State<AdminIssueDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final it = dataService.allIssues.firstWhere((x) => x.id == widget.id, orElse: () => const Issue(
-          id: '', title: 'Issue Not Found', category: '', location: '',
-          status: 'Unknown', createdDate: '', updatedDate: '', description: '', studentId: ''
-        ));
-        final hist = MockData.issueHistory[it.id] ?? [];
+    return StreamBuilder<Issue?>(
+      stream: _issue,
+      builder: (context, snapshot) {
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
+        final error = snapshot.error;
+        final it = snapshot.data;
+
+        if (isLoading && it == null) {
+          return Scaffold(appBar: _appBar('Issue', context), body: const Center(child: CircularProgressIndicator(color: AppTheme.red)));
+        }
+        if (error != null) {
+          return Scaffold(appBar: _appBar('Issue', context), body: EmptyState(
+            title: 'Could Not Load Issue',
+            subtitle: error is AuthFailure ? error.message : 'Something went wrong. Please try again.',
+            icon: Icons.cloud_off_rounded,
+          ));
+        }
+        if (it == null || it.id.isEmpty) {
+          return Scaffold(appBar: _appBar('Issue', context), body: const Center(child: EmptyState(title: 'Issue Not Found', subtitle: 'This issue may have been deleted.', icon: Icons.search_off_rounded)));
+        }
 
         // Only initialize _selectedStatus once from the issue data.
         // After that, the dropdown controls _selectedStatus independently.
-        if (!_initialized && it.id.isNotEmpty) {
+        if (!_initialized) {
           _selectedStatus = it.status;
           _initialized = true;
-        }
-
-        // If issue was deleted (not found), show a message
-        if (it.id.isEmpty) {
-          return Scaffold(
-            appBar: _appBar('Issue', context),
-            body: const Center(child: EmptyState(title: 'Issue Not Found', subtitle: 'This issue may have been deleted.', icon: Icons.search_off_rounded)),
-          );
         }
 
         return Scaffold(
@@ -507,12 +573,18 @@ class _AdminIssueDetailScreenState extends State<AdminIssueDetailScreen> {
             const SizedBox(height: 4),
             GradientButton(
               label: 'Update Status',
-              onPressed: () {
+              onPressed: () async {
                 if (_selectedStatus != null && _selectedStatus != it.status) {
-                  dataService.updateIssueStatus(it.id, _selectedStatus!);
-                  _toast(context, 'Status updated to $_selectedStatus');
-                  // Reset initialized so it picks up the new saved status
-                  _initialized = false;
+                  final ok = await context.read<AppState>().updateIssueStatus(it.id, _selectedStatus!);
+                  if (!mounted) return;
+                  if (ok) {
+                    _toast(context, 'Status updated to $_selectedStatus');
+                    // Reset initialized so the next stream emission re-syncs
+                    // _selectedStatus from the persisted document.
+                    setState(() => _initialized = false);
+                  } else {
+                    _toast(context, 'Could not update the issue. Please try again.');
+                  }
                 } else if (_selectedStatus == it.status) {
                   _toast(context, 'Status is already "$_selectedStatus"');
                 }
@@ -523,7 +595,7 @@ class _AdminIssueDetailScreenState extends State<AdminIssueDetailScreen> {
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: () => _confirmDelete(context, dataService, it),
+                onPressed: () => _confirmDelete(context, it),
                 icon: const Icon(Icons.delete_forever_rounded, color: AppTheme.danger),
                 label: const Text('Delete Issue', style: TextStyle(color: AppTheme.danger, fontWeight: FontWeight.w700)),
                 style: OutlinedButton.styleFrom(
@@ -533,10 +605,17 @@ class _AdminIssueDetailScreenState extends State<AdminIssueDetailScreen> {
                 ),
               ),
             ),
-            if (hist.isNotEmpty) ...[
-              const SectionLabel('Timeline'),
-              ...hist.map((h) => _TimelineItem(date: h.date, text: (h.from != null ? '${h.from} → ${h.to}' : 'Created: ${h.to}') + (h.note != null ? ' — ${h.note}' : ''))),
-            ],
+            StreamBuilder<List<IssueHistory>>(
+              stream: _history,
+              builder: (context, histSnap) {
+                final hist = histSnap.data ?? const <IssueHistory>[];
+                if (hist.isEmpty) return const SizedBox.shrink();
+                return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const SectionLabel('Timeline'),
+                  ...hist.map((h) => _TimelineItem(date: h.date, text: (h.from != null ? '${h.from} → ${h.to}' : 'Created: ${h.to}') + (h.note != null ? ' — ${h.note}' : ''))),
+                ]);
+              },
+            ),
           ])),
         );
       },
