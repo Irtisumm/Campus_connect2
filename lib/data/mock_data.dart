@@ -7,6 +7,20 @@
 import '../models/issue.dart';
 export '../models/issue.dart' show Issue, IssueHistory;
 
+// Event, EventMessage, EventJoining and EventRole moved to lib/models/ for
+// Firestore, for the same reason and by the same mechanism as Issue above.
+// They must be declared exactly once: while a copy lived here as well, any
+// file that saw both declarations failed to compile on the name clash, and
+// AppState could not hand a screen the value DataService had produced. The
+// re-export keeps every existing `import '.../mock_data.dart'` working
+// unchanged — the constructors are identical, so MockData.events and every
+// DataService method below still compile untouched.
+import '../models/event.dart';
+export '../models/event.dart' show Event;
+export '../models/event_joining.dart' show EventJoining;
+export '../models/event_message.dart' show EventMessage;
+export '../models/event_role.dart' show EventRole;
+
 // ── Models ────────────────────────────────────────────────────────
 class LostReport {
   final String id, title, category, whereLost, whenLost, status, description;
@@ -57,68 +71,6 @@ class Notification {
   const Notification({required this.id, required this.type, required this.text,
     required this.time, this.visibility = 'all', this.detailText, this.read = false,
     this.relatedScreen, this.relatedId, this.targetUserId, this.source = 'system'});
-}
-
-class Event {
-  final String id, title, date, time, location, category, organizer, description, status;
-  final String? hostStudentId; // student who created the event (if student-created)
-  final String? approvalLetterPath;
-  final String? approvalLetterName;
-  final bool hasApprovalLetter;
-  final String? rejectionReason;
-  final String? revisionNotes;
-  final List<EventMessage>? messages;
-  final int revisionCount;
-  final String? submittedDate;
-
-  // Event type and joining system fields
-  final String eventType; // 'Open', 'Club', 'Club+Payment', 'Paid'
-  final bool isPrivate; // Club-based event?
-  final bool clubIdRequired; // Is Club ID mandatory?
-  final bool isPaid; // Is event paid?
-  final double price; // Price if paid
-  final List<String> attendeeIds; // Students who've joined
-  final List<String> pendingJoiningIds; // Pending approval requests
-  final String? qrTicketPath; // QR code path for tickets
-
-  const Event({required this.id, required this.title, required this.date, required this.time,
-    required this.location, required this.category, required this.organizer,
-    required this.description, required this.status, this.hostStudentId,
-    this.approvalLetterPath, this.approvalLetterName, this.hasApprovalLetter = false,
-    this.rejectionReason, this.revisionNotes, this.messages, this.revisionCount = 0,
-    this.submittedDate, this.eventType = 'Open', this.isPrivate = false, this.clubIdRequired = false,
-    this.isPaid = false, this.price = 0.0, this.attendeeIds = const [],
-    this.pendingJoiningIds = const [], this.qrTicketPath});
-}
-
-class EventMessage {
-  final String id;
-  final String senderId;
-  final String senderRole; // 'admin' or 'student'
-  final String message;
-  final String timestamp;
-  final String? attachmentName;
-
-  const EventMessage({required this.id, required this.senderId, required this.senderRole,
-    required this.message, required this.timestamp, this.attachmentName});
-}
-
-class EventJoining {
-  final String id;
-  final String eventId;
-  final String studentId;
-  final String name;
-  final String courseName;
-  final String? clubId;
-  final String status; // 'Pending', 'Approved', 'Rejected'
-  final String? paymentStatus; // null for free, or 'Pending', 'Completed'
-  final String? qrTicketCode;
-  final String joinedDate;
-  final bool hasAttended;
-
-  const EventJoining({required this.id, required this.eventId, required this.studentId,
-    required this.name, required this.courseName, this.clubId, this.status = 'Pending',
-    this.paymentStatus, this.qrTicketCode, required this.joinedDate, this.hasAttended = false});
 }
 
 class Candidate {
@@ -183,19 +135,6 @@ class LockerHistory {
   final String action, staffId, timestamp;
   final String? reason;
   const LockerHistory({required this.action, required this.staffId, required this.timestamp, this.reason});
-}
-
-class EventRole {
-  final String id;
-  final String eventId;
-  final String studentId;
-  final String studentName;
-  final String role; // 'Organizer', 'Staff', 'Volunteer'
-  final List<String> permissions; // 'scan_qr', 'manage_participants', 'edit_event'
-  const EventRole({
-    required this.id, required this.eventId, required this.studentId,
-    required this.studentName, required this.role, this.permissions = const [],
-  });
 }
 
 // StudentRegistration removed: student registrations now live in the Firestore

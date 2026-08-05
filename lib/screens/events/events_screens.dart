@@ -9,7 +9,6 @@ import '../../widgets/common.dart';
 import '../../data/mock_data.dart';
 import '../../theme/app_theme.dart';
 import '../../services/app_state.dart';
-import '../../services/data_service.dart';
 
 void _toast(BuildContext ctx, String msg) => ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
   content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -33,11 +32,17 @@ class EventsHubScreen extends StatelessWidget {
   const EventsHubScreen({super.key});
   @override
   Widget build(BuildContext context) {
-    return Consumer2<DataService, AppState>(
-      builder: (context, dataService, appState, child) {
-        final events = dataService.allEvents;
-        final mySubmissions = dataService.getEventsForHost(appState.userId ?? '');
-        return Scaffold(
+    return Consumer<AppState>(
+      builder: (context, appState, child) {
+        return StreamBuilder<List<Event>>(
+          stream: appState.watchPublishedEvents(),
+          builder: (context, eventsSnap) {
+            final events = eventsSnap.data ?? const <Event>[];
+            return StreamBuilder<List<Event>>(
+              stream: appState.watchMyEvents(),
+              builder: (context, mySubmissionsSnap) {
+                final mySubmissions = mySubmissionsSnap.data ?? const <Event>[];
+                return Scaffold(
           body: SafeArea(child: Column(children: [
             Padding(padding: const EdgeInsets.fromLTRB(16,12,16,0), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
               const Text('Upcoming Events', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
@@ -181,6 +186,10 @@ class EventsHubScreen extends StatelessWidget {
                 ).animate().fadeIn(delay: (i*70).ms).slideY(begin: 0.15);
               })),
           ])),
+                );
+              },
+            );
+          },
         );
       },
     );
@@ -193,25 +202,31 @@ class EventDetailScreen extends StatelessWidget {
   const EventDetailScreen({super.key, required this.id});
   @override
   Widget build(BuildContext context) {
-    return Consumer2<DataService, AppState>(
-      builder: (context, dataService, appState, child) {
-        final ev = dataService.allEvents.firstWhere((x) => x.id == id, orElse: () => const Event(
-          id: '', title: 'Event Not Found', date: '', time: '', location: '',
-          category: '', organizer: '', description: '', status: ''
-        ));
-        final colors = _catColors[ev.category] ?? _catColors['General']!;
-        // Check if already joined
+    return Consumer<AppState>(
+      builder: (context, appState, child) {
         final userId = appState.userId ?? 'S001';
-        final userJoined = ev.attendeeIds.contains(userId);
+        return StreamBuilder<Event?>(
+          stream: appState.watchEvent(id),
+          builder: (context, eventSnap) {
+            final ev = eventSnap.data ?? const Event(
+              id: '', title: 'Event Not Found', date: '', time: '', location: '',
+              category: '', organizer: '', description: '', status: ''
+            );
+            final colors = _catColors[ev.category] ?? _catColors['General']!;
+            final userJoined = ev.attendeeIds.contains(userId);
 
-        // Get QR code if joined — look up the actual approved joining record
-        String? qrCode;
-        if (userJoined) {
-          final joinRecord = dataService.getJoiningRecord(ev.id, userId);
-          qrCode = joinRecord?.qrTicketCode ?? 'QR-${ev.id}-$userId';
-        }
+            return StreamBuilder<List<EventJoining>>(
+              stream: appState.watchMyJoinings(),
+              builder: (context, joiningsSnap) {
+                final myJoining = (joiningsSnap.data ?? const <EventJoining>[])
+                    .where((j) => j.eventId == ev.id && j.status == 'Approved')
+                    .firstOrNull;
+                String? qrCode;
+                if (userJoined) {
+                  qrCode = myJoining?.qrTicketCode ?? 'QR-${ev.id}-$userId';
+                }
 
-        return Scaffold(
+                return Scaffold(
           appBar: _appBar(ev.title, context),
           body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
             Container(height: 130, decoration: BoxDecoration(color: colors[0], borderRadius: BorderRadius.circular(18), border: Border.all(color: (colors[1]).withOpacity(0.25))),
@@ -276,7 +291,7 @@ class EventDetailScreen extends StatelessWidget {
             if (!userJoined)
               GradientButton(
                 label: ev.isPaid ? '💳 Purchase Ticket' : (ev.isPrivate ? '📝 Request to Join' : '✅ Join Event'),
-                onPressed: () => _showJoinDialog(context, dataService, ev, userId),
+                onPressed: () => _showJoinDialog(context, appState, ev, userId),
               )
             else ...[
               Container(padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16), decoration: BoxDecoration(color: const Color(0xFF4CAF50).withOpacity(0.1), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFF4CAF50).withOpacity(0.3))),
@@ -289,6 +304,10 @@ class EventDetailScreen extends StatelessWidget {
             const SizedBox(height: 10),
             OutlineBtn(label: '🔔 Remind Me', onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Reminder set!')))),
           ])),
+                );
+              },
+            );
+          },
         );
       },
     );
@@ -351,7 +370,7 @@ class EventDetailScreen extends StatelessWidget {
     );
   }
 
-  void _showJoinDialog(BuildContext context, DataService dataService, Event event, String userId) {
+  void _showJoinDialog(BuildContext context, AppState appState, Event event, String userId) {
     final nameCtrl = TextEditingController();
     final courseCtrl = TextEditingController();
     final clubCtrl = TextEditingController();
@@ -406,28 +425,25 @@ class EventDetailScreen extends StatelessWidget {
           TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.red),
-            onPressed: () {
+            onPressed: () async {
               if (!key.currentState!.validate()) return;
-
+              Navigator.pop(dialogCtx);
+              final joining = await appState.joinEvent(
+                event,
+                name: nameCtrl.text.trim(),
+                courseName: courseCtrl.text.trim(),
+                clubId: clubCtrl.text.isNotEmpty ? clubCtrl.text.trim() : null,
+              );
+              if (joining == null) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to join event. Please try again.')));
+                return;
+              }
               if (event.isPaid) {
-                // For paid events, create joining with pending payment
-                final joining = dataService.requestJoinEvent(event.id, userId, nameCtrl.text.trim(), courseCtrl.text.trim(), clubId: clubCtrl.text.isNotEmpty ? clubCtrl.text.trim() : null);
-                Navigator.pop(dialogCtx);
-                // Show payment dialog
-                _showPaymentDialog(context, dataService, event, joining);
+                _showPaymentDialog(context, appState, event, joining);
               } else if (event.isPrivate) {
-                // For private events, submit for approval
-                dataService.requestJoinEvent(event.id, userId, nameCtrl.text.trim(), courseCtrl.text.trim(), clubId: clubCtrl.text.isNotEmpty ? clubCtrl.text.trim() : null);
-                Navigator.pop(dialogCtx);
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Request submitted. Waiting for approval...')));
               } else {
-                // For open free events, quick join
-                if (dataService.quickJoinEvent(event.id, userId, nameCtrl.text.trim(), courseCtrl.text.trim())) {
-                  Navigator.pop(dialogCtx);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Successfully joined! Your QR ticket is ready.')));
-                  // Refresh the view
-                  (context as Element).reassemble();
-                }
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Successfully joined! Your QR ticket is ready.')));
               }
             },
             child: const Text('Continue', style: TextStyle(color: Colors.white)),
@@ -437,7 +453,7 @@ class EventDetailScreen extends StatelessWidget {
     );
   }
 
-  void _showPaymentDialog(BuildContext context, DataService dataService, Event event, EventJoining joining) {
+  void _showPaymentDialog(BuildContext context, AppState appState, Event event, EventJoining joining) {
     final amountCtrl = TextEditingController(text: event.price.toStringAsFixed(2));
     final cardNumberCtrl = TextEditingController();
     final expiryCtrl = TextEditingController();
@@ -520,9 +536,9 @@ class EventDetailScreen extends StatelessWidget {
                 setState(() => isPaymentProcessing = true);
                 // Simulate payment processing
                 Future.delayed(const Duration(seconds: 2), () {
-                  dataService.completePaymentAndJoin(joining.id, event.price);
+                  appState.completeJoiningPayment(joining.id);
                   Navigator.pop(dialogCtx);
-                  _showQRCodeDialog(context, dataService, joining, event);
+                  _showQRCodeDialog(context, joining, event);
                 });
               },
               child: isPaymentProcessing
@@ -535,10 +551,8 @@ class EventDetailScreen extends StatelessWidget {
     );
   }
 
-  void _showQRCodeDialog(BuildContext context, DataService dataService, EventJoining joining, Event event) {
-    // Fetch the updated joining record so we get the qrTicketCode set after payment
-    final updated = dataService.getJoiningById(joining.id) ?? joining;
-    final qrCode = updated.qrTicketCode ?? 'QR-${joining.eventId}-${joining.studentId}';
+  void _showQRCodeDialog(BuildContext context, EventJoining joining, Event event) {
+    final qrCode = joining.qrTicketCode ?? 'QR-${joining.eventId}-${joining.studentId}';
     final scaffold = ScaffoldMessenger.of(context);
     showDialog(
       context: context,
@@ -651,7 +665,7 @@ class AdminEventsListScreen extends StatefulWidget {
 class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
   bool _showPending = true;
 
-  void _showSendNoticeDialog(BuildContext context, DataService dataService, Event ev) {
+  void _showSendNoticeDialog(BuildContext context, AppState appState, Event ev) {
     final noticeCtrl = TextEditingController();
     showDialog(
       context: context,
@@ -680,9 +694,9 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
           TextButton(onPressed: () => Navigator.of(dialogCtx).pop(), child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.red),
-            onPressed: () {
+            onPressed: () async {
               if (noticeCtrl.text.trim().isNotEmpty) {
-                dataService.sendEventNotice(ev.id, noticeCtrl.text.trim());
+                await appState.addEventMessage(ev.id, noticeCtrl.text.trim());
                 Navigator.of(dialogCtx).pop();
                 _toast(context, 'Notice sent to host');
               }
@@ -694,7 +708,7 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
     );
   }
 
-  void _showDeleteConfirmation(BuildContext context, DataService dataService, Event ev) {
+  void _showDeleteConfirmation(BuildContext context, AppState appState, Event ev) {
     showDialog(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -705,8 +719,8 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
           TextButton(onPressed: () => Navigator.of(dialogCtx).pop(), child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () {
-              dataService.deleteEvent(ev.id);
+            onPressed: () async {
+              await appState.deleteEvent(ev.id);
               Navigator.of(dialogCtx).pop();
               _toast(context, 'Event deleted');
             },
@@ -719,11 +733,17 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final pendingList = dataService.pendingEvents;
-        final publishedList = dataService.allEvents;
-        final data = _showPending ? pendingList : publishedList;
+    return Consumer<AppState>(
+      builder: (context, appState, child) {
+        return StreamBuilder<List<Event>>(
+          stream: appState.watchPendingEvents(),
+          builder: (context, pendingSnap) {
+            return StreamBuilder<List<Event>>(
+              stream: appState.watchAllEvents(),
+              builder: (context, allSnap) {
+                final pendingList = pendingSnap.data ?? const <Event>[];
+                final publishedList = allSnap.data ?? const <Event>[];
+                final data = _showPending ? pendingList : publishedList;
 
         return Scaffold(
           appBar: _appBar('Events Management', context),
@@ -792,13 +812,13 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
                           ),
                           const SizedBox(height: 8),
                           Row(children: [
-                            Expanded(child: OutlineBtn(label: 'Reject', onPressed: () {
-                              dataService.rejectEvent(ev.id, reason: 'Rejected by admin');
+                            Expanded(child: OutlineBtn(label: 'Reject', onPressed: () async {
+                              await appState.rejectEvent(ev.id, 'Rejected by admin');
                               _toast(ctx, 'Event rejected');
                             })),
                             const SizedBox(width: 8),
-                            Expanded(child: GradientButton(label: 'Approve', onPressed: () {
-                              dataService.approveEvent(ev.id);
+                            Expanded(child: GradientButton(label: 'Approve', onPressed: () async {
+                              await appState.approveEvent(ev.id);
                               _toast(ctx, 'Event approved!');
                             })),
                           ]),
@@ -851,8 +871,8 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
                                   icon: Icons.check_circle_outline_rounded,
                                   label: 'Complete',
                                   color: const Color(0xFF2E7D32),
-                                  onTap: () {
-                                    dataService.markEventCompleted(ev.id);
+                                  onTap: () async {
+                                    await appState.markEventCompleted(ev.id);
                                     _toast(ctx, 'Event marked as completed');
                                   },
                                 ),
@@ -860,7 +880,7 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
                                 icon: Icons.mail_outline_rounded,
                                 label: 'Notice',
                                 color: AppTheme.red,
-                                onTap: () => _showSendNoticeDialog(ctx, dataService, ev),
+                                onTap: () => _showSendNoticeDialog(ctx, appState, ev),
                               ),
                               _ActionChip(
                                 icon: Icons.edit_outlined,
@@ -872,7 +892,7 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
                                 icon: Icons.delete_outline_rounded,
                                 label: 'Delete',
                                 color: AppTheme.danger,
-                                onTap: () => _showDeleteConfirmation(ctx, dataService, ev),
+                                onTap: () => _showDeleteConfirmation(ctx, appState, ev),
                               ),
                             ],
                           ),
@@ -883,6 +903,10 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
                 }
               })),
           ]),
+        );
+              },
+            );
+          },
         );
       },
     );
@@ -933,7 +957,7 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
     super.dispose();
   }
 
-  void _confirmDelete(BuildContext context, DataService dataService, Event ev) {
+  void _confirmDelete(BuildContext context, AppState appState, Event ev) {
     showDialog(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -944,8 +968,8 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
           TextButton(onPressed: () => Navigator.of(dialogCtx).pop(), child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () {
-              dataService.deleteEvent(ev.id);
+            onPressed: () async {
+              await appState.deleteEvent(ev.id);
               Navigator.of(dialogCtx).pop();
               _toast(context, 'Event deleted');
               context.pop(); // Go back to list
@@ -959,14 +983,18 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final ev = widget.id != null
-          ? dataService.allEvents.firstWhere((x) => x.id == widget.id, orElse: () => const Event(
-              id: '', title: '', date: '', time: '', location: '',
-              category: '', organizer: '', description: '', status: ''
-            ))
-          : null;
+    return Consumer<AppState>(
+      builder: (context, appState, child) {
+        return StreamBuilder<List<Event>>(
+          stream: appState.watchAllEvents(),
+          builder: (context, allEventsSnap) {
+            final allEvents = allEventsSnap.data ?? const <Event>[];
+            final ev = widget.id != null
+              ? allEvents.firstWhere((x) => x.id == widget.id, orElse: () => const Event(
+                  id: '', title: '', date: '', time: '', location: '',
+                  category: '', organizer: '', description: '', status: ''
+                ))
+              : null;
 
         // Load event data into controllers only once
         if (ev != null && !_loaded && ev.id.isNotEmpty) {
@@ -1036,10 +1064,20 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
               // Publish / Update Status button
               GradientButton(
                 label: ev.status == 'Published' ? 'Update Event' : 'Publish Event',
-                onPressed: () {
+                onPressed: () async {
                   if (_titleCtrl.text.isNotEmpty) {
-                    dataService.updateEventStatus(ev.id, 'Published');
-                    _toast(context, 'Event published');
+                    final updated = ev.copyWith(
+                      title: _titleCtrl.text,
+                      description: _descCtrl.text,
+                      date: _dateCtrl.text,
+                      time: _timeCtrl.text,
+                      location: _locCtrl.text,
+                      organizer: _orgCtrl.text,
+                      category: _category,
+                      status: ev.status == 'Published' ? ev.status : 'Published',
+                    );
+                    await appState.updateEvent(updated);
+                    _toast(context, 'Event updated');
                   } else {
                     _toast(context, 'Title is required');
                   }
@@ -1052,8 +1090,8 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
                 OutlineBtn(
                   label: 'Mark as Completed',
                   color: const Color(0xFF2E7D32),
-                  onPressed: () {
-                    dataService.markEventCompleted(ev.id);
+                  onPressed: () async {
+                    await appState.markEventCompleted(ev.id);
                     _toast(context, 'Event marked as completed');
                   },
                 ),
@@ -1075,9 +1113,9 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
               OutlineBtn(
                 label: 'Send Notice',
                 color: AppTheme.red,
-                onPressed: () {
+                onPressed: () async {
                   if (_noticeCtrl.text.trim().isNotEmpty) {
-                    dataService.sendEventNotice(ev.id, _noticeCtrl.text.trim());
+                    await appState.addEventMessage(ev.id, _noticeCtrl.text.trim());
                     _toast(context, 'Notice sent to event host');
                     _noticeCtrl.clear();
                   } else {
@@ -1091,17 +1129,16 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
               OutlineBtn(
                 label: 'Delete Event',
                 color: AppTheme.danger,
-                onPressed: () => _confirmDelete(context, dataService, ev),
+                onPressed: () => _confirmDelete(context, appState, ev),
               ),
             ] else ...[
               // Creating a new event
               GradientButton(
                 label: 'Publish',
-                onPressed: () {
+                onPressed: () async {
                   if (_titleCtrl.text.isNotEmpty) {
-                    final appState = context.read<AppState>();
                     final newEvent = Event(
-                      id: 'EV-${DateTime.now().millisecondsSinceEpoch}',
+                      id: '',
                       title: _titleCtrl.text,
                       category: _category,
                       date: _dateCtrl.text,
@@ -1112,8 +1149,10 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
                       status: 'Published',
                       hostStudentId: appState.userId,
                     );
-                    dataService.createEvent(newEvent);
-                    dataService.approveEvent(newEvent.id);
+                    final created = await appState.createEvent(newEvent);
+                    if (created != null) {
+                      await appState.approveEvent(created.id);
+                    }
                     _toast(context, 'Event published');
                     context.pop();
                   } else {
@@ -1125,6 +1164,8 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
               OutlineBtn(label: 'Save as Draft', onPressed: () => _toast(context, 'Saved as draft')),
             ],
           ])),
+        );
+          },
         );
       },
     );
@@ -1321,7 +1362,7 @@ class _CreateEventState extends State<CreateEventScreen> {
           ),
         ),
         const SizedBox(height: 20),
-        GradientButton(label: 'Submit for Approval', onPressed: () {
+        GradientButton(label: 'Submit for Approval', onPressed: () async {
           if (_key.currentState!.validate() && _catVal != null) {
             final eventDate = DateTime.tryParse(_dateC.text);
             if (eventDate == null) {
@@ -1341,7 +1382,6 @@ class _CreateEventState extends State<CreateEventScreen> {
               return;
             }
 
-            final dataService = context.read<DataService>();
             final appState = context.read<AppState>();
 
             // Determine event type configuration
@@ -1350,7 +1390,7 @@ class _CreateEventState extends State<CreateEventScreen> {
             final price = isPaid ? double.tryParse(_priceC.text) ?? 0.0 : 0.0;
 
             final newEvent = Event(
-              id: 'EV-${DateTime.now().millisecondsSinceEpoch}',
+              id: '',
               title: _titleC.text,
               category: _catVal!,
               date: _dateC.text,
@@ -1374,7 +1414,11 @@ class _CreateEventState extends State<CreateEventScreen> {
               _toast(context, 'You must be logged in to create an event');
               return;
             }
-            dataService.createEvent(newEvent);
+            final created = await appState.createEvent(newEvent);
+            if (created == null) {
+              _toast(context, 'Unable to submit event. Please try again.');
+              return;
+            }
             setState(() => _done = true);
           } else {
             _toast(context, 'Please fill all fields');

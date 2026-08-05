@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 
 import '../../data/mock_data.dart';
 import '../../services/app_state.dart';
-import '../../services/data_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/common.dart';
 
@@ -59,12 +58,15 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
   }
 
   // ── Tab 0: Overview ─────────────────────────────────────────────
-  Widget _buildOverview(BuildContext ctx, DataService ds, Event ev) {
-    final allReqs  = ds.getJoiningRequestsForEvent(ev.id);
-    final pending  = allReqs.where((j) => j.status == 'Pending').length;
-    final approved = ds.getEventAttendees(ev.id);
-    final attended = approved.where((a) => a.hasAttended).length;
-    final messages = ev.messages ?? const <EventMessage>[];
+  Widget _buildOverview(BuildContext ctx, AppState appState, Event ev) {
+    return StreamBuilder<List<EventJoining>>(
+      stream: appState.watchEventJoinings(ev.id),
+      builder: (context, joiningsSnap) {
+        final allReqs = joiningsSnap.data ?? const <EventJoining>[];
+        final pending  = allReqs.where((j) => j.status == 'Pending').length;
+        final approved = allReqs.where((j) => j.status == 'Approved').toList();
+        final attended = approved.where((a) => a.hasAttended).length;
+        final messages = ev.messages ?? const <EventMessage>[];
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -117,7 +119,7 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               padding: const EdgeInsets.symmetric(vertical: 12),
             ),
-            onPressed: () => _showEditDialog(ctx, ds, ev),
+            onPressed: () => _showEditDialog(ctx, appState, ev),
           ),
         ),
         const SizedBox(height: 14),
@@ -140,14 +142,19 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
         ],
       ]),
     );
+          },
+        );
   }
 
   // ── Tab 1: Participants ──────────────────────────────────────────
-  Widget _buildParticipants(BuildContext ctx, DataService ds, String eventId, bool isPaid) {
-    final allReqs = ds.getJoiningRequestsForEvent(eventId);
-    final filtered = _participantFilter == 'All'
-        ? allReqs
-        : allReqs.where((j) => j.status == _participantFilter).toList();
+  Widget _buildParticipants(BuildContext ctx, AppState appState, String eventId, bool isPaid) {
+    return StreamBuilder<List<EventJoining>>(
+      stream: appState.watchEventJoinings(eventId),
+      builder: (context, joiningsSnap) {
+        final allReqs = joiningsSnap.data ?? const <EventJoining>[];
+        final filtered = _participantFilter == 'All'
+            ? allReqs
+            : allReqs.where((j) => j.status == _participantFilter).toList();
 
     return Column(children: [
       // Filter chips
@@ -198,12 +205,12 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
                   return _ParticipantCard(
                     joining: req,
                     isPaid: isPaid,
-                    onApprove: req.status == 'Pending' ? () {
-                      ds.approveEventJoining(req.id);
+                    onApprove: req.status == 'Pending' ? () async {
+                      await appState.approveJoining(req);
                       _toast(ctx, '✅ ${req.name} approved');
                     } : null,
-                    onReject: req.status == 'Pending' ? () {
-                      ds.rejectEventJoining(req.id);
+                    onReject: req.status == 'Pending' ? () async {
+                      await appState.rejectJoining(req);
                       _toast(ctx, '❌ ${req.name} rejected');
                     } : null,
                   );
@@ -211,12 +218,17 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
               ),
       ),
     ]);
+          },
+        );
   }
 
   // ── Tab 2: Roles ─────────────────────────────────────────────────
-  Widget _buildRoles(BuildContext ctx, DataService ds, String eventId,
+  Widget _buildRoles(BuildContext ctx, AppState appState, String eventId,
       String creatorId, String creatorName) {
-    final roles = ds.getRolesForEvent(eventId);
+    return StreamBuilder<List<EventRole>>(
+      stream: appState.watchEventRoles(eventId),
+      builder: (context, rolesSnap) {
+        final roles = rolesSnap.data ?? const <EventRole>[];
     return Stack(children: [
       ListView(padding: const EdgeInsets.all(16), children: [
         // Header notice
@@ -255,8 +267,8 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
           child: _RoleCard(
             name: r.studentName, studentId: r.studentId,
             role: r.role, permissions: r.permissions,
-            onRemove: () {
-              ds.removeRole(r.id);
+            onRemove: () async {
+              await appState.removeEventRole(r.id);
               _toast(ctx, 'Role removed for ${r.studentName}');
             },
           ),
@@ -270,17 +282,23 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
           icon: const Icon(Icons.person_add_rounded, color: Colors.white),
           label: const Text('Add Team Member',
               style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-          onPressed: () => _showAddRoleDialog(ctx, ds, eventId),
+          onPressed: () => _showAddRoleDialog(ctx, appState, eventId),
         ),
       ),
     ]);
+      },
+    );
   }
 
   // ── Tab 3: Entry Verification ────────────────────────────────────
-  Widget _buildEntry(BuildContext ctx, DataService ds, String eventId) {
-    final attendees = ds.getEventAttendees(eventId);
-    final attended  = attendees.where((a) => a.hasAttended).toList();
-    final notYet    = attendees.where((a) => !a.hasAttended).toList();
+  Widget _buildEntry(BuildContext ctx, AppState appState, String eventId) {
+    return StreamBuilder<List<EventJoining>>(
+      stream: appState.watchEventJoinings(eventId),
+      builder: (context, joiningsSnap) {
+        final allJoinings = joiningsSnap.data ?? const <EventJoining>[];
+        final attendees = allJoinings.where((j) => j.status == 'Approved').toList();
+        final attended  = attendees.where((a) => a.hasAttended).toList();
+        final notYet    = attendees.where((a) => !a.hasAttended).toList();
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -363,14 +381,13 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                onPressed: () {
+                onPressed: () async {
                   final code = _qrCtrl.text.trim();
                   if (code.isEmpty) { _toast(ctx, 'Enter a QR code first'); return; }
-                  final ok = ds.verifyAndMarkAttendance(eventId, code);
+                  final ok = await appState.verifyTicket(eventId, code);
                   if (ok) {
                     _toast(ctx, '✅ Entry verified! Participant checked in.');
                     _qrCtrl.clear();
-                    setState(() {});
                   } else {
                     _toast(ctx, '❌ Invalid or unapproved QR code.');
                   }
@@ -403,10 +420,12 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
         ],
       ]),
     );
+          },
+        );
   }
 
   // ── Dialogs ──────────────────────────────────────────────────────
-  void _showEditDialog(BuildContext ctx, DataService ds, Event ev) {
+  void _showEditDialog(BuildContext ctx, AppState appState, Event ev) {
     final titleCtrl = TextEditingController(text: ev.title);
     final dateCtrl  = TextEditingController(text: ev.date);
     final timeCtrl  = TextEditingController(text: ev.time);
@@ -449,15 +468,27 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
           ElevatedButton(
             style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.red, foregroundColor: Colors.white),
-            onPressed: () {
+            onPressed: () async {
               final updated = Event(
                 id: ev.id, title: titleCtrl.text.trim(),
                 date: dateCtrl.text.trim(), time: timeCtrl.text.trim(),
                 location: locCtrl.text.trim(), category: ev.category,
                 organizer: orgCtrl.text.trim(), description: descCtrl.text.trim(),
                 status: ev.status,
+                hostStudentId: ev.hostStudentId,
+                approvalLetterPath: ev.approvalLetterPath,
+                approvalLetterName: ev.approvalLetterName,
+                hasApprovalLetter: ev.hasApprovalLetter,
+                submittedDate: ev.submittedDate,
+                revisionCount: ev.revisionCount,
+                messages: ev.messages,
+                eventType: ev.eventType,
+                isPrivate: ev.isPrivate,
+                clubIdRequired: ev.clubIdRequired,
+                isPaid: ev.isPaid,
+                price: ev.price,
               );
-              ds.updateEventDetails(ev.id, updated);
+              await appState.updateEvent(updated);
               Navigator.pop(dialogCtx);
               _toast(ctx, '✅ Event details updated');
             },
@@ -468,7 +499,7 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
     );
   }
 
-  void _showAddRoleDialog(BuildContext ctx, DataService ds, String eventId) {
+  void _showAddRoleDialog(BuildContext ctx, AppState appState, String eventId) {
     _sidCtrl.clear();
     _selectedRole = 'Staff';
     _selectedPerms
@@ -548,10 +579,10 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.red, foregroundColor: Colors.white),
-              onPressed: () {
+              onPressed: () async {
                 final sid = _sidCtrl.text.trim();
                 if (sid.isEmpty) { _toast(ctx, 'Enter a student ID'); return; }
-                ds.assignRole(
+                await appState.assignEventRole(
                   eventId: eventId, studentId: sid, studentName: sid,
                   role: _selectedRole, permissions: List.from(_selectedPerms),
                 );
@@ -569,13 +600,19 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
   // ── Build ────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return Consumer2<DataService, AppState>(
-      builder: (context, dataService, appState, child) {
-        final event  = dataService.getEventById(widget.id);
+    return Consumer<AppState>(
+      builder: (context, appState, child) {
         final userId = appState.userId ?? '';
+        return StreamBuilder<Event?>(
+          stream: appState.watchEvent(widget.id),
+          builder: (context, eventSnap) {
+            final event = eventSnap.data;
+            return StreamBuilder<List<EventRole>>(
+              stream: appState.watchEventRoles(widget.id),
+              builder: (context, rolesSnap) {
+                final roles = rolesSnap.data ?? const <EventRole>[];
         final isCreator = event?.hostStudentId == userId;
-        final isTeamMember = dataService.getRolesForEvent(widget.id)
-            .any((r) => r.studentId == userId);
+        final isTeamMember = roles.any((r) => r.studentId == userId);
 
         // Access guard: event must be published and user must be creator
         if (event == null || event.status != 'Published') {
@@ -627,12 +664,16 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
           body: TabBarView(
             controller: _tabController,
             children: [
-              _buildOverview(context, dataService, event),
-              _buildParticipants(context, dataService, event.id, event.isPaid),
-              _buildRoles(context, dataService, event.id, userId, creatorName),
-              _buildEntry(context, dataService, event.id),
+              _buildOverview(context, appState, event),
+              _buildParticipants(context, appState, event.id, event.isPaid),
+              _buildRoles(context, appState, event.id, userId, creatorName),
+              _buildEntry(context, appState, event.id),
             ],
           ),
+        );
+              },
+            );
+          },
         );
       },
     );

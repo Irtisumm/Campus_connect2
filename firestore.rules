@@ -409,5 +409,185 @@ service cloud.firestore {
       // Locker notifications are never hard-deleted from the app.
       allow delete: if false;
     }
+
+    // ── EVENTS ────────────────────────────────────────────────────
+    //
+    // Three collections, split the same way the Lockers subsystem is split: a
+    // world-readable inventory document (`events`) and the owner-scoped
+    // documents that carry anything personal (`eventJoinings`). A student's
+    // name, course, club ID, payment state and entry ticket therefore never
+    // sit on a document every signed-in user can read — the same rule that
+    // keeps a locker's digital code off `lockers`.
+
+    match /events/{eventId} {
+
+      // Ownership is keyed on the campus Student ID (`hostStudentId`, e.g.
+      // S001), resolved through the caller's profile — the trust anchor every
+      // other collection here uses. Admin-created events have no host.
+      function ownsEvent() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+               == resource.data.hostStudentId;
+      }
+
+      function ownsNewEvent() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+               == request.resource.data.hostStudentId;
+      }
+
+      // A published event is public to signed-in users; everything still in
+      // review is visible only to its host and to admins.
+      //
+      // On `list`: rules are not filters, so this single per-document rule
+      // covers every feed. The browse query (`status == 'Published'`) passes,
+      // My Events (`hostStudentId == <caller's>`) passes, an admin's
+      // unfiltered query passes via isAdmin(), and a student's attempt to list
+      // the whole review queue is denied — the intended outcome.
+      allow get, list: if resource.data.status == 'Published'
+        || ownsEvent()
+        || isAdmin();
+
+      // A student submits only in their own name, and a submission is born in
+      // review with an empty roster — it can never be created already
+      // published or already full.
+      allow create: if ownsNewEvent()
+        && request.resource.data.status == 'Pending'
+        && request.resource.data.attendeeIds == []
+        && request.resource.data.pendingJoiningIds == [];
+
+      // Admins may author an event directly (the admin create-and-publish
+      // flow) — hostStudentId is null in that case, so ownsNewEvent() cannot
+      // apply.
+      allow create: if isAdmin();
+
+      // Host edits: correcting a submission and resubmitting after a revision
+      // request. Only while the event is still in the review pipeline — once
+      // it is Published, Rejected or Completed the host is done. Ownership is
+      // immutable, and the host can never publish their own event.
+      allow update: if ownsEvent()
+        && resource.data.status in ['Pending', 'Under Review', 'Needs Revision']
+        && request.resource.data.hostStudentId == resource.data.hostStudentId
+        && request.resource.data.status in ['Pending', 'Under Review', 'Needs Revision'];
+
+      // Joining a published event. A participant is not the host, so this is
+      // the one write a stranger may make — and it is confined to the two
+      // roster arrays. Every other field, including `status` and `price`, is
+      // untouchable here because `affectedKeys().hasOnly` rejects the write
+      // outright if anything else moved.
+      allow update: if signedIn()
+        && resource.data.status == 'Published'
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['attendeeIds', 'pendingJoiningIds']);
+
+      // Admin edits: the whole review lifecycle (approve, reject, request
+      // revision, mark completed) plus direct edits. The event's host is
+      // immutable to admins too, so a submission can never be reassigned.
+      allow update: if isAdmin()
+        && request.resource.data.hostStudentId == resource.data.hostStudentId;
+
+      // A host may withdraw a submission that has not been published yet;
+      // admins may remove any event. A published event with attendees is
+      // retired by marking it 'Completed', not by deletion.
+      allow delete: if isAdmin()
+        || (ownsEvent() && resource.data.status in ['Pending', 'Under Review', 'Needs Revision', 'Rejected']);
+    }
+
+    match /eventJoinings/{joiningId} {
+
+      // The registration's owner — the student who joined.
+      function ownsJoining() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+               == resource.data.studentId;
+      }
+
+      function ownsNewJoining() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+               == request.resource.data.studentId;
+      }
+
+      // The host of the event this registration belongs to. Approving and
+      // rejecting participants is the host's job, so they must be able to read
+      // and decide registrations they do not own.
+      function hostsThisEvent() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && exists(/databases/$(database)/documents/events/$(resource.data.eventId))
+          && get(/databases/$(database)/documents/events/$(resource.data.eventId)).data.hostStudentId
+               == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId;
+      }
+
+      // On `list`: a student's own feed must keep its
+      // `where('studentId', '==', …)` filter and the host's participant list
+      // must keep its `where('eventId', '==', …)` filter, or the query is
+      // rejected wholesale.
+      allow get, list: if ownsJoining() || hostsThisEvent() || isAdmin();
+
+      // A student registers only in their own name. A registration is born
+      // 'Pending' (host approval) or 'Approved' (open event, no gate), never
+      // already attended.
+      allow create: if ownsNewJoining()
+        && request.resource.data.status in ['Pending', 'Approved']
+        && request.resource.data.hasAttended == false;
+
+      // Student edits: completing payment for their own registration. The
+      // owner, the event and the decision are immutable here — a student can
+      // neither approve themselves nor mark themselves present.
+      allow update: if ownsJoining()
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.eventId == resource.data.eventId
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.hasAttended == resource.data.hasAttended;
+
+      // Host and admin edits: approve, reject, issue the ticket, record
+      // attendance. Owner and event stay immutable.
+      allow update: if (hostsThisEvent() || isAdmin())
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.eventId == resource.data.eventId;
+
+      // Registrations are never hard-deleted: attendance is a record.
+      allow delete: if false;
+    }
+
+    match /eventRoles/{roleId} {
+
+      function hostsRoleEvent() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && exists(/databases/$(database)/documents/events/$(resource.data.eventId))
+          && get(/databases/$(database)/documents/events/$(resource.data.eventId)).data.hostStudentId
+               == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId;
+      }
+
+      function hostsNewRoleEvent() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && exists(/databases/$(database)/documents/events/$(request.resource.data.eventId))
+          && get(/databases/$(database)/documents/events/$(request.resource.data.eventId)).data.hostStudentId
+               == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId;
+      }
+
+      // A crew assignment carries no secret — a name, a role and a permission
+      // list — and an assigned member has to be able to discover their own
+      // permissions by reading the event's roster, so the read is open to
+      // signed-in users. Nothing here identifies a participant or grants
+      // access on its own; the permissions it names are still checked against
+      // these rules on every actual write.
+      allow get, list: if signedIn();
+
+      // Only the event's host, or an admin, may assign or revoke crew.
+      allow create: if hostsNewRoleEvent() || isAdmin();
+      allow delete: if hostsRoleEvent() || isAdmin();
+
+      // Roles are assigned and revoked, never edited in place.
+      allow update: if false;
+    }
   }
 }
+

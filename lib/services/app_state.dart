@@ -6,6 +6,10 @@ import 'package:flutter/material.dart';
 
 import '../models/app_notification.dart';
 import '../models/auth_result.dart';
+import '../models/event.dart';
+import '../models/event_joining.dart';
+import '../models/event_message.dart';
+import '../models/event_role.dart';
 import '../models/issue.dart';
 import '../models/item.dart';
 import '../models/locker.dart';
@@ -17,6 +21,7 @@ import '../models/payment.dart';
 import '../models/user_profile.dart';
 import 'admin_service.dart';
 import 'auth_service.dart';
+import 'event_service.dart';
 import 'issue_service.dart';
 import 'locker_service.dart';
 import 'locker_pricing.dart';
@@ -27,6 +32,10 @@ import 'user_service.dart';
 // Re-exported so screens keep importing a single file for session types.
 export '../models/app_notification.dart' show AppNotification;
 export '../models/auth_result.dart' show AuthResult, AuthFailure;
+export '../models/event.dart' show Event;
+export '../models/event_joining.dart' show EventJoining;
+export '../models/event_message.dart' show EventMessage;
+export '../models/event_role.dart' show EventRole;
 export '../models/issue.dart' show Issue, IssueHistory;
 export '../models/item.dart' show Item, ItemStatus, ItemType;
 export '../models/locker.dart' show Locker;
@@ -52,6 +61,7 @@ class AppState extends ChangeNotifier {
   final IssueService _issues;
   final LockerService _lockers;
   final PaymentService _payments;
+  final EventService _eventsService;
 
   String? _firebaseUid;
   UserProfile? _profile;
@@ -66,13 +76,15 @@ class AppState extends ChangeNotifier {
     IssueService? issueService,
     LockerService? lockerService,
     PaymentService? paymentService,
+    EventService? eventService,
   })  : _auth = authService ?? AuthService(),
         _users = userService ?? UserService(),
         _admin = adminService ?? AdminService(),
         _lostFound = lostFoundService ?? LostFoundService(),
         _issues = issueService ?? IssueService(),
         _lockers = lockerService ?? LockerService(),
-        _payments = paymentService ?? PaymentService() {
+        _payments = paymentService ?? PaymentService(),
+        _eventsService = eventService ?? EventService() {
     _firebaseUid = _auth.currentUid;
     // Firebase auth state can change without a UI action (token refresh,
     // cold-start session restore), so mirror it into the widget tree.
@@ -1683,6 +1695,258 @@ class AppState extends ChangeNotifier {
       return false;
     }
   }
+
+  // ── EVENTS ──────────────────────────────────────────────────────
+  //
+  // The Firestore-backed replacement for the Event half of the mock
+  // DataService. Same architecture as the Lockers section above: reads are
+  // streams straight from the service, writes are futures that return a plain
+  // bool or model so no Firebase type — and no AuthFailure — reaches a screen.
+  //
+  // The screens still call DataService today; Phase 2C points them here. Until
+  // then this section is the seam, not yet the path.
+
+  /// Published events, for the student browse screen.
+  Stream<List<Event>> watchPublishedEvents() =>
+      _eventsService.watchPublishedEvents();
+
+  /// Every event the signed-in student submitted, in any status — My Events.
+  Stream<List<Event>> watchMyEvents() =>
+      _eventsService.watchEventsForHost(userId ?? '');
+
+  /// The admin review queue: submissions not yet published.
+  Stream<List<Event>> watchPendingEvents() => _eventsService.watchPendingEvents();
+
+  /// Every event, for the admin dashboard.
+  Stream<List<Event>> watchAllEvents() => _eventsService.watchEvents();
+
+  /// A single event, for the detail and manage screens.
+  Stream<Event?> watchEvent(String id) => _eventsService.watchEvent(id);
+
+  /// Every joining request for one event — the host's participant list.
+  Stream<List<EventJoining>> watchEventJoinings(String eventId) =>
+      _eventsService.watchJoiningsForEvent(eventId);
+
+  /// The signed-in student's own registrations, across every event.
+  Stream<List<EventJoining>> watchMyJoinings() =>
+      _eventsService.watchMyJoinings(userId ?? '');
+
+  /// The crew assigned to one event.
+  Stream<List<EventRole>> watchEventRoles(String eventId) =>
+      _eventsService.watchRolesForEvent(eventId);
+
+  /// The signed-in student's registration for one event, or `null` if they
+  /// have not joined. Backs the "Join" vs "View Ticket" decision.
+  Future<EventJoining?> joiningFor(String eventId) async {
+    try {
+      return await _eventsService.getJoiningForStudent(eventId, userId ?? '');
+    } on AuthFailure {
+      return null;
+    }
+  }
+
+  /// Submits a new event in the signed-in student's name. Returns the created
+  /// event, or `null` if the write failed.
+  ///
+  /// A submission is always born 'Pending' with an empty roster — the security
+  /// rules reject anything else, so the status is set here rather than trusted
+  /// from the caller.
+  Future<Event?> createEvent(Event draft) async {
+    try {
+      return await _eventsService.createEvent(draft.copyWith(
+        status: 'Pending',
+        hostStudentId: draft.hostStudentId ?? userId,
+        submittedDate: draft.submittedDate ?? _today(),
+        attendeeIds: const <String>[],
+        pendingJoiningIds: const <String>[],
+      ));
+    } on AuthFailure {
+      return null;
+    }
+  }
+
+  /// Saves an edited event.
+  Future<bool> updateEvent(Event event) => _eventWrite(
+        () => _eventsService.updateEvent(event),
+      );
+
+  /// Withdraws a submission that has not been published.
+  Future<bool> deleteEvent(String id) =>
+      _eventWrite(() => _eventsService.deleteEvent(id));
+
+  /// Resubmits a revised event, moving it back into the review queue and
+  /// counting the revision — the mock's `resubmitEvent`, unchanged.
+  Future<bool> resubmitEvent(Event event) => _eventWrite(
+        () => _eventsService.updateEvent(event.copyWith(
+          status: 'Pending',
+          revisionCount: event.revisionCount + 1,
+          submittedDate: _today(),
+        )),
+      );
+
+  Future<bool> approveEvent(String id) =>
+      _eventWrite(() => _eventsService.approveEvent(id));
+
+  Future<bool> rejectEvent(String id, String reason) =>
+      _eventWrite(() => _eventsService.rejectEvent(id, reason));
+
+  Future<bool> setEventUnderReview(String id) =>
+      _eventWrite(() => _eventsService.setEventUnderReview(id));
+
+  Future<bool> requestEventRevision(String id, String notes) =>
+      _eventWrite(() => _eventsService.requestEventRevision(id, notes));
+
+  Future<bool> markEventCompleted(String id) =>
+      _eventWrite(() => _eventsService.markEventCompleted(id));
+
+  /// Posts a message to the admin ↔ host thread on an event.
+  Future<bool> addEventMessage(String eventId, String message,
+      {String? attachmentName}) {
+    return _eventWrite(() => _eventsService.addEventMessage(
+          eventId,
+          EventMessage(
+            id: 'MSG-${DateTime.now().millisecondsSinceEpoch}',
+            senderId: userId ?? '',
+            senderRole: isAdmin ? 'admin' : 'student',
+            message: message,
+            timestamp: DateTime.now().toIso8601String(),
+            attachmentName: attachmentName,
+          ),
+        ));
+  }
+
+  /// Joins an event in the signed-in student's name.
+  ///
+  /// An open, free event is approved on the spot and gets its ticket
+  /// immediately; anything gated (club membership or payment) starts 'Pending'
+  /// and waits for the host. This is the mock's `requestJoinEvent` /
+  /// `quickJoinEvent` split, preserved exactly — the difference was never a
+  /// separate code path, only a different starting state.
+  Future<EventJoining?> joinEvent(
+    Event event, {
+    required String name,
+    required String courseName,
+    String? clubId,
+  }) async {
+    final studentId = userId;
+    if (studentId == null) return null;
+
+    final gated = event.isPaid || event.clubIdRequired || event.isPrivate;
+    try {
+      final created = await _eventsService.createJoining(EventJoining(
+        id: '',
+        eventId: event.id,
+        studentId: studentId,
+        name: name,
+        courseName: courseName,
+        clubId: clubId,
+        status: gated ? 'Pending' : 'Approved',
+        paymentStatus: event.isPaid ? 'Pending' : null,
+        qrTicketCode: gated ? null : _ticketCode(),
+        joinedDate: _today(),
+      ));
+      await _eventsService.registerJoiningOnEvent(
+        event.id,
+        created.id,
+        studentId,
+        autoApproved: !gated,
+      );
+      return created;
+    } on AuthFailure {
+      return null;
+    }
+  }
+
+  /// Marks a paid registration as settled once the demo gateway succeeds.
+  Future<bool> completeJoiningPayment(String joiningId) => _eventWrite(
+        () => _eventsService.patchJoining(joiningId, {'paymentStatus': 'Completed'}),
+      );
+
+  /// Host decision: admit the student and issue their ticket. The joining and
+  /// the event's roster move together in one batch.
+  Future<bool> approveJoining(EventJoining joining) => _eventWrite(
+        () => _eventsService.decideJoining(
+          joining.id,
+          joining.eventId,
+          {'status': 'Approved', 'qrTicketCode': joining.qrTicketCode ?? _ticketCode()},
+          approved: true,
+          studentId: joining.studentId,
+        ),
+      );
+
+  /// Host decision: turn the student away. No ticket is issued.
+  Future<bool> rejectJoining(EventJoining joining) => _eventWrite(
+        () => _eventsService.decideJoining(
+          joining.id,
+          joining.eventId,
+          {'status': 'Rejected'},
+          approved: false,
+          studentId: joining.studentId,
+        ),
+      );
+
+  /// Flips attendance for one participant — the manual override on the
+  /// participant list.
+  Future<bool> setAttendance(String joiningId, bool attended) => _eventWrite(
+        () => _eventsService.patchJoining(joiningId, {'hasAttended': attended}),
+      );
+
+  /// Scans a ticket: marks the holder present and reports whether the code was
+  /// recognised. An unknown code is a `false`, not an error.
+  Future<bool> verifyTicket(String eventId, String ticketCode) async {
+    try {
+      final joining =
+          await _eventsService.findJoiningByTicketCode(eventId, ticketCode);
+      if (joining == null) return false;
+      await _eventsService.patchJoining(joining.id, {'hasAttended': true});
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Assigns a crew role on an event.
+  Future<bool> assignEventRole({
+    required String eventId,
+    required String studentId,
+    required String studentName,
+    required String role,
+    List<String> permissions = const <String>[],
+  }) {
+    return _eventWrite(() => _eventsService.assignRole(EventRole(
+          id: '',
+          eventId: eventId,
+          studentId: studentId,
+          studentName: studentName,
+          role: role,
+          permissions: permissions,
+        )));
+  }
+
+  /// Revokes a crew role.
+  Future<bool> removeEventRole(String roleId) =>
+      _eventWrite(() => _eventsService.removeRole(roleId));
+
+  /// Every event mutation ends the same way: the write succeeds, or it fails
+  /// with an [AuthFailure] the screen has no use for. Collapsing that into a
+  /// bool here keeps the try/catch out of twelve call sites.
+  Future<bool> _eventWrite(Future<void> Function() write) async {
+    try {
+      await write();
+      notifyListeners();
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Tickets are short, human-readable and unique enough for a campus event.
+  static String _ticketCode() {
+    final rand = Random();
+    return 'TKT-${List.generate(6, (_) => rand.nextInt(10)).join()}';
+  }
+
+  static String _today() => DateTime.now().toIso8601String().split('T').first;
 
   static const AuthResult _unavailable =
       AuthResult.failure('Authentication is unavailable. Please restart the app.');
