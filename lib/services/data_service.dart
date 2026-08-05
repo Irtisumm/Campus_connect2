@@ -1199,15 +1199,13 @@ class DataService extends ChangeNotifier {
     final now = DateTime.now();
     final endDate = DateTime(now.year, now.month + durationMonths, now.day);
     final daysLeft = endDate.difference(now).inDays;
-    const deposit = 100.0;
-    const monthlyRent = 10.0;
-    const totalPaid = deposit + monthlyRent; // deposit + first month
+    // amountDueToday = deposit + totalRentalCost (matches LockerPricing)
+    final deposit = lk.deposit;
+    final monthlyRent = lk.monthlyRent;
+    final totalPaid = deposit + (monthlyRent * durationMonths);
 
-    // Generate digital code if digital lock
-    final digitalCode = lk.lockType == 'digital'
-        ? '${Random().nextInt(9000) + 1000}'
-        : null;
-
+    // SECURITY: the digital-lock code is never stored on the locker record —
+    // it belongs to the owner-scoped booking only.
     // Update locker status
     lockers[lockerIndex] = Locker(
       id: lk.id, location: lk.location, status: 'Pending Pickup',
@@ -1216,7 +1214,6 @@ class DataService extends ChangeNotifier {
       endDate: endDate.toString().split(' ')[0],
       daysLeft: daysLeft,
       lockType: lk.lockType,
-      digitalCode: digitalCode,
       monthlyRent: monthlyRent,
       deposit: deposit,
     );
@@ -1243,7 +1240,7 @@ class DataService extends ChangeNotifier {
       'Locker ${lk.id} booked successfully',
       'private',
       detailText:
-          'Duration: $durationMonths months. Total: RM${totalPaid.toStringAsFixed(0)} (RM$deposit deposit + RM$monthlyRent first month).',
+          'Duration: $durationMonths months. Total: RM${totalPaid.toStringAsFixed(0)} (RM$deposit deposit + RM${(monthlyRent * durationMonths).toStringAsFixed(0)} rental).',
       targetUserId: 'S001',
       source: 'lockers',
     );
@@ -1313,7 +1310,6 @@ class DataService extends ChangeNotifier {
         endDate: newEnd.toString().split(' ')[0],
         daysLeft: newDaysLeft,
         lockType: lk.lockType,
-        digitalCode: lk.digitalCode,
         monthlyRent: lk.monthlyRent,
         deposit: lk.deposit,
         depositRefunded: lk.depositRefunded,
@@ -1382,7 +1378,6 @@ class DataService extends ChangeNotifier {
       endDate: lk.endDate,
       daysLeft: lk.daysLeft,
       lockType: lk.lockType,
-      digitalCode: lk.digitalCode,
       monthlyRent: lk.monthlyRent,
       deposit: lk.deposit,
       depositRefunded: lk.depositRefunded,
@@ -1603,7 +1598,6 @@ class DataService extends ChangeNotifier {
         endDate: lk.endDate,
         daysLeft: lk.daysLeft,
         lockType: lk.lockType,
-        digitalCode: lk.digitalCode,
         monthlyRent: lk.monthlyRent,
         deposit: lk.deposit,
         depositRefunded: lk.depositRefunded,

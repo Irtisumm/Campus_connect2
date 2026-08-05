@@ -132,13 +132,14 @@ class Locker {
   final String? studentId, endDate, startDate;
   final int? daysLeft;
   final String lockType;        // 'key' or 'digital'
-  final String? digitalCode;    // password for digital lock
+  // SECURITY: no `digitalCode` here. The unlock code belongs to the
+  // owner-scoped booking only — a locker record is readable by everyone.
   final double monthlyRent;     // RM10/month
   final double deposit;         // RM100 deposit
   final bool depositRefunded;
   const Locker({required this.id, required this.location, required this.status,
     this.studentId, this.endDate, this.daysLeft, this.startDate,
-    this.lockType = 'key', this.digitalCode, this.monthlyRent = 10.0,
+    this.lockType = 'key', this.monthlyRent = 10.0,
     this.deposit = 100.0, this.depositRefunded = false});
 }
 
@@ -148,7 +149,7 @@ class LockerBooking {
   final int durationMonths;     // 2–12 months
   final double monthlyRent;
   final double deposit;
-  final double totalPaid;       // deposit + first month
+  final double totalPaid;       // deposit + total rental cost
   final String? keyCollectionQR;   // QR code for key collection
   final bool keyCollected;
   final String? keyCollectionDate;
@@ -159,7 +160,7 @@ class LockerBooking {
 
   const LockerBooking({required this.id, required this.lockerId, required this.location,
     required this.startDate, required this.endDate, required this.status, required this.daysLeft,
-    this.durationMonths = 6, this.monthlyRent = 10.0, this.deposit = 100.0, this.totalPaid = 110.0,
+    this.durationMonths = 6, this.monthlyRent = 10.0, this.deposit = 100.0, this.totalPaid = 160.0,
     this.keyCollectionQR, this.keyCollected = false, this.keyCollectionDate,
     this.keyReturnQR, this.keyReturned = false, this.keyReturnDate, this.releaseStatus});
 }
@@ -292,7 +293,7 @@ class MockData {
     Locker(id:'LK-A05',location:'Block A, Level 1',status:'Available',lockType:'digital'),
     Locker(id:'LK-A06',location:'Block A, Level 1',status:'Overdue',studentId:'S219001',startDate:'2025-12-01',endDate:'2026-03-01',daysLeft:-23,lockType:'key',monthlyRent:10.0,deposit:100.0),
     Locker(id:'LK-B01',location:'Block B, Level 2',status:'Available',lockType:'digital'),
-    Locker(id:'LK-B02',location:'Block B, Level 2',status:'Active',studentId:'S221010',startDate:'2026-01-04',endDate:'2026-06-30',daysLeft:98,lockType:'digital',digitalCode:'7294'),
+    Locker(id:'LK-B02',location:'Block B, Level 2',status:'Active',studentId:'S221010',startDate:'2026-01-04',endDate:'2026-06-30',daysLeft:98,lockType:'digital'),
     Locker(id:'LK-B03',location:'Block B, Level 2',status:'Available',lockType:'key'),
     Locker(id:'LK-B04',location:'Block B, Level 2',status:'Blocked',lockType:'key'),
     Locker(id:'LK-C01',location:'Block C, Level 1',status:'Available',lockType:'digital'),
@@ -300,7 +301,7 @@ class MockData {
   ];
 
   static const List<LockerBooking> myBookings = [
-    LockerBooking(id:'BK-001',lockerId:'LK-A04',location:'Block A, Level 1',startDate:'2026-03-15',endDate:'2026-06-30',status:'Pending Pickup',daysLeft:98,durationMonths:4,monthlyRent:10.0,deposit:100.0,totalPaid:110.0),
+    LockerBooking(id:'BK-001',lockerId:'LK-A04',location:'Block A, Level 1',startDate:'2026-03-15',endDate:'2026-06-30',status:'Pending Pickup',daysLeft:98,durationMonths:4,monthlyRent:10.0,deposit:100.0,totalPaid:140.0),
   ];
 
   static const Map<String,List<LockerHistory>> lockerHistory = {

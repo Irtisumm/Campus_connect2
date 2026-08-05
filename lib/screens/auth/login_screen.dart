@@ -167,7 +167,13 @@ class _LoginScreenState extends State<LoginScreen> {
                           children: [
                             const Icon(Icons.error_outline_rounded, color: AppTheme.danger, size: 18),
                             const SizedBox(width: 8),
-                            Text(_errorMsg!, style: const TextStyle(color: AppTheme.danger, fontWeight: FontWeight.w600, fontSize: 13)),
+                            Expanded(
+                              child: Text(
+                                _errorMsg!,
+                                style: const TextStyle(color: AppTheme.danger, fontWeight: FontWeight.w600, fontSize: 13),
+                                softWrap: true,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -230,9 +236,11 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        GestureDetector(
-                          onTap: () => setState(() => _rememberMe = !_rememberMe),
-                          child: const Text('Remember my credentials', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () => setState(() => _rememberMe = !_rememberMe),
+                            child: const Text('Remember my credentials', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
+                          ),
                         ),
                       ],
                     ),

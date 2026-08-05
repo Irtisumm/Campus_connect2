@@ -1,0 +1,45 @@
+Running Gradle task 'assembleDebug'...                          
+
+d:\Campus_connect2\android>if "Windows_NT" == "Windows_NT" setlocal
+
+d:\Campus_connect2\android>set DEFAULT_JVM_OPTS= 
+
+d:\Campus_connect2\android>set DIRNAME=d:\Campus_connect2\android\ 
+
+d:\Campus_connect2\android>if "d:\Campus_connect2\android\" == "" set DIRNAME=. 
+
+d:\Campus_connect2\android>set APP_BASE_NAME=gradlew 
+
+d:\Campus_connect2\android>set APP_HOME=d:\Campus_connect2\android\ 
+
+d:\Campus_connect2\android>if defined JAVA_HOME goto findJavaFromJavaHome 
+
+d:\Campus_connect2\android>set JAVA_HOME=C:\Program Files\Android\Android Studio\jbr 
+
+d:\Campus_connect2\android>set JAVA_EXE=C:\Program Files\Android\Android Studio\jbr/bin/java.exe 
+
+d:\Campus_connect2\android>if exist "C:\Program Files\Android\Android Studio\jbr/bin/java.exe" goto init 
+
+d:\Campus_connect2\android>if not "Windows_NT" == "Windows_NT" goto win9xME_args 
+
+d:\Campus_connect2\android>if "@eval[2+2]" == "4" goto 4NT_args 
+
+d:\Campus_connect2\android>set CMD_LINE_ARGS= 
+
+d:\Campus_connect2\android>set _SKIP=2 
+
+d:\Campus_connect2\android>if "x-q" == "x" goto execute 
+
+d:\Campus_connect2\android>set CMD_LINE_ARGS=-q -Ptarget-platform=android-arm,android-arm64,android-x64 -Ptarget=lib\main.dart -Pbase-application-name=android.app.Application -Pdart-defines=RkxVVFRFUl9WRVJTSU9OPTMuMzguOQ==,RkxVVFRFUl9DSEFOTkVMPXN0YWJsZQ==,RkxVVFRFUl9HSVRfVVJMPWh0dHBzOi8vZ2l0aHViLmNvbS9mbHV0dGVyL2ZsdXR0ZXIuZ2l0,RkxVVFRFUl9GUkFNRVdPUktfUkVWSVNJT049NjczMjNkZTI4NQ==,RkxVVFRFUl9FTkdJTkVfUkVWSVNJT049NTg3YzE4Zjg3Mw==,RkxVVFRFUl9EQVJUX1ZFUlNJT049My4xMC44 -Pdart-obfuscation=false -Ptrack-widget-creation=true -Ptree-shake-icons=false assembleDebug 
+
+d:\Campus_connect2\android>goto execute 
+
+d:\Campus_connect2\android>set CLASSPATH=d:\Campus_connect2\android\\gradle\wrapper\gradle-wrapper.jar 
+
+d:\Campus_connect2\android>"C:\Program Files\Android\Android Studio\jbr/bin/java.exe"    "-Dorg.gradle.appname=gradlew" -classpath "d:\Campus_connect2\android\\gradle\wrapper\gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain -q -Ptarget-platform=android-arm,android-arm64,android-x64 -Ptarget=lib\main.dart -Pbase-application-name=android.app.Application -Pdart-defines=RkxVVFRFUl9WRVJTSU9OPTMuMzguOQ==,RkxVVFRFUl9DSEFOTkVMPXN0YWJsZQ==,RkxVVFRFUl9HSVRfVVJMPWh0dHBzOi8vZ2l0aHViLmNvbS9mbHV0dGVyL2ZsdXR0ZXIuZ2l0,RkxVVFRFUl9GUkFNRVdPUktfUkVWSVNJT049NjczMjNkZTI4NQ==,RkxVVFRFUl9FTkdJTkVfUkVWSVNJT049NTg3YzE4Zjg3Mw==,RkxVVFRFUl9EQVJUX1ZFUlNJT049My4xMC44 -Pdart-obfuscation=false -Ptrack-widget-creation=true -Ptree-shake-icons=false assembleDebug 
+
+d:\Campus_connect2\android>if "0" == "0" goto mainEnd 
+
+d:\Campus_connect2\android>if "Windows_NT" == "Windows_NT" endlocal
+Running Gradle task 'assembleDebug'...                             42.1s
+√ Built build\app\outputs\flutter-apk\app-debug.apk

@@ -1,16 +1,27 @@
 import 'dart:async';
+import 'dart:math';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../models/app_notification.dart';
 import '../models/auth_result.dart';
 import '../models/issue.dart';
 import '../models/item.dart';
+import '../models/locker.dart';
+import '../models/locker_booking.dart';
+import '../models/locker_history.dart';
+import '../models/locker_issue.dart';
+import '../models/locker_notification.dart';
+import '../models/payment.dart';
 import '../models/user_profile.dart';
 import 'admin_service.dart';
 import 'auth_service.dart';
 import 'issue_service.dart';
+import 'locker_service.dart';
+import 'locker_pricing.dart';
 import 'lost_found_service.dart';
+import 'payment_service.dart';
 import 'user_service.dart';
 
 // Re-exported so screens keep importing a single file for session types.
@@ -18,6 +29,12 @@ export '../models/app_notification.dart' show AppNotification;
 export '../models/auth_result.dart' show AuthResult, AuthFailure;
 export '../models/issue.dart' show Issue, IssueHistory;
 export '../models/item.dart' show Item, ItemStatus, ItemType;
+export '../models/locker.dart' show Locker;
+export '../models/locker_booking.dart' show LockerBooking, LockerBookingResult;
+export '../models/locker_history.dart' show LockerHistory;
+export '../models/locker_issue.dart' show LockerIssue;
+export '../models/locker_notification.dart' show LockerNotification;
+export '../models/payment.dart' show Payment, PaymentResult;
 export '../models/user_profile.dart' show UserProfile, UserRole, AccountStatus;
 
 /// App-wide session state and the orchestrator across the three services:
@@ -33,6 +50,8 @@ class AppState extends ChangeNotifier {
   final AdminService _admin;
   final LostFoundService _lostFound;
   final IssueService _issues;
+  final LockerService _lockers;
+  final PaymentService _payments;
 
   String? _firebaseUid;
   UserProfile? _profile;
@@ -45,11 +64,15 @@ class AppState extends ChangeNotifier {
     AdminService? adminService,
     LostFoundService? lostFoundService,
     IssueService? issueService,
+    LockerService? lockerService,
+    PaymentService? paymentService,
   })  : _auth = authService ?? AuthService(),
         _users = userService ?? UserService(),
         _admin = adminService ?? AdminService(),
         _lostFound = lostFoundService ?? LostFoundService(),
-        _issues = issueService ?? IssueService() {
+        _issues = issueService ?? IssueService(),
+        _lockers = lockerService ?? LockerService(),
+        _payments = paymentService ?? PaymentService() {
     _firebaseUid = _auth.currentUid;
     // Firebase auth state can change without a UI action (token refresh,
     // cold-start session restore), so mirror it into the widget tree.
@@ -117,6 +140,10 @@ class AppState extends ChangeNotifier {
         } on AuthFailure { /* clear local state regardless */ }
         _firebaseUid = null;
         _profile = null;
+      } else if (_profile!.isAdmin) {
+        // Only admins can fetch account stats — the queries count all users
+        // and are denied by Firestore rules for students.
+        unawaited(refreshAccountStats());
       }
     }
     notifyListeners();
@@ -157,7 +184,11 @@ class AppState extends ChangeNotifier {
       _firebaseUid = uid;
       _profile = profile;
       notifyListeners();
-      unawaited(refreshAccountStats());
+      // Only fetch account stats for admins — the queries count all users
+      // and are denied by Firestore rules for students.
+      if (profile.isAdmin) {
+        unawaited(refreshAccountStats());
+      }
       return AuthResult.success(profile: profile);
     } on AuthFailure catch (failure) {
       return AuthResult.failure(failure.message);
@@ -435,6 +466,1154 @@ class AppState extends ChangeNotifier {
   Future<bool> deleteIssue(String id) async {
     try {
       await _issues.deleteIssue(id);
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  // ── LOCKERS ───────────────────────────────────────────────────────
+  /// Live feed of every locker, for the browse screen (students) and the
+  /// admin list/dashboard screens.
+  Stream<List<Locker>> watchLockers() => _lockers.watchLockers();
+
+  /// Live view of a single locker by its document ID (e.g. `LK-A01`), for the
+  /// booking and admin detail screens. Emits `null` when it does not exist.
+  Stream<Locker?> watchLocker(String id) => _lockers.watchLocker(id);
+
+  /// Live feed of the signed-in student's own locker bookings, newest first.
+  ///
+  /// The screen never supplies an ID — the campus Student ID is read from the
+  /// session here, so the UI keeps its single dependency on [AppState].
+  /// Signed out yields an empty list, matching the screen's empty state.
+  Stream<List<LockerBooking>> watchMyLockerBookings() =>
+      _lockers.watchMyBookings(userId ?? '');
+
+  /// Live feed of every locker booking across all students, for the admin
+  /// screens. No ID — an admin sees everyone's bookings.
+  Stream<List<LockerBooking>> watchAllLockerBookings() =>
+      _lockers.watchAllBookings();
+
+  /// Live view of a single locker booking by its Firestore document ID.
+  /// Emits the [LockerBooking], `null` for "not found", or throws an
+  /// [AuthFailure].
+  Stream<LockerBooking?> watchLockerBooking(String id) =>
+      _lockers.watchBooking(id);
+
+  /// Live feed of a locker's audit-trail history, oldest first, for the admin
+  /// detail screen's timeline. Emits an empty list when there is no history.
+  Stream<List<LockerHistory>> watchLockerHistory(String lockerId) =>
+      _lockers.watchLockerHistory(lockerId);
+
+  /// Live feed of the signed-in student's own locker issue reports, newest
+  /// first.
+  Stream<List<LockerIssue>> watchMyLockerIssues() =>
+      _lockers.watchMyLockerIssues(userId ?? '');
+
+  /// Live feed of every locker issue across all students, for the admin
+  /// screens.
+  Stream<List<LockerIssue>> watchAllLockerIssues() =>
+      _lockers.watchAllLockerIssues();
+
+  /// Live feed of the signed-in student's own locker notifications, newest
+  /// first.
+  Stream<List<LockerNotification>> watchMyLockerNotifications() =>
+      _lockers.watchMyLockerNotifications(userId ?? '');
+
+  /// Marks a locker notification as read. Returns `true` on success.
+  Future<bool> markLockerNotificationRead(String notificationId) async {
+    try {
+      await _lockers.markNotificationRead(notificationId);
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Creates a locker notification for a student. Admin-only — called by the
+  /// terminate, release, block, and force-release flows. Best-effort: a
+  /// failure is logged but does not block the calling action.
+  Future<void> _sendLockerNotification({
+    required String studentId,
+    required String lockerId,
+    required String title,
+    required String body,
+    required String type,
+  }) async {
+    if (studentId.isEmpty) return;
+    try {
+      await _lockers.createLockerNotification(LockerNotification(
+        id: '',
+        studentId: studentId,
+        lockerId: lockerId,
+        title: title,
+        body: body,
+        type: type,
+        createdAt: DateTime.now().toIso8601String(),
+      ));
+    } on AuthFailure {
+      // Best-effort: the primary action (terminate/release/block) already
+      // succeeded; a notification failure should not roll it back.
+      debugPrint('Failed to send locker notification: $title');
+    }
+  }
+
+  /// Live feed of the signed-in student's own payments, newest first.
+  Stream<List<Payment>> watchMyPayments() =>
+      _payments.watchMyPayments(userId ?? '');
+
+  /// Live feed of every payment across all students, for the admin screens.
+  Stream<List<Payment>> watchAllPayments() => _payments.watchAllPayments();
+
+  /// Fetches the payment record linked to a booking, if any.
+  Future<Payment?> getPaymentForBooking(String bookingId) =>
+      _payments.getPaymentForBooking(bookingId);
+
+  /// Books a locker on behalf of the signed-in student, stamping the campus
+  /// Student ID from the session. Returns the booking with its Firestore ID,
+  /// or `null` on failure.
+  ///
+  /// The accompanying locker status update and history entry are written by
+  /// the caller (or a future batched-write helper); this creates the booking
+  /// document only.
+  Future<LockerBooking?> bookLocker(String lockerId, {
+    required String location,
+    required int durationMonths,
+  }) async {
+    final now = DateTime.now();
+    final endDate = DateTime(now.year, now.month + durationMonths, now.day);
+    final daysLeft = endDate.difference(now).inDays;
+    // Use default pricing when the Locker object isn't available.
+    final pricing = const LockerPricing(deposit: 100.0, monthlyRent: 10.0, durationMonths: 6)
+        .copyWithDurationMonths(durationMonths);
+
+    final booking = LockerBooking(
+      id: '',
+      lockerId: lockerId,
+      location: location,
+      startDate: now.toIso8601String().split('T').first,
+      endDate: endDate.toIso8601String().split('T').first,
+      status: 'Pending Pickup',
+      daysLeft: daysLeft,
+      durationMonths: pricing.durationMonths,
+      monthlyRent: pricing.monthlyRent,
+      deposit: pricing.deposit,
+      rentalCost: pricing.totalRentalCost,
+      totalPaid: pricing.amountDueToday,
+      studentId: userId,
+    );
+    try {
+      return await _lockers.createBooking(booking);
+    } on AuthFailure {
+      return null;
+    }
+  }
+
+  /// Reports a locker issue on behalf of the signed-in student, stamping the
+  /// campus Student ID from the session. Returns the issue with its Firestore
+  /// ID, or `null` on failure.
+  Future<LockerIssue?> reportLockerIssue(
+    String lockerId,
+    String description,
+    int photoCount, {
+    String category = '',
+  }) async {
+    final issue = LockerIssue(
+      id: '',
+      lockerId: lockerId,
+      studentId: userId ?? '',
+      category: category,
+      description: description,
+      status: 'Reported',
+      photoCount: photoCount,
+      reportedDate: DateTime.now().toIso8601String(),
+    );
+    try {
+      final created = await _lockers.createLockerIssue(issue);
+      // Record the report in the locker's audit-trail history.
+      await _lockers.addLockerHistory(lockerId, LockerHistory(
+        action: 'Student reported locker issue',
+        staffId: userId ?? '',
+        timestamp: DateTime.now().toIso8601String(),
+        reason: category.isNotEmpty ? '$category: $description' : description,
+      ));
+      return created;
+    } on AuthFailure {
+      return null;
+    }
+  }
+
+  /// Moves a locker issue to a new status ('Under Review' or 'Resolved') and
+  /// appends an audit-trail entry to the locker's history. Returns `true` on
+  /// success.
+  Future<bool> updateLockerIssueStatus(
+    LockerIssue issue,
+    String newStatus, {
+    String? adminNotes,
+  }) async {
+    try {
+      await _lockers.updateLockerIssueStatus(issue.id, newStatus, adminNotes: adminNotes);
+      final action = newStatus == 'Under Review'
+          ? 'Issue moved to Under Review'
+          : newStatus == 'Resolved'
+              ? 'Issue resolved'
+              : 'Issue status updated';
+      await _lockers.addLockerHistory(issue.lockerId, LockerHistory(
+        action: action,
+        staffId: userId ?? 'admin',
+        timestamp: DateTime.now().toIso8601String(),
+        reason: adminNotes?.isNotEmpty == true ? adminNotes : null,
+      ));
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Appends one entry to a locker's audit-trail history. Returns `true` on
+  /// success.
+  Future<bool> addLockerHistory(String lockerId, LockerHistory entry) async {
+    try {
+      await _lockers.addLockerHistory(lockerId, entry);
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Partial update of a locker booking document — used for QR/status
+  /// transitions where only a few fields change. Returns `true` on success.
+  Future<bool> patchLockerBooking(String id, Map<String, dynamic> fields) async {
+    try {
+      await _lockers.patchBooking(id, fields);
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Overwrites an existing locker document. Returns `true` on success.
+  Future<bool> updateLocker(Locker locker) async {
+    try {
+      await _lockers.updateLocker(locker);
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  // ── LOCKER STUDENT FLOWS ────────────────────────────────────────
+  // These orchestrate the multi-document transitions the mock DataService
+  // performed in memory: booking update + locker update + history entry.
+  // They are written sequentially (Firestore has no cross-collection
+  // transaction from the client here); a failure mid-flow leaves the earlier
+  // writes in place, matching the mock's behaviour closely enough for the
+  // student flows. All return `false` on any failure.
+
+  /// Extends a locker booking by [additionalMonths]. Mirrors the mock rule:
+  /// only allowed when 30 or fewer days remain. Updates the booking, the
+  /// locker's end date, and appends a history entry. Returns `true` on
+  /// success.
+  Future<bool> requestLockerExtension(
+    LockerBooking booking,
+    int additionalMonths,
+  ) async {
+    if (additionalMonths <= 0 || booking.daysLeft > 30) return false;
+    final end = DateTime.tryParse(booking.endDate);
+    if (end == null) return false;
+
+    final newEnd = DateTime(end.year, end.month + additionalMonths, end.day);
+    final today = DateTime.now();
+    final newDaysLeft =
+        newEnd.difference(DateTime(today.year, today.month, today.day)).inDays;
+    final pricing = LockerPricing.fromBooking(booking);
+    final additionalCost = pricing.extensionCost(additionalMonths);
+    final newEndStr = newEnd.toIso8601String().split('T').first;
+
+    try {
+      await _lockers.patchBooking(booking.id, {
+        'endDate': Timestamp.fromDate(newEnd),
+        'daysLeft': newDaysLeft,
+        'durationMonths': booking.durationMonths + additionalMonths,
+        'totalPaid': booking.totalPaid + additionalCost,
+      });
+
+      final locker = await _lockers.getLocker(booking.lockerId);
+      if (locker != null) {
+        await _lockers.updateLocker(locker.copyWith(
+          endDate: newEndStr,
+          daysLeft: newDaysLeft,
+        ));
+      }
+
+      await _lockers.addLockerHistory(
+        booking.lockerId,
+        LockerHistory(
+          action: 'Rental extended',
+          staffId: 'system',
+          timestamp: DateTime.now().toIso8601String(),
+          reason:
+              'Extended by $additionalMonths month(s). Additional payment: RM${additionalCost.toStringAsFixed(0)}',
+        ),
+      );
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Starts the release flow for a booking: booking status →
+  /// 'Release Requested', releaseStatus → 'Requested', plus a history entry
+  /// and a student notification. Mirrors the mock guard: no-op when a release
+  /// is already in flight.
+  Future<bool> requestLockerRelease(LockerBooking booking) async {
+    if (booking.releaseStatus != null && booking.releaseStatus != 'Completed') {
+      return false;
+    }
+    try {
+      await _lockers.patchBooking(booking.id, {
+        'status': 'Release Requested',
+        'releaseStatus': 'Requested',
+      });
+      await _lockers.addLockerHistory(
+        booking.lockerId,
+        LockerHistory(
+          action: 'Release requested',
+          staffId: 'system',
+          timestamp: DateTime.now().toIso8601String(),
+          reason: 'Student requested locker release',
+        ),
+      );
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Verifies a key-collection QR scan. On a match the booking becomes
+  /// 'Active' with `keyCollected` stamped. The locker status update and
+  /// history entry are admin-only operations (Firestore rules deny student
+  /// writes to `lockers` and `lockers/{id}/history`), so they are skipped
+  /// here — the admin will see the booking flip to 'Active' and can update
+  /// the locker inventory from their screen.
+  ///
+  /// Returns `false` for an invalid code, an already-collected key, or any
+  /// failure — the screen's toast wording is unchanged either way.
+  Future<bool> scanKeyCollectionQR(LockerBooking booking, String qrCode) async {
+    if (booking.keyCollectionQR != qrCode || booking.keyCollected) return false;
+    try {
+      await _lockers.patchBooking(booking.id, {
+        'status': 'Active',
+        'keyCollected': true,
+        'keyCollectionDate': Timestamp.now(),
+      });
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Verifies a key-return QR scan. Mirrors the mock guards: only valid in
+  /// 'Pending Return' with a matching, unused code. On a match the booking
+  /// records the return and releaseStatus → 'Returned'. The locker history
+  /// entry is an admin-only operation (Firestore rules deny student writes to
+  /// `lockers/{id}/history`), so it is skipped here. A student notification
+  /// is sent confirming the key return.
+  Future<bool> scanKeyReturnQR(LockerBooking booking, String qrCode) async {
+    if (booking.releaseStatus != 'Pending Return') return false;
+    if (booking.keyReturnQR != qrCode || booking.keyReturned) return false;
+    try {
+      await _lockers.patchBooking(booking.id, {
+        'keyReturned': true,
+        'keyReturnDate': Timestamp.now(),
+        'releaseStatus': 'Returned',
+      });
+      // Notify the student that the key return was verified.
+      if (booking.studentId != null && booking.studentId!.isNotEmpty) {
+        await _sendLockerNotification(
+          studentId: booking.studentId!,
+          lockerId: booking.lockerId,
+          title: 'Key Returned',
+          body: 'Your key return for locker ${booking.lockerId} has been verified. '
+              'Please wait for the admin to finalize your release and process your deposit refund.',
+          type: 'key_returned',
+        );
+      }
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Runs the demo payment gateway for a locker booking and returns the
+  /// [PaymentResult]. The payment document is written to the `payments`
+  /// collection on success. The booking is NOT created here — the caller
+  /// passes the resulting [Payment] to [completeLockerBooking] to create the
+  /// booking with status 'Waiting Approval'.
+  ///
+  /// [cardNumber] and [cardCvv] are used for the demo gateway simulation only;
+  /// the full card number and CVV are NEVER stored. Only the last 4 digits
+  /// appear on the [Payment] document.
+  Future<PaymentResult> processLockerPayment({
+    required String cardNumber,
+    required String cardCvv,
+    required Locker locker,
+    required int durationMonths,
+  }) async {
+    final pricing = LockerPricing.fromLocker(locker, durationMonths);
+    try {
+      return await _payments.processPayment(
+        cardNumber: cardNumber,
+        cardCvv: cardCvv,
+        amount: pricing.amountDueToday,
+        deposit: pricing.deposit,
+        monthlyRent: pricing.monthlyRent,
+        durationMonths: pricing.durationMonths,
+        lockerId: locker.id,
+        studentId: userId ?? '',
+        bookingId: '', // booking doesn't exist yet; linked after creation
+      );
+    } on AuthFailure catch (e) {
+      debugPrint('processLockerPayment AuthFailure: ${e.message}');
+      return PaymentResult.failure('Payment failed: ${e.message}');
+    } catch (e) {
+      debugPrint('processLockerPayment unexpected error: $e');
+      return const PaymentResult.failure('Payment failed. Please try again.');
+    }
+  }
+
+  /// Creates the student's booking request as a single `lockerBookings`
+  /// document with status 'Waiting Approval' and returns it (with its
+  /// Firestore ID) on success, or a [LockerBookingResult.failure] carrying a
+  /// user-safe message.
+  ///
+  /// This is called AFTER the demo payment gateway succeeds. The [payment]
+  /// record's ID and receipt number are stamped onto the booking so the admin
+  /// can review the payment without an extra query.
+  ///
+  /// Students may ONLY write their own `lockerBookings` document — the
+  /// Firestore security rules forbid them from touching `lockers` or
+  /// `lockers/{id}/history`. The locker is therefore NOT updated here: it
+  /// stays `Available` until the admin approves the booking, which reserves
+  /// it and appends the audit-trail entry. For digital locks the unlock code
+  /// is generated now and stored on the student-owned booking so the student
+  /// can read it once approved. The booking is the single source of truth for
+  /// the code — it is never copied onto the world-readable locker document.
+  ///
+  /// The booking's dates, duration, payment, deposit and rent are computed
+  /// here so the later admin approval uses the same values.
+  ///
+  /// Before creating the booking, a conflict check runs: if an active
+  /// (non-Completed, non-Rejected) booking already exists for this locker the
+  /// request is rejected with "Locker already reserved." and no document is
+  /// written.
+  Future<LockerBookingResult> completeLockerBooking(
+    Locker locker,
+    int durationMonths, {
+    Payment? payment,
+  }) async {
+    // Conflict guard: prevent two students from booking the same locker
+    // while it is still `Available` pending admin confirmation. The query
+    // excludes `Completed` bookings so a returned locker can be rebooked.
+    try {
+      final taken = await _lockers.hasActiveBookingForLocker(locker.id);
+      if (taken) {
+        return const LockerBookingResult.failure('Locker already reserved.');
+      }
+    } on AuthFailure {
+      // The cross-student query is denied for students under the deployed
+      // rules (ownsBooking() is not a filter). Treat the denial as "unable
+      // to verify" and fall through to the booking create, which remains the
+      // authoritative guard. Do not block the booking on the check failing.
+    }
+
+    final now = DateTime.now();
+    final endDate = DateTime(now.year, now.month + durationMonths, now.day);
+    final daysLeft = endDate.difference(now).inDays;
+    final pricing = LockerPricing.fromLocker(locker, durationMonths);
+    // totalPaid stores the full amount charged today (deposit + total
+    // rental cost), matching the Payment record.
+    final totalPaid = pricing.amountDueToday;
+    final rentalCost = pricing.totalRentalCost;
+    // Digital-lock code lives ONLY on the student-owned booking. The
+    // `lockers` collection is readable by every signed-in user, so the code
+    // is never written there — `booking.digitalCode` is the source of truth.
+    final digitalCode =
+        locker.lockType == 'digital' ? '${Random().nextInt(9000) + 1000}' : null;
+
+    final booking = LockerBooking(
+      id: '',
+      lockerId: locker.id,
+      location: locker.location,
+      startDate: now.toIso8601String().split('T').first,
+      endDate: endDate.toIso8601String().split('T').first,
+      status: 'Waiting Approval',
+      daysLeft: daysLeft,
+      durationMonths: pricing.durationMonths,
+      monthlyRent: pricing.monthlyRent,
+      deposit: pricing.deposit,
+      rentalCost: rentalCost,
+      totalPaid: totalPaid,
+      studentId: userId,
+      digitalCode: digitalCode,
+      paymentId: payment?.id,
+      receiptNumber: payment?.receiptNumber,
+    );
+
+    try {
+      // Student-safe write: booking document only. No locker/history writes.
+      final created = await _lockers.createBooking(booking);
+      // If a payment was processed, link it back to the booking now that we
+      // have the booking ID. This is a best-effort admin/student update —
+      // the payment doc's `bookingId` field helps the admin cross-reference.
+      if (payment != null && payment.id.isNotEmpty && _payments.isAvailable) {
+        try {
+          await _lockers.patchBooking(created.id, {
+            'paymentId': payment.id,
+            'receiptNumber': payment.receiptNumber,
+          });
+        } on AuthFailure {
+          // Non-fatal: the booking is created; the payment link is cosmetic.
+        }
+      }
+      return LockerBookingResult.success(created.copyWith(
+        paymentId: payment?.id,
+        receiptNumber: payment?.receiptNumber,
+      ));
+    } on AuthFailure {
+      return const LockerBookingResult.failure(
+          'Booking failed. Please try again.');
+    }
+  }
+
+  // ── LOCKER ADMIN FLOWS ──────────────────────────────────────────
+  // Admin counterparts to the student flows above. They replace the mock
+  // DataService mutations and operate on Firestore so the admin panel reads
+  // and writes the same data the student module uses. Each mirrors the
+  // corresponding mock method's field changes and history entry, and returns
+  // `false` (or `null`) on any failure.
+
+  /// Approves a 'Waiting Approval' booking. This is the admin's first locker
+  /// operation for a booking that went through the payment gateway.
+  ///
+  /// For **digital locks**: the locker is reserved and the digital code is
+  /// activated immediately — the booking moves to 'Active' (no key pickup
+  /// step) and the locker moves to 'Active'. The digital code is NEVER copied
+  /// onto the locker document: `lockers/{lockerId}` is world-readable to
+  /// signed-in users, so the owner-scoped booking stays the only place the
+  /// code is stored.
+  ///
+  /// For **key locks**: the locker is reserved and the booking moves to
+  /// 'Pending Pickup' — the admin then generates the key collection QR as a
+  /// separate step (the existing `generateKeyCollectionQR` flow). The locker
+  /// moves to 'Pending Pickup' with renter fields populated.
+  ///
+  /// In both cases the audit-trail entry is appended atomically with the
+  /// locker update. Returns `true` on success, `false` on failure or when the
+  /// booking is not in 'Waiting Approval' state.
+  Future<bool> approveLockerBooking(
+    LockerBooking booking,
+    Locker locker,
+  ) async {
+    if (booking.status != 'Waiting Approval') return false;
+    final isDigital = locker.lockType == 'digital';
+    final history = LockerHistory(
+      action: isDigital
+          ? 'Booking approved - Digital locker activated'
+          : 'Booking approved - Locker reserved for key pickup',
+      staffId: 'ADMIN',
+      timestamp: DateTime.now().toIso8601String(),
+      reason: isDigital
+          ? 'Booking approved. Digital code issued to student booking. Status: Active.'
+          : 'Booking approved. Locker reserved. Student to collect key.',
+    );
+    try {
+      if (isDigital) {
+        // Digital: booking → Active, locker → Active. The unlock code stays
+        // on the booking only (never written to the locker document).
+        await _lockers.patchBooking(booking.id, {'status': 'Active'});
+        final reserved = locker.copyWith(
+          status: 'Active',
+          studentId: booking.studentId,
+          startDate: booking.startDate,
+          endDate: booking.endDate,
+          daysLeft: booking.daysLeft,
+        );
+        await _lockers.reserveLockerForBooking(reserved, history);
+      } else {
+        // Key: booking → Pending Pickup, locker → Pending Pickup.
+        // The admin will generate the collection QR next.
+        await _lockers.patchBooking(booking.id, {'status': 'Pending Pickup'});
+        final reserved = locker.copyWith(
+          status: 'Pending Pickup',
+          studentId: booking.studentId,
+          startDate: booking.startDate,
+          endDate: booking.endDate,
+          daysLeft: booking.daysLeft,
+        );
+        await _lockers.reserveLockerForBooking(reserved, history);
+      }
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Rejects a 'Waiting Approval' booking. The booking moves to 'Rejected'
+  /// (terminal) and the linked payment moves to 'Refund Pending'. The locker
+  /// is NOT touched (it was never reserved). Returns `true` on success,
+  /// `false` on failure or when the booking is not in 'Waiting Approval'
+  /// state.
+  Future<bool> rejectLockerBooking(
+    LockerBooking booking, {
+    String? reason,
+  }) async {
+    if (booking.status != 'Waiting Approval') return false;
+    try {
+      await _lockers.patchBooking(booking.id, {
+        'status': 'Rejected',
+      });
+      await _lockers.addLockerHistory(
+        booking.lockerId,
+        LockerHistory(
+          action: 'Booking rejected',
+          staffId: 'ADMIN',
+          timestamp: DateTime.now().toIso8601String(),
+          reason: reason ?? 'Booking rejected by admin. Refund pending.',
+        ),
+      );
+      // Mark the linked payment as refund pending (best-effort).
+      if (booking.paymentId != null && booking.paymentId!.isNotEmpty) {
+        try {
+          await _payments.updatePaymentStatus(
+              booking.paymentId!, 'Refund Pending');
+        } on AuthFailure {
+          // Non-fatal: the booking is rejected; the payment status update is
+          // cosmetic and can be reconciled later.
+        }
+      }
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Generates the one-time key-collection QR for a booking and stamps it on
+  /// the booking document. Returns the code, or `null` on failure.
+  ///
+  /// This is the FIRST admin-controlled locker operation for a booking. The
+  /// student created only the `lockerBookings` document (students may never
+  /// write `lockers` or `lockers/{id}/history`), so the locker is still
+  /// `Available` until this runs. Here the admin generates the QR, reserves
+  /// the locker (`Pending Pickup`, renter fields populated) and appends the
+  /// audit-trail entry. The booking patch and the locker reservation are both
+  /// admin-only writes; the locker update + history entry go through one
+  /// atomic batch. No digital code is ever written to the locker document.
+  ///
+  /// Regeneration is allowed only while the key has not been collected; once
+  /// the QR has been scanned (`keyCollected`) the request is refused so a used
+  /// QR is never overwritten. Re-reserving an already-reserved locker is a
+  /// harmless idempotent update (same field values), so regeneration is safe.
+  Future<String?> generateKeyCollectionQR(
+    LockerBooking booking,
+    Locker locker,
+  ) async {
+    if (booking.keyCollected) return null;
+    final code =
+        'KEY-COL-${booking.id}-${Random().nextInt(999999).toString().padLeft(6, '0')}';
+    final history = LockerHistory(
+      action: 'Key collection QR generated',
+      staffId: 'ADMIN',
+      timestamp: DateTime.now().toIso8601String(),
+      reason: 'QR code ready for student to scan. Locker reserved.',
+    );
+    try {
+      // Stamp the QR onto the booking (admin may update any booking).
+      await _lockers.patchBooking(booking.id, {'keyCollectionQR': code});
+      // Reserve the locker + audit entry atomically. The booking's dates and
+      // renter (set at booking time) are the source of truth. The digital
+      // code is never copied onto the locker — it stays on the booking.
+      final reserved = locker.copyWith(
+        status: 'Pending Pickup',
+        studentId: booking.studentId,
+        startDate: booking.startDate,
+        endDate: booking.endDate,
+        daysLeft: booking.daysLeft,
+      );
+      await _lockers.reserveLockerForBooking(reserved, history);
+      return code;
+    } on AuthFailure {
+      return null;
+    }
+  }
+
+  /// Confirms a digital-lock booking: the admin's first (and only) locker
+  /// operation for a digital rental. Digital locks have no physical key and
+  /// therefore no collection-QR step, so this action reserves the locker
+  /// (`Pending Pickup`, renter fields populated) and appends the audit-trail
+  /// entry — all admin-only writes in one atomic batch.
+  ///
+  /// The digital code was generated at booking time and stored on the
+  /// owner-scoped booking; it is deliberately NOT copied onto the locker
+  /// document, which any signed-in user can read. This step only makes the
+  /// reservation visible on the locker and the inventory counts. Returns
+  /// `true` on success, `false` on failure.
+  Future<bool> confirmDigitalLockerBooking(
+    LockerBooking booking,
+    Locker locker,
+  ) async {
+    final history = LockerHistory(
+      action: 'Digital booking confirmed',
+      staffId: 'ADMIN',
+      timestamp: DateTime.now().toIso8601String(),
+      reason: 'Locker reserved. Digital code issued to student booking.',
+    );
+    try {
+      final reserved = locker.copyWith(
+        status: 'Pending Pickup',
+        studentId: booking.studentId,
+        startDate: booking.startDate,
+        endDate: booking.endDate,
+        daysLeft: booking.daysLeft,
+      );
+      await _lockers.reserveLockerForBooking(reserved, history);
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Generates (or regenerates) the one-time key-return QR for a booking.
+  ///
+  /// Valid while the release is in 'Requested' or 'Pending Return' and the key
+  /// has not yet been returned. Each call stamps a brand-new code onto the
+  /// booking, overwriting `keyReturnQR` so any previously issued code
+  /// immediately becomes invalid (the student scan guard compares against the
+  /// current stored code). First generation moves releaseStatus from
+  /// 'Requested' to 'Pending Return'; regeneration keeps it at
+  /// 'Pending Return'. Returns the new code, or `null` on failure / when the
+  /// key has already been returned (a used QR is never overwritten).
+  Future<String?> generateKeyReturnQR(LockerBooking booking) async {
+    if (booking.keyReturned) return null;
+    if (booking.releaseStatus != 'Requested' &&
+        booking.releaseStatus != 'Approved' &&
+        booking.releaseStatus != 'Pending Return') {
+      return null;
+    }
+    final isRegeneration = booking.keyReturnQR != null;
+    final code =
+        'KEY-RET-${booking.id}-${Random().nextInt(999999).toString().padLeft(6, '0')}';
+    try {
+      await _lockers.patchBooking(booking.id, {
+        'keyReturnQR': code,
+        'keyReturned': false,
+        'releaseStatus': 'Pending Return',
+      });
+      await _lockers.addLockerHistory(
+        booking.lockerId,
+        LockerHistory(
+          action: isRegeneration
+              ? 'Return QR regenerated'
+              : 'Return QR generated',
+          staffId: 'ADMIN',
+          timestamp: DateTime.now().toIso8601String(),
+          reason: isRegeneration
+              ? 'New return QR generated. Previous QR invalidated.'
+              : 'QR code ready for student to scan',
+        ),
+      );
+      // Notify the student that the return QR is ready.
+      if (booking.studentId != null && booking.studentId!.isNotEmpty) {
+        await _sendLockerNotification(
+          studentId: booking.studentId!,
+          lockerId: booking.lockerId,
+          title: 'Return QR Generated',
+          body: 'Your key return QR for locker ${booking.lockerId} is ready. '
+              'Please scan it in My Locker after handing over your key at the admin office.',
+          type: 'return_qr',
+        );
+      }
+      return code;
+    } on AuthFailure {
+      return null;
+    }
+  }
+
+  /// Approves a release **request** — the intermediate step for KEY lockers.
+  ///
+  /// For key lockers the release flow is: Requested → Approved → (generate
+  /// return QR) → Pending Return → (student scans) → Returned → (admin
+  /// completes) → Completed. This method moves releaseStatus from 'Requested'
+  /// to 'Approved', records the history entry, and notifies the student. The
+  /// admin then generates the return QR as a separate step.
+  ///
+  /// For digital lockers this intermediate step is NOT needed — the admin
+  /// goes straight to [approveLockerRelease] which completes the release.
+  /// Returns `false` when the guard fails or on any write failure.
+  Future<bool> approveLockerReleaseRequest(Locker locker, LockerBooking booking) async {
+    if (booking.releaseStatus != 'Requested') return false;
+    try {
+      await _lockers.patchBooking(booking.id, {
+        'releaseStatus': 'Approved',
+      });
+      await _lockers.addLockerHistory(
+        booking.lockerId,
+        LockerHistory(
+          action: 'Release request approved',
+          staffId: 'ADMIN',
+          timestamp: DateTime.now().toIso8601String(),
+          reason: 'Admin approved the release request. Return QR can now be generated.',
+        ),
+      );
+      // Notify the student that their release request was approved.
+      if (booking.studentId != null && booking.studentId!.isNotEmpty) {
+        await _sendLockerNotification(
+          studentId: booking.studentId!,
+          lockerId: booking.lockerId,
+          title: 'Release Approved',
+          body: 'Your release request for locker ${booking.lockerId} has been approved. '
+              'Please visit the admin office to return your key and scan the return QR.',
+          type: 'release',
+        );
+      }
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Approves a release: frees the locker (deposit refunded), completes the
+  /// booking, and writes the history entry. This is the FINAL step — for key
+  /// locks it requires the key to have been returned (releaseStatus ==
+  /// 'Returned'); for digital locks it can be done from 'Requested'. Returns
+  /// `false` when the guard fails or on any write failure.
+  ///
+  /// The booking is NEVER deleted — it transitions to its terminal `Completed`
+  /// state and is preserved permanently. The booking update, locker update and
+  /// history entry are committed atomically in a single [WriteBatch], so the
+  /// approval either succeeds completely or fails completely (no partial
+  /// update where the locker is freed but the booking is left active).
+  Future<bool> approveLockerRelease(Locker locker, LockerBooking booking) async {
+    final requiresKeyReturn = locker.lockType == 'key';
+    if (requiresKeyReturn &&
+        (booking.releaseStatus != 'Returned' || !booking.keyReturned)) {
+      return false;
+    }
+    if (!requiresKeyReturn &&
+        booking.releaseStatus != 'Requested' &&
+        booking.releaseStatus != 'Returned') {
+      return false;
+    }
+    final freedLocker = locker.copyWith(
+      status: 'Available',
+      studentId: null,
+      startDate: null,
+      endDate: null,
+      daysLeft: null,
+      depositRefunded: true,
+    );
+    final bookingFields = <String, dynamic>{
+      'status': 'Completed',
+      'releaseStatus': 'Completed',
+      'depositRefunded': true,
+      'completedDate': FieldValue.serverTimestamp(),
+    };
+    // Digital releases get their own audit trail ('Digital release approved',
+    // 'Locker code revoked', 'Deposit refunded'), because revoking the access
+    // code is the material event and needs to be visible on its own line.
+    // The key-locker path is left exactly as it was.
+    final isDigital = locker.lockType == 'digital';
+    final history = LockerHistory(
+      action: isDigital
+          ? 'Digital release approved'
+          : 'Locker released - Booking completed - Deposit refunded',
+      staffId: 'ADMIN',
+      timestamp: DateTime.now().toIso8601String(),
+      reason: isDigital
+          ? 'Admin approved the digital locker release. No key return required.'
+          : 'Release approved. Deposit: RM${booking.deposit.toStringAsFixed(0)} refunded.',
+    );
+    try {
+      await _lockers.completeBookingWithLocker(
+        booking.id,
+        bookingFields,
+        freedLocker,
+        history,
+      );
+      if (isDigital) {
+        await _lockers.addLockerHistory(
+          locker.id,
+          LockerHistory(
+            action: 'Locker code revoked',
+            staffId: 'ADMIN',
+            timestamp: DateTime.now().toIso8601String(),
+            reason: 'Digital access code invalidated on release approval.',
+          ),
+        );
+        await _lockers.addLockerHistory(
+          locker.id,
+          LockerHistory(
+            action: 'Deposit refunded',
+            staffId: 'ADMIN',
+            timestamp: DateTime.now().toIso8601String(),
+            reason: 'Deposit: RM${booking.deposit.toStringAsFixed(0)} refunded.',
+          ),
+        );
+      }
+
+      // Notify the student: deposit refunded + agreement completed.
+      if (booking.studentId != null && booking.studentId!.isNotEmpty) {
+        await _sendLockerNotification(
+          studentId: booking.studentId!,
+          lockerId: booking.lockerId,
+          title: 'Deposit Refunded',
+          body: 'Your security deposit of RM${booking.deposit.toStringAsFixed(0)} '
+              'for locker ${booking.lockerId} has been refunded.',
+          type: 'deposit_refunded',
+        );
+        await _sendLockerNotification(
+          studentId: booking.studentId!,
+          lockerId: booking.lockerId,
+          title: 'Locker Agreement Completed',
+          body: 'Your locker agreement for ${booking.lockerId} has been completed. '
+              'Thank you for using Campus Connect locker services.',
+          type: 'completed',
+        );
+      }
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Terminates a locker agreement: frees the locker, completes any booking,
+  /// and forfeits the deposit. The [reason] is recorded in the locker history
+  /// and included in the student notification. Returns `false` on any write
+  /// failure.
+  ///
+  /// The booking is never deleted — it is moved to `Completed` atomically with
+  /// the locker update and history entry in a single [WriteBatch].
+  Future<bool> terminateLocker(Locker locker, LockerBooking? booking, {String? reason}) async {
+    final reasonText = reason ?? 'Admin terminated locker agreement. Deposit forfeited.';
+    final freedLocker = locker.copyWith(
+      status: 'Available',
+      studentId: null,
+      startDate: null,
+      endDate: null,
+      daysLeft: null,
+      depositRefunded: false,
+    );
+    final history = LockerHistory(
+      action: 'Agreement terminated',
+      staffId: 'ADMIN',
+      timestamp: DateTime.now().toIso8601String(),
+      reason: reasonText,
+    );
+    try {
+      if (booking != null) {
+        await _lockers.completeBookingWithLocker(
+          booking.id,
+          <String, dynamic>{
+            'status': 'Completed',
+            'releaseStatus': 'Completed',
+            'depositRefunded': false,
+            'completedDate': FieldValue.serverTimestamp(),
+          },
+          freedLocker,
+          history,
+        );
+      } else {
+        await _lockers.updateLocker(freedLocker);
+        await _lockers.addLockerHistory(locker.id, history);
+      }
+      // Notify the student about the termination.
+      final studentId = booking?.studentId ?? locker.studentId;
+      if (studentId != null && studentId.isNotEmpty) {
+        await _sendLockerNotification(
+          studentId: studentId,
+          lockerId: locker.id,
+          title: 'Locker Agreement Terminated',
+          body: 'Your locker agreement for ${locker.id} has been terminated by the administrator. '
+              'Reason: $reasonText. Your deposit has been forfeited. '
+              'If you have questions, please contact the admin office.',
+          type: 'termination',
+        );
+      }
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Blocks a locker (maintenance/issues), completing any booking. The
+  /// [reason] is recorded in the locker history and included in the student
+  /// notification if the locker was occupied. Returns `false` on any write
+  /// failure.
+  ///
+  /// The booking is never deleted — it is moved to `Completed` atomically with
+  /// the locker update and history entry in a single [WriteBatch].
+  Future<bool> blockLocker(Locker locker, LockerBooking? booking, {String? reason}) async {
+    final reasonText = reason ?? 'Admin blocked locker';
+    final blockedLocker = locker.copyWith(
+      status: 'Blocked',
+      studentId: null,
+      startDate: null,
+      endDate: null,
+      daysLeft: null,
+    );
+    final history = LockerHistory(
+      action: 'Locker blocked',
+      staffId: 'ADMIN',
+      timestamp: DateTime.now().toIso8601String(),
+      reason: reasonText,
+    );
+    try {
+      if (booking != null) {
+        await _lockers.completeBookingWithLocker(
+          booking.id,
+          <String, dynamic>{
+            'status': 'Completed',
+            'releaseStatus': 'Completed',
+            'completedDate': FieldValue.serverTimestamp(),
+          },
+          blockedLocker,
+          history,
+        );
+      } else {
+        await _lockers.updateLocker(blockedLocker);
+        await _lockers.addLockerHistory(locker.id, history);
+      }
+      // Notify the student if the locker was occupied.
+      final studentId = booking?.studentId ?? locker.studentId;
+      if (studentId != null && studentId.isNotEmpty) {
+        await _sendLockerNotification(
+          studentId: studentId,
+          lockerId: locker.id,
+          title: 'Locker Blocked',
+          body: 'Your locker ${locker.id} has been blocked by the administrator. '
+              'Reason: $reasonText. Please contact the admin office for more information.',
+          type: 'block',
+        );
+      }
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Unblocks a previously blocked locker, making it available again. Unlike
+  /// [releaseLockerAdmin], this does NOT complete any booking — the locker
+  /// was already freed when it was blocked. It simply flips the status from
+  /// 'Blocked' to 'Available' and records the reason in history.
+  ///
+  /// A notification is sent to the student ONLY if the locker still has an
+  /// active studentId (edge case where the locker was blocked without
+  /// completing the booking). Returns `false` on any write failure or if the
+  /// locker is not currently blocked.
+  Future<bool> unblockLocker(Locker locker, {String? reason}) async {
+    // Validation guard: can only unblock a blocked locker.
+    if (locker.status != 'Blocked') {
+      return false;
+    }
+    final reasonText = reason ?? 'Admin unblocked locker. Made available.';
+    final unblockedLocker = locker.copyWith(
+      status: 'Available',
+    );
+    final history = LockerHistory(
+      action: 'Locker unblocked',
+      staffId: 'ADMIN',
+      timestamp: DateTime.now().toIso8601String(),
+      reason: reasonText,
+    );
+    try {
+      await _lockers.updateLocker(unblockedLocker);
+      await _lockers.addLockerHistory(locker.id, history);
+      // Notify the student if the locker still has a tenant (edge case).
+      final studentId = locker.studentId;
+      if (studentId != null && studentId.isNotEmpty) {
+        await _sendLockerNotification(
+          studentId: studentId,
+          lockerId: locker.id,
+          title: 'Locker Available Again',
+          body: 'Your locker ${locker.id} has been reopened and is available again. '
+              'Reason: $reasonText. You may resume using it.',
+          type: 'unblock',
+        );
+      }
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Force-releases a blocked or occupied locker back to available, completing
+  /// any booking. The [reason] is recorded in the locker history and included
+  /// in the student notification. Returns `false` on any write failure.
+  ///
+  /// The booking is never deleted — it is moved to `Completed` atomically with
+  /// the locker update and history entry in a single [WriteBatch].
+  Future<bool> releaseLockerAdmin(Locker locker, LockerBooking? booking, {String? reason}) async {
+    final reasonText = reason ?? 'Admin force-released locker. Made available.';
+    final freedLocker = locker.copyWith(
+      status: 'Available',
+      studentId: null,
+      startDate: null,
+      endDate: null,
+      daysLeft: null,
+    );
+    final history = LockerHistory(
+      action: 'Locker force-released',
+      staffId: 'ADMIN',
+      timestamp: DateTime.now().toIso8601String(),
+      reason: reasonText,
+    );
+    try {
+      if (booking != null) {
+        await _lockers.completeBookingWithLocker(
+          booking.id,
+          <String, dynamic>{
+            'status': 'Completed',
+            'releaseStatus': 'Completed',
+            'completedDate': FieldValue.serverTimestamp(),
+          },
+          freedLocker,
+          history,
+        );
+      } else {
+        await _lockers.updateLocker(freedLocker);
+        await _lockers.addLockerHistory(locker.id, history);
+      }
+      // Notify the student if the locker was occupied.
+      final studentId = booking?.studentId ?? locker.studentId;
+      if (studentId != null && studentId.isNotEmpty) {
+        await _sendLockerNotification(
+          studentId: studentId,
+          lockerId: locker.id,
+          title: 'Locker Force-Released',
+          body: 'Your locker ${locker.id} has been force-released by the administrator. '
+              'Reason: $reasonText. Please contact the admin office for more information.',
+          type: 'force_release',
+        );
+      }
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Sends a notice to a locker's tenant by logging it to the locker's
+  /// history. Returns `false` on any write failure.
+  Future<bool> sendLockerNotice(Locker locker, String message) async {
+    try {
+      await _lockers.addLockerHistory(
+        locker.id,
+        LockerHistory(
+          action: 'Notice sent to student',
+          staffId: 'ADMIN',
+          timestamp: DateTime.now().toIso8601String(),
+          reason: message,
+        ),
+      );
       return true;
     } on AuthFailure {
       return false;

@@ -2,32 +2,74 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
+/// A vertical stepper that visualises the locker release pipeline.
+///
+/// Two variants are supported, selected by [lockType]:
+/// - **key**: Requested → Approved → Return QR Generated → Key Returned →
+///   Deposit Refunded → Completed
+/// - **digital**: Requested → Approved → Deposit Refunded → Completed
+///
+/// The current step is derived from [status] (the booking's `releaseStatus`)
+/// and the companion flags [keyReturnGenerated] / [keyReturned].
 class ReleaseStepper extends StatelessWidget {
   final String status;
+  final String lockType;
+  final bool keyReturnGenerated;
+  final bool keyReturned;
 
-  const ReleaseStepper({super.key, required this.status});
+  const ReleaseStepper({
+    super.key,
+    required this.status,
+    this.lockType = 'key',
+    this.keyReturnGenerated = false,
+    this.keyReturned = false,
+  });
 
-  static const _steps = ['Requested', 'Pending Return', 'Returned', 'Completed'];
+  List<String> get _steps {
+    if (lockType == 'digital') {
+      return ['Requested', 'Approved', 'Deposit Refunded', 'Completed'];
+    }
+    return [
+      'Requested',
+      'Approved',
+      'Return QR Generated',
+      'Key Returned',
+      'Deposit Refunded',
+      'Completed',
+    ];
+  }
 
   int _currentIndex() {
-    final normalized = status.trim().toLowerCase();
-    if (normalized == 'release requested') return 0;
-    if (normalized == 'requested') return 0;
-    if (normalized == 'pending return') return 1;
-    if (normalized == 'returned') return 2;
-    if (normalized == 'completed') return 3;
+    final s = status.trim().toLowerCase();
+    if (lockType == 'digital') {
+      // Digital: Requested → Approved → Deposit Refunded → Completed
+      if (s == 'requested') return 0;
+      if (s == 'approved') return 1;
+      if (s == 'completed') return 3;
+      // 'Returned' or 'Pending Return' should not happen for digital, but
+      // if they do, treat as approved (step 1).
+      return 1;
+    }
+    // Key: Requested → Approved → Return QR Generated → Key Returned →
+    // Deposit Refunded → Completed
+    if (s == 'requested') return 0;
+    if (s == 'approved') return 1;
+    if (s == 'pending return') return keyReturnGenerated ? 2 : 1;
+    if (s == 'returned') return keyReturned ? 3 : 2;
+    if (s == 'completed') return 5;
     return 0;
   }
 
   @override
   Widget build(BuildContext context) {
     final current = _currentIndex();
+    final steps = _steps;
 
     return Card(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
         child: Column(
-          children: List.generate(_steps.length, (index) {
+          children: List.generate(steps.length, (index) {
             final isDone = index < current;
             final isActive = index == current;
             final color = isDone || isActive ? AppTheme.red : AppTheme.textMuted;
@@ -55,7 +97,7 @@ class ReleaseStepper extends StatelessWidget {
                         ),
                       ),
                     ),
-                    if (index != _steps.length - 1)
+                    if (index != steps.length - 1)
                       Container(
                         width: 2,
                         height: 20,
@@ -68,7 +110,7 @@ class ReleaseStepper extends StatelessWidget {
                   child: Padding(
                     padding: const EdgeInsets.only(top: 3),
                     child: Text(
-                      _steps[index],
+                      steps[index],
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
