@@ -428,6 +428,13 @@ class EventDetailScreen extends StatelessWidget {
             onPressed: () async {
               if (!key.currentState!.validate()) return;
               Navigator.pop(dialogCtx);
+              // Check for an existing registration before attempting to join.
+              final existing = await appState.joiningFor(event.id);
+              if (existing != null) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('You have already registered for this event.')));
+                return;
+              }
               final joining = await appState.joinEvent(
                 event,
                 name: nameCtrl.text.trim(),
@@ -534,11 +541,17 @@ class EventDetailScreen extends StatelessWidget {
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4CAF50)),
               onPressed: isPaymentProcessing ? null : () {
                 setState(() => isPaymentProcessing = true);
-                // Simulate payment processing
-                Future.delayed(const Duration(seconds: 2), () {
-                  appState.completeJoiningPayment(joining.id);
-                  Navigator.pop(dialogCtx);
-                  _showQRCodeDialog(context, joining, event);
+                // Simulate payment processing, then persist the result.
+                Future.delayed(const Duration(seconds: 2), () async {
+                  final ok = await appState.completeJoiningPayment(joining.id);
+                  if (!dialogCtx.mounted) return;
+                  if (ok) {
+                    Navigator.pop(dialogCtx);
+                    _showQRCodeDialog(context, joining, event);
+                  } else {
+                    setState(() => isPaymentProcessing = false);
+                    _toast(context, '❌ Payment failed. Please try again.');
+                  }
                 });
               },
               child: isPaymentProcessing
@@ -731,6 +744,50 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
     );
   }
 
+  void _showRejectReasonDialog(BuildContext context, AppState appState, Event ev) {
+    final reasonCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Reject Event', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Event: ${ev.title}', style: const TextStyle(fontSize: 13, color: AppTheme.textMuted)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: reasonCtrl,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Rejection reason',
+                hintText: 'Enter the reason for rejection...',
+                alignLabelWithHint: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogCtx).pop(), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () async {
+              final reason = reasonCtrl.text.trim();
+              if (reason.isEmpty) return;
+              await appState.rejectEvent(ev.id, reason);
+              if (!dialogCtx.mounted) return;
+              Navigator.of(dialogCtx).pop();
+              _toast(context, 'Event rejected');
+            },
+            child: const Text('Reject', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<AppState>(
@@ -812,9 +869,8 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
                           ),
                           const SizedBox(height: 8),
                           Row(children: [
-                            Expanded(child: OutlineBtn(label: 'Reject', onPressed: () async {
-                              await appState.rejectEvent(ev.id, 'Rejected by admin');
-                              _toast(ctx, 'Event rejected');
+                            Expanded(child: OutlineBtn(label: 'Reject', onPressed: () {
+                              _showRejectReasonDialog(ctx, appState, ev);
                             })),
                             const SizedBox(width: 8),
                             Expanded(child: GradientButton(label: 'Approve', onPressed: () async {

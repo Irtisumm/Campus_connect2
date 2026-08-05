@@ -395,6 +395,29 @@ class EventService {
     }
   }
 
+  /// Creates a joining document and registers it on the event's roster in a
+  /// single [WriteBatch] so the two can never disagree. If either write fails
+  /// neither lands — the student never owns an orphaned joining document.
+  Future<EventJoining> createJoiningAndRegister(
+    EventJoining joining, {
+    required bool autoApproved,
+  }) async {
+    _assertAvailable();
+    try {
+      final joiningRef = _joinings.doc();
+      final eventFields = autoApproved
+          ? {'attendeeIds': FieldValue.arrayUnion([joining.studentId])}
+          : {'pendingJoiningIds': FieldValue.arrayUnion([joiningRef.id])};
+      final batch = _dbOrNull!.batch()
+        ..set(joiningRef, joining.toMap())
+        ..update(_events.doc(joining.eventId), eventFields);
+      await batch.commit();
+      return joining.copyWith(id: joiningRef.id);
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
   /// Finds the joining holding [ticketCode] for one event, or `null` when the
   /// code is unknown. This is the lookup behind the attendance scanner; the
   /// caller marks attendance with [patchJoining].

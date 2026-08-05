@@ -1822,6 +1822,11 @@ class AppState extends ChangeNotifier {
   /// and waits for the host. This is the mock's `requestJoinEvent` /
   /// `quickJoinEvent` split, preserved exactly — the difference was never a
   /// separate code path, only a different starting state.
+  ///
+  /// Returns `null` if the student is not signed in, has already registered
+  /// for this event, or the write failed. The joining creation and the event
+  /// roster update are committed in a single [WriteBatch] so they can never
+  /// disagree.
   Future<EventJoining?> joinEvent(
     Event event, {
     required String name,
@@ -1831,27 +1836,30 @@ class AppState extends ChangeNotifier {
     final studentId = userId;
     if (studentId == null) return null;
 
+    // ── Duplicate prevention ──────────────────────────────────────
+    // A student may only have one joining per event. If they already have a
+    // Pending, Approved or Rejected registration, return null so the caller
+    // can show "already registered" instead of creating a second document.
+    final existing = await joiningFor(event.id);
+    if (existing != null) return null;
+
     final gated = event.isPaid || event.clubIdRequired || event.isPrivate;
     try {
-      final created = await _eventsService.createJoining(EventJoining(
-        id: '',
-        eventId: event.id,
-        studentId: studentId,
-        name: name,
-        courseName: courseName,
-        clubId: clubId,
-        status: gated ? 'Pending' : 'Approved',
-        paymentStatus: event.isPaid ? 'Pending' : null,
-        qrTicketCode: gated ? null : _ticketCode(),
-        joinedDate: _today(),
-      ));
-      await _eventsService.registerJoiningOnEvent(
-        event.id,
-        created.id,
-        studentId,
+      return await _eventsService.createJoiningAndRegister(
+        EventJoining(
+          id: '',
+          eventId: event.id,
+          studentId: studentId,
+          name: name,
+          courseName: courseName,
+          clubId: clubId,
+          status: gated ? 'Pending' : 'Approved',
+          paymentStatus: event.isPaid ? 'Pending' : null,
+          qrTicketCode: gated ? null : _ticketCode(),
+          joinedDate: _today(),
+        ),
         autoApproved: !gated,
       );
-      return created;
     } on AuthFailure {
       return null;
     }

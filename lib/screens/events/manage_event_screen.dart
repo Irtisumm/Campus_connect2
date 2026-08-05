@@ -469,24 +469,13 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
             style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.red, foregroundColor: Colors.white),
             onPressed: () async {
-              final updated = Event(
-                id: ev.id, title: titleCtrl.text.trim(),
-                date: dateCtrl.text.trim(), time: timeCtrl.text.trim(),
-                location: locCtrl.text.trim(), category: ev.category,
-                organizer: orgCtrl.text.trim(), description: descCtrl.text.trim(),
-                status: ev.status,
-                hostStudentId: ev.hostStudentId,
-                approvalLetterPath: ev.approvalLetterPath,
-                approvalLetterName: ev.approvalLetterName,
-                hasApprovalLetter: ev.hasApprovalLetter,
-                submittedDate: ev.submittedDate,
-                revisionCount: ev.revisionCount,
-                messages: ev.messages,
-                eventType: ev.eventType,
-                isPrivate: ev.isPrivate,
-                clubIdRequired: ev.clubIdRequired,
-                isPaid: ev.isPaid,
-                price: ev.price,
+              final updated = ev.copyWith(
+                title: titleCtrl.text.trim(),
+                date: dateCtrl.text.trim(),
+                time: timeCtrl.text.trim(),
+                location: locCtrl.text.trim(),
+                organizer: orgCtrl.text.trim(),
+                description: descCtrl.text.trim(),
               );
               await appState.updateEvent(updated);
               Navigator.pop(dialogCtx);
