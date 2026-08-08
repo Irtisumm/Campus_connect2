@@ -53,6 +53,11 @@ class Event {
   final bool isPaid;
   final double price;
 
+  /// Maximum number of approved participants the event can hold. `0` means
+  /// no limit. When the approved attendee count reaches this value the join
+  /// button is disabled and further registrations are refused in every layer.
+  final int maxParticipants;
+
   /// Students whose joining was approved. Denormalised onto the event so the
   /// browse screen can show the attendee count without reading every joining.
   final List<String> attendeeIds;
@@ -61,6 +66,27 @@ class Event {
   final List<String> pendingJoiningIds;
 
   final String? qrTicketPath;
+
+  /// Optional cover image URL (Cloudinary secure URL). When non-null
+  /// and non-empty, screens display this image instead of the generated
+  /// category-gradient placeholder. Backward-compatible: existing events
+  /// that predate this field will have `null` and show the placeholder.
+  final String? coverImageUrl;
+
+  /// Cloudinary public ID for the cover image. Used later for replacing
+  /// or deleting the image via the Cloudinary API. `null` when no cover
+  /// image has been uploaded.
+  final String? coverImagePublicId;
+
+  /// `true` when a participant cap is set and the approved attendee count has
+  /// reached it. `maxParticipants` of `0` means unlimited, so this is always
+  /// `false` in that case.
+  bool get isFull =>
+      maxParticipants > 0 && attendeeIds.length >= maxParticipants;
+
+  /// Remaining slots before the cap is hit. `null` when there is no limit.
+  int? get availableSlots =>
+      maxParticipants > 0 ? maxParticipants - attendeeIds.length : null;
 
   const Event({
     required this.id,
@@ -86,9 +112,12 @@ class Event {
     this.clubIdRequired = false,
     this.isPaid = false,
     this.price = 0.0,
+    this.maxParticipants = 0,
     this.attendeeIds = const [],
     this.pendingJoiningIds = const [],
     this.qrTicketPath,
+    this.coverImageUrl,
+    this.coverImagePublicId,
   });
 
   /// Builds an [Event] from a Firestore document map.
@@ -126,9 +155,12 @@ class Event {
       clubIdRequired: asBool(data['clubIdRequired']),
       isPaid: asBool(data['isPaid']),
       price: (data['price'] as num?)?.toDouble() ?? 0.0,
+      maxParticipants: (data['maxParticipants'] as num?)?.toInt() ?? 0,
       attendeeIds: asStringList(data['attendeeIds']),
       pendingJoiningIds: asStringList(data['pendingJoiningIds']),
       qrTicketPath: data['qrTicketPath']?.toString(),
+      coverImageUrl: data['coverImageUrl']?.toString(),
+      coverImagePublicId: data['coverImagePublicId']?.toString(),
     );
   }
 
@@ -159,9 +191,14 @@ class Event {
       'clubIdRequired': clubIdRequired,
       'isPaid': isPaid,
       'price': price,
+      'maxParticipants': maxParticipants,
       'attendeeIds': attendeeIds,
       'pendingJoiningIds': pendingJoiningIds,
       'qrTicketPath': qrTicketPath,
+      if (coverImageUrl != null && coverImageUrl!.isNotEmpty)
+        'coverImageUrl': coverImageUrl,
+      if (coverImagePublicId != null && coverImagePublicId!.isNotEmpty)
+        'coverImagePublicId': coverImagePublicId,
     };
   }
 
@@ -189,9 +226,12 @@ class Event {
     bool? clubIdRequired,
     bool? isPaid,
     double? price,
+    int? maxParticipants,
     List<String>? attendeeIds,
     List<String>? pendingJoiningIds,
     Object? qrTicketPath = _sentinel,
+    Object? coverImageUrl = _sentinel,
+    Object? coverImagePublicId = _sentinel,
   }) {
     return Event(
       id: id ?? this.id,
@@ -217,9 +257,12 @@ class Event {
       clubIdRequired: clubIdRequired ?? this.clubIdRequired,
       isPaid: isPaid ?? this.isPaid,
       price: price ?? this.price,
+      maxParticipants: maxParticipants ?? this.maxParticipants,
       attendeeIds: attendeeIds ?? this.attendeeIds,
       pendingJoiningIds: pendingJoiningIds ?? this.pendingJoiningIds,
       qrTicketPath: identical(qrTicketPath, _sentinel) ? this.qrTicketPath : qrTicketPath as String?,
+      coverImageUrl: identical(coverImageUrl, _sentinel) ? this.coverImageUrl : coverImageUrl as String?,
+      coverImagePublicId: identical(coverImagePublicId, _sentinel) ? this.coverImagePublicId : coverImagePublicId as String?,
     );
   }
 

@@ -7,6 +7,7 @@ import '../../data/mock_data.dart';
 import '../../services/app_state.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/common.dart';
+import 'widgets/event_widgets.dart';
 
 void _toast(BuildContext ctx, String msg) => ScaffoldMessenger.of(ctx).showSnackBar(
       SnackBar(
@@ -62,6 +63,13 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
     return StreamBuilder<List<EventJoining>>(
       stream: appState.watchEventJoinings(ev.id),
       builder: (context, joiningsSnap) {
+        if (joiningsSnap.hasError) {
+          return EmptyState(
+            icon: Icons.cloud_off_rounded,
+            title: 'Unable to load participants',
+            subtitle: 'Please check your connection and try again.',
+          );
+        }
         final allReqs = joiningsSnap.data ?? const <EventJoining>[];
         final pending  = allReqs.where((j) => j.status == 'Pending').length;
         final approved = allReqs.where((j) => j.status == 'Approved').toList();
@@ -71,6 +79,20 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Cover image (if set)
+        if (ev.coverImageUrl != null && ev.coverImageUrl!.isNotEmpty) ...[
+          SizedBox(
+            height: 160,
+            width: double.infinity,
+            child: EventCover(
+              category: ev.category,
+              coverImageUrl: ev.coverImageUrl,
+              radius: BorderRadius.circular(16),
+              iconSize: 54,
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         // Banner
         Container(
           width: double.infinity,
@@ -151,6 +173,13 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
     return StreamBuilder<List<EventJoining>>(
       stream: appState.watchEventJoinings(eventId),
       builder: (context, joiningsSnap) {
+        if (joiningsSnap.hasError) {
+          return EmptyState(
+            icon: Icons.cloud_off_rounded,
+            title: 'Unable to load participants',
+            subtitle: 'Please check your connection and try again.',
+          );
+        }
         final allReqs = joiningsSnap.data ?? const <EventJoining>[];
         final filtered = _participantFilter == 'All'
             ? allReqs
@@ -206,8 +235,10 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
                     joining: req,
                     isPaid: isPaid,
                     onApprove: req.status == 'Pending' ? () async {
-                      await appState.approveJoining(req);
-                      _toast(ctx, '✅ ${req.name} approved');
+                      final result = await appState.approveJoining(req);
+                      _toast(ctx, result.success
+                          ? '✅ ${req.name} approved'
+                          : '❌ ${result.message}');
                     } : null,
                     onReject: req.status == 'Pending' ? () async {
                       await appState.rejectJoining(req);
@@ -228,6 +259,13 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
     return StreamBuilder<List<EventRole>>(
       stream: appState.watchEventRoles(eventId),
       builder: (context, rolesSnap) {
+        if (rolesSnap.hasError) {
+          return EmptyState(
+            icon: Icons.cloud_off_rounded,
+            title: 'Unable to load roles',
+            subtitle: 'Please check your connection and try again.',
+          );
+        }
         final roles = rolesSnap.data ?? const <EventRole>[];
     return Stack(children: [
       ListView(padding: const EdgeInsets.all(16), children: [
@@ -295,6 +333,13 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
     return StreamBuilder<List<EventJoining>>(
       stream: appState.watchEventJoinings(eventId),
       builder: (context, joiningsSnap) {
+        if (joiningsSnap.hasError) {
+          return EmptyState(
+            icon: Icons.cloud_off_rounded,
+            title: 'Unable to load entry data',
+            subtitle: 'Please check your connection and try again.',
+          );
+        }
         final allJoinings = joiningsSnap.data ?? const <EventJoining>[];
         final attendees = allJoinings.where((j) => j.status == 'Approved').toList();
         final attended  = attendees.where((a) => a.hasAttended).toList();
@@ -384,12 +429,12 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
                 onPressed: () async {
                   final code = _qrCtrl.text.trim();
                   if (code.isEmpty) { _toast(ctx, 'Enter a QR code first'); return; }
-                  final ok = await appState.verifyTicket(eventId, code);
-                  if (ok) {
-                    _toast(ctx, '✅ Entry verified! Participant checked in.');
+                  final result = await appState.verifyTicket(eventId, code);
+                  _toast(ctx, result.success
+                      ? '✅ ${result.message}'
+                      : '❌ ${result.message}');
+                  if (result.success) {
                     _qrCtrl.clear();
-                  } else {
-                    _toast(ctx, '❌ Invalid or unapproved QR code.');
                   }
                 },
               ),
@@ -571,12 +616,16 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
               onPressed: () async {
                 final sid = _sidCtrl.text.trim();
                 if (sid.isEmpty) { _toast(ctx, 'Enter a student ID'); return; }
-                await appState.assignEventRole(
+                final result = await appState.assignEventRole(
                   eventId: eventId, studentId: sid, studentName: sid,
                   role: _selectedRole, permissions: List.from(_selectedPerms),
                 );
-                Navigator.pop(dialogCtx);
-                _toast(ctx, '✅ $_selectedRole role assigned to $sid');
+                if (result.success) {
+                  Navigator.pop(dialogCtx);
+                  _toast(ctx, '✅ $_selectedRole role assigned to $sid');
+                } else {
+                  _toast(ctx, '❌ ${result.message}');
+                }
               },
               child: const Text('Assign Role'),
             ),
@@ -591,14 +640,29 @@ class _ManageMyEventScreenState extends State<ManageMyEventScreen>
   Widget build(BuildContext context) {
     return Consumer<AppState>(
       builder: (context, appState, child) {
-        final userId = appState.userId ?? '';
+        final userId = appState.userId;
+        if (userId == null || userId.isEmpty) {
+          return _guardScaffold(context, 'Sign in required',
+              'Please sign in to manage events.',
+              Icons.lock_outline_rounded);
+        }
         return StreamBuilder<Event?>(
           stream: appState.watchEvent(widget.id),
           builder: (context, eventSnap) {
+            if (eventSnap.hasError) {
+              return _guardScaffold(context, 'Unable to load event',
+                  'Please check your connection and try again.',
+                  Icons.cloud_off_rounded);
+            }
             final event = eventSnap.data;
             return StreamBuilder<List<EventRole>>(
               stream: appState.watchEventRoles(widget.id),
               builder: (context, rolesSnap) {
+                if (rolesSnap.hasError) {
+                  return _guardScaffold(context, 'Unable to load event',
+                      'Please check your connection and try again.',
+                      Icons.cloud_off_rounded);
+                }
                 final roles = rolesSnap.data ?? const <EventRole>[];
         final isCreator = event?.hostStudentId == userId;
         final isTeamMember = roles.any((r) => r.studentId == userId);

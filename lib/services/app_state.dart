@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -7,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../models/app_notification.dart';
 import '../models/auth_result.dart';
 import '../models/event.dart';
+import '../models/event_action_result.dart';
 import '../models/event_joining.dart';
 import '../models/event_message.dart';
 import '../models/event_role.dart';
@@ -21,6 +23,7 @@ import '../models/payment.dart';
 import '../models/user_profile.dart';
 import 'admin_service.dart';
 import 'auth_service.dart';
+import 'cloudinary_service.dart';
 import 'event_service.dart';
 import 'issue_service.dart';
 import 'locker_service.dart';
@@ -45,6 +48,7 @@ export '../models/locker_issue.dart' show LockerIssue;
 export '../models/locker_notification.dart' show LockerNotification;
 export '../models/payment.dart' show Payment, PaymentResult;
 export '../models/user_profile.dart' show UserProfile, UserRole, AccountStatus;
+export 'cloudinary_service.dart' show CloudinaryUploadResult, CloudinaryException;
 
 /// App-wide session state and the orchestrator across the three services:
 /// [AuthService] (credentials), [UserService] (profile documents) and
@@ -62,6 +66,7 @@ class AppState extends ChangeNotifier {
   final LockerService _lockers;
   final PaymentService _payments;
   final EventService _eventsService;
+  final CloudinaryService _cloudinary;
 
   String? _firebaseUid;
   UserProfile? _profile;
@@ -77,6 +82,7 @@ class AppState extends ChangeNotifier {
     LockerService? lockerService,
     PaymentService? paymentService,
     EventService? eventService,
+    CloudinaryService? cloudinaryService,
   })  : _auth = authService ?? AuthService(),
         _users = userService ?? UserService(),
         _admin = adminService ?? AdminService(),
@@ -84,7 +90,13 @@ class AppState extends ChangeNotifier {
         _issues = issueService ?? IssueService(),
         _lockers = lockerService ?? LockerService(),
         _payments = paymentService ?? PaymentService(),
-        _eventsService = eventService ?? EventService() {
+        _eventsService = eventService ?? EventService(),
+        _cloudinary = cloudinaryService ??
+            CloudinaryService(
+              cloudName: 'xijxwdly',
+              uploadPreset: 'campus_connect_events',
+              folder: 'events',
+            ) {
     _firebaseUid = _auth.currentUid;
     // Firebase auth state can change without a UI action (token refresh,
     // cold-start session restore), so mirror it into the widget tree.
@@ -1843,6 +1855,13 @@ class AppState extends ChangeNotifier {
     final existing = await joiningFor(event.id);
     if (existing != null) return null;
 
+    // ── Capacity guard ───────────────────────────────────────────
+    // If the event has a participant cap and is already full, refuse the join
+    // before touching Firestore. The service layer re-checks on the write
+    // itself, but this early bail lets the UI show "Event Full" without a
+    // round-trip.
+    if (event.isFull) return null;
+
     final gated = event.isPaid || event.clubIdRequired || event.isPrivate;
     try {
       return await _eventsService.createJoiningAndRegister(
@@ -1872,15 +1891,34 @@ class AppState extends ChangeNotifier {
 
   /// Host decision: admit the student and issue their ticket. The joining and
   /// the event's roster move together in one batch.
-  Future<bool> approveJoining(EventJoining joining) => _eventWrite(
-        () => _eventsService.decideJoining(
-          joining.id,
-          joining.eventId,
-          {'status': 'Approved', 'qrTicketCode': joining.qrTicketCode ?? _ticketCode()},
-          approved: true,
-          studentId: joining.studentId,
-        ),
-      );
+  ///
+  /// For paid events the joining's `paymentStatus` must be `'Completed'`
+  /// before the host may approve — a participant who has not paid cannot be
+  /// admitted. Returns [EventActionResult.failure] with the message
+  /// "Payment has not been completed." when that rule is violated.
+  Future<EventActionResult> approveJoining(EventJoining joining) async {
+    // ── Payment verification ─────────────────────────────────────
+    // Only a paid event can have an unpaid joining. A free event has a `null`
+    // paymentStatus, so this guard is a no-op for the free workflow.
+    if (joining.paymentStatus != null &&
+        joining.paymentStatus != 'Completed') {
+      return const EventActionResult.failure(
+          'Payment has not been completed.');
+    }
+
+    final ok = await _eventWrite(
+      () => _eventsService.decideJoining(
+        joining.id,
+        joining.eventId,
+        {'status': 'Approved', 'qrTicketCode': joining.qrTicketCode ?? _ticketCode()},
+        approved: true,
+        studentId: joining.studentId,
+      ),
+    );
+    return ok
+        ? const EventActionResult.success()
+        : const EventActionResult.failure('Failed to approve participant.');
+  }
 
   /// Host decision: turn the student away. No ticket is issued.
   Future<bool> rejectJoining(EventJoining joining) => _eventWrite(
@@ -1900,28 +1938,58 @@ class AppState extends ChangeNotifier {
       );
 
   /// Scans a ticket: marks the holder present and reports whether the code was
-  /// recognised. An unknown code is a `false`, not an error.
-  Future<bool> verifyTicket(String eventId, String ticketCode) async {
+  /// recognised. An unknown code is a failure with "Invalid or unapproved QR
+  /// code.", and a code that has already been scanned is a failure with
+  /// "Attendance has already been recorded." — the attendance is never written
+  /// twice.
+  Future<EventActionResult> verifyTicket(
+      String eventId, String ticketCode) async {
     try {
       final joining =
           await _eventsService.findJoiningByTicketCode(eventId, ticketCode);
-      if (joining == null) return false;
+      if (joining == null) {
+        return const EventActionResult.failure(
+            'Invalid or unapproved QR code.');
+      }
+      // ── Duplicate scan guard ───────────────────────────────────
+      // If attendance was already recorded, do NOT write again. The host sees
+      // a specific message instead of a silent second check-in.
+      if (joining.hasAttended) {
+        return const EventActionResult.failure(
+            'Attendance has already been recorded.');
+      }
       await _eventsService.patchJoining(joining.id, {'hasAttended': true});
-      return true;
+      notifyListeners();
+      return const EventActionResult.success('Entry verified! Participant checked in.');
     } on AuthFailure {
-      return false;
+      return const EventActionResult.failure(
+          'Failed to verify ticket. Please try again.');
     }
   }
 
   /// Assigns a crew role on an event.
-  Future<bool> assignEventRole({
+  ///
+  /// Only a student with an **Approved** joining for the event may receive a
+  /// role. Returns [EventActionResult.failure] with "Only approved participants
+  /// can be assigned event roles." when the student is not an approved
+  /// participant.
+  Future<EventActionResult> assignEventRole({
     required String eventId,
     required String studentId,
     required String studentName,
     required String role,
     List<String> permissions = const <String>[],
-  }) {
-    return _eventWrite(() => _eventsService.assignRole(EventRole(
+  }) async {
+    // ── Participation validation ────────────────────────────────
+    // The student must have an Approved joining for this event before they can
+    // be assigned a crew role.
+    final joining = await _eventsService.getJoiningForStudent(eventId, studentId);
+    if (joining == null || joining.status != 'Approved') {
+      return const EventActionResult.failure(
+          'Only approved participants can be assigned event roles.');
+    }
+
+    final ok = await _eventWrite(() => _eventsService.assignRole(EventRole(
           id: '',
           eventId: eventId,
           studentId: studentId,
@@ -1929,11 +1997,36 @@ class AppState extends ChangeNotifier {
           role: role,
           permissions: permissions,
         )));
+    return ok
+        ? const EventActionResult.success()
+        : const EventActionResult.failure('Failed to assign role.');
   }
 
   /// Revokes a crew role.
   Future<bool> removeEventRole(String roleId) =>
       _eventWrite(() => _eventsService.removeRole(roleId));
+
+  // ── COVER IMAGE ─────────────────────────────────────────────────
+
+  /// Opens the device gallery and returns the selected image file,
+  /// or `null` if the user cancels.
+  Future<File?> pickEventCoverImage() => _cloudinary.pickImageFromGallery();
+
+  /// Uploads a cover image to Cloudinary and returns the result
+  /// containing the secure URL and public ID.
+  ///
+  /// Throws [CloudinaryException] on failure — callers should catch it
+  /// and show an appropriate message.
+  Future<CloudinaryUploadResult> uploadEventCoverToCloudinary(
+    File imageFile, {
+    void Function(int sent, int total)? onProgress,
+  }) =>
+      _cloudinary.uploadImage(imageFile, onProgress: onProgress);
+
+  /// Best-effort removal of a cover image from Cloudinary.
+  Future<void> deleteEventCoverImage(String publicId) async {
+    await _cloudinary.deleteImage(publicId);
+  }
 
   /// Every event mutation ends the same way: the write succeeds, or it fails
   /// with an [AuthFailure] the screen has no use for. Collapsing that into a

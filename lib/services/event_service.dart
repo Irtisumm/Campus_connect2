@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 
 import '../models/auth_result.dart';
 import '../models/event.dart';
@@ -190,6 +192,51 @@ class EventService {
     }
   }
 
+  // ── COVER IMAGE UPLOAD ──────────────────────────────────────────
+
+  /// Uploads a cover image to Firebase Storage and returns its download URL.
+  ///
+  /// The image is stored at `events/{eventId}/cover.jpg`. If [eventId] is
+  /// empty (new event not yet created), a timestamp-based path is used.
+  /// Throws [AuthFailure] on any Firebase error.
+  Future<String> uploadCoverImage({
+    required String eventId,
+    required File imageFile,
+    void Function(int sent, int total)? onProgress,
+  }) async {
+    try {
+      final path = eventId.isEmpty
+          ? 'events/temp/${DateTime.now().millisecondsSinceEpoch}_cover.jpg'
+          : 'events/$eventId/cover.jpg';
+      final ref = FirebaseStorage.instance.ref().child(path);
+      final uploadTask = ref.putFile(imageFile);
+
+      if (onProgress != null) {
+        uploadTask.snapshotEvents.listen((taskSnapshot) {
+          final total = taskSnapshot.totalBytes;
+          final transferred = taskSnapshot.bytesTransferred;
+          if (total > 0) onProgress(transferred, total);
+        });
+      }
+
+      final snapshot = await uploadTask;
+      return await snapshot.ref.getDownloadURL();
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
+  /// Removes a previously uploaded cover image from Storage. Best-effort —
+  /// does not throw if the file no longer exists.
+  Future<void> deleteCoverImage(String coverImageUrl) async {
+    if (coverImageUrl.isEmpty) return;
+    try {
+      await FirebaseStorage.instance.refFromURL(coverImageUrl).delete();
+    } catch (_) {
+      // Best-effort: ignore if already deleted or inaccessible.
+    }
+  }
+
   // ── EVENT STATUS TRANSITIONS ────────────────────────────────────
   //
   // The review lifecycle is a small, closed vocabulary. Keeping the status
@@ -352,6 +399,10 @@ class EventService {
   /// [joiningFields] carries the joining's partial update (status, and the
   /// ticket code when approving). The joining always leaves
   /// `pendingJoiningIds`; it enters `attendeeIds` only when [approved].
+  ///
+  /// Throws [AuthFailure] when [approved] is `true` but the event has already
+  /// reached its participant cap — the host cannot over-approve beyond
+  /// capacity.
   Future<void> decideJoining(
     String joiningId,
     String eventId,
@@ -361,6 +412,17 @@ class EventService {
   }) async {
     _assertAvailable();
     try {
+      // ── Capacity guard on approval ─────────────────────────────
+      if (approved) {
+        final eventDoc = await _events.doc(eventId).get();
+        if (eventDoc.exists) {
+          final event = Event.fromMap(eventDoc.id, eventDoc.data()!);
+          if (event.isFull) {
+            throw const AuthFailure('Event is at full capacity.');
+          }
+        }
+      }
+
       final eventFields = <String, dynamic>{
         'pendingJoiningIds': FieldValue.arrayRemove([joiningId]),
         if (approved) 'attendeeIds': FieldValue.arrayUnion([studentId]),
@@ -398,12 +460,30 @@ class EventService {
   /// Creates a joining document and registers it on the event's roster in a
   /// single [WriteBatch] so the two can never disagree. If either write fails
   /// neither lands — the student never owns an orphaned joining document.
+  ///
+  /// Throws [AuthFailure] with code `resource-exhausted` when the event has a
+  /// participant cap and the approved attendee count has already reached it.
+  /// The caller should surface a "Registration Closed" / "Event Full" message
+  /// in that case rather than attempting the write.
   Future<EventJoining> createJoiningAndRegister(
     EventJoining joining, {
     required bool autoApproved,
   }) async {
     _assertAvailable();
     try {
+      // ── Capacity guard ──────────────────────────────────────────
+      // Only auto-approved joins consume a slot immediately; a Pending join
+      // does not count toward the cap until the host approves it.
+      if (autoApproved) {
+        final eventDoc = await _events.doc(joining.eventId).get();
+        if (eventDoc.exists) {
+          final event = Event.fromMap(eventDoc.id, eventDoc.data()!);
+          if (event.isFull) {
+            throw const AuthFailure('Event is at full capacity.');
+          }
+        }
+      }
+
       final joiningRef = _joinings.doc();
       final eventFields = autoApproved
           ? {'attendeeIds': FieldValue.arrayUnion([joining.studentId])}

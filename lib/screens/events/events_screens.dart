@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -9,6 +10,9 @@ import '../../widgets/common.dart';
 import '../../data/mock_data.dart';
 import '../../theme/app_theme.dart';
 import '../../services/app_state.dart';
+import 'widgets/event_widgets.dart';
+export 'events_hub_screen.dart';
+export 'election_info_screen.dart';
 
 void _toast(BuildContext ctx, String msg) => ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
   content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -20,182 +24,6 @@ AppBar _appBar(String t, BuildContext ctx) => AppBar(
   flexibleSpace: Container(decoration: const BoxDecoration(gradient: AppTheme.headerGradient)),
   leading: IconButton(icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white), onPressed: () => ctx.pop()));
 
-const _catColors = {
-  'Academic': [Color(0x1AC41E3A), Color(0xFFC41E3A)],
-  'Sport':    [Color(0x1AE8475F), Color(0xFFE8475F)],
-  'Club':     [Color(0x1AF8D49B), Color(0xFFE8B96A)],
-  'General':  [Color(0x1AC41E3A), Color(0xFFC41E3A)],
-};
-
-// ── Screen 22: Events Hub ────────────────────────────────────────
-class EventsHubScreen extends StatelessWidget {
-  const EventsHubScreen({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return Consumer<AppState>(
-      builder: (context, appState, child) {
-        return StreamBuilder<List<Event>>(
-          stream: appState.watchPublishedEvents(),
-          builder: (context, eventsSnap) {
-            final events = eventsSnap.data ?? const <Event>[];
-            return StreamBuilder<List<Event>>(
-              stream: appState.watchMyEvents(),
-              builder: (context, mySubmissionsSnap) {
-                final mySubmissions = mySubmissionsSnap.data ?? const <Event>[];
-                return Scaffold(
-          body: SafeArea(child: Column(children: [
-            Padding(padding: const EdgeInsets.fromLTRB(16,12,16,0), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              const Text('Upcoming Events', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
-              Flexible(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(children: [
-                    GestureDetector(onTap: () => context.push('/events/create'), child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7), decoration: BoxDecoration(gradient: AppTheme.primaryGradient, borderRadius: BorderRadius.circular(999)),
-                        child: const Text('➕ Create', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)))),
-                    const SizedBox(width: 8),
-                    GestureDetector(onTap: () => context.push('/events/my-events'), child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7), decoration: BoxDecoration(color: AppTheme.red.withOpacity(0.1), borderRadius: BorderRadius.circular(999), border: Border.all(color: AppTheme.red.withOpacity(0.3))),
-                        child: Text('My Events${mySubmissions.isNotEmpty ? ' (${mySubmissions.length})' : ''}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.red)))),
-                    const SizedBox(width: 8),
-                    GestureDetector(onTap: () => context.push('/events/elections'), child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7), decoration: BoxDecoration(gradient: AppTheme.primaryGradient, borderRadius: BorderRadius.circular(999)),
-                        child: const Text('🗳 Elections', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)))),
-                  ]),
-                ),
-              ),
-            ])),
-
-            // ── My Submissions strip ──────────────────────────────
-            if (mySubmissions.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('My Submissions',
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w800,
-                            color: AppTheme.textPrimary)),
-                    GestureDetector(
-                      onTap: () => context.push('/events/my-events'),
-                      child: const Text('See all →',
-                          style: TextStyle(
-                              fontSize: 11,
-                              color: AppTheme.red,
-                              fontWeight: FontWeight.w700)),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 88,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  itemCount: mySubmissions.length,
-                  itemBuilder: (ctx, i) {
-                    final ev = mySubmissions[i];
-                    final statusColor = switch (ev.status) {
-                      'Published'      => const Color(0xFF4CAF50),
-                      'Rejected'       => const Color(0xFFD65E5E),
-                      'Needs Revision' => const Color(0xFFB8860B),
-                      'Under Review'   => const Color(0xFF2196F3),
-                      _                => AppTheme.textMuted,
-                    };
-                    return GestureDetector(
-                      onTap: () => ev.status == 'Published'
-                          ? context.push('/events/manage/${ev.id}')
-                          : context.push('/events/my-events/${ev.id}'),
-                      child: Container(
-                        width: 180,
-                        margin: const EdgeInsets.only(right: 10),
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: AppTheme.bgCard,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                              color: statusColor.withValues(alpha: 0.4)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(ev.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800)),
-                            Text(fmtDate(ev.date),
-                                style: const TextStyle(
-                                    fontSize: 10,
-                                    color: AppTheme.textMuted)),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: statusColor.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(ev.status,
-                                  style: TextStyle(
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w800,
-                                      color: statusColor)),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 4),
-              const Divider(height: 16, indent: 16, endIndent: 16),
-            ],
-
-            Expanded(child: events.isEmpty
-              ? const Center(child: EmptyState(title: 'No Events Yet', subtitle: 'No upcoming events available.', icon: Icons.event_rounded))
-              : ListView.builder(padding: const EdgeInsets.all(16), itemCount: events.length, itemBuilder: (ctx, i) {
-                final ev = events[i];
-                final colors = _catColors[ev.category] ?? _catColors['General']!;
-                return GestureDetector(
-                  onTap: () => context.push('/events/detail/${ev.id}'),
-                  child: Container(margin: const EdgeInsets.only(bottom: 12), decoration: BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.circular(18), border: Border.all(color: AppTheme.red.withOpacity(0.10)), boxShadow: [BoxShadow(color: AppTheme.red.withOpacity(0.08), blurRadius: 10, offset: const Offset(0,3))]),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Container(height: 80, decoration: BoxDecoration(color: colors[0], borderRadius: const BorderRadius.vertical(top: Radius.circular(18))),
-                        child: Stack(children: [
-                          Center(child: Icon(Icons.event_rounded, size: 42, color: (colors[1]).withOpacity(0.4))),
-                          Positioned(top: 10, right: 10, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: colors[0], borderRadius: BorderRadius.circular(999), border: Border.all(color: colors[1])),
-                              child: Text(ev.category, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: colors[1])))),
-                          if (ev.status == 'Completed')
-                            Positioned(top: 10, left: 10, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: const Color(0xFF4E6272).withOpacity(0.15), borderRadius: BorderRadius.circular(999), border: Border.all(color: const Color(0xFF4E6272))),
-                                child: const Text('COMPLETED', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF4E6272))))),
-                        ])),
-                      Padding(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(ev.title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
-                        const SizedBox(height: 8),
-                        Wrap(spacing: 12, children: [
-                          _Meta(Icons.calendar_today_rounded, fmtDate(ev.date)),
-                          _Meta(Icons.access_time_rounded, ev.time),
-                          _Meta(Icons.location_on_rounded, ev.location),
-                        ]),
-                      ])),
-                    ])),
-                ).animate().fadeIn(delay: (i*70).ms).slideY(begin: 0.15);
-              })),
-          ])),
-                );
-              },
-            );
-          },
-        );
-      },
-    );
-  }
-}
-
 // ── Screen 23: Event Detail ──────────────────────────────────────
 class EventDetailScreen extends StatelessWidget {
   final String id;
@@ -204,20 +32,49 @@ class EventDetailScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<AppState>(
       builder: (context, appState, child) {
-        final userId = appState.userId ?? 'S001';
+        final userId = appState.userId;
+        if (userId == null || userId.isEmpty) {
+          return Scaffold(
+            appBar: _appBar('Event Details', context),
+            body: const EmptyState(
+              icon: Icons.lock_outline_rounded,
+              title: 'Sign in required',
+              subtitle: 'Please sign in to view event details.',
+            ),
+          );
+        }
         return StreamBuilder<Event?>(
           stream: appState.watchEvent(id),
           builder: (context, eventSnap) {
+            if (eventSnap.hasError) {
+              return Scaffold(
+                appBar: _appBar('Event Details', context),
+                body: const EmptyState(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load event',
+                  subtitle: 'Please check your connection and try again.',
+                ),
+              );
+            }
             final ev = eventSnap.data ?? const Event(
               id: '', title: 'Event Not Found', date: '', time: '', location: '',
               category: '', organizer: '', description: '', status: ''
             );
-            final colors = _catColors[ev.category] ?? _catColors['General']!;
             final userJoined = ev.attendeeIds.contains(userId);
 
             return StreamBuilder<List<EventJoining>>(
               stream: appState.watchMyJoinings(),
               builder: (context, joiningsSnap) {
+                if (joiningsSnap.hasError) {
+                  return Scaffold(
+                    appBar: _appBar(ev.title, context),
+                    body: const EmptyState(
+                      icon: Icons.cloud_off_rounded,
+                      title: 'Unable to load event',
+                      subtitle: 'Please check your connection and try again.',
+                    ),
+                  );
+                }
                 final myJoining = (joiningsSnap.data ?? const <EventJoining>[])
                     .where((j) => j.eventId == ev.id && j.status == 'Approved')
                     .firstOrNull;
@@ -229,8 +86,16 @@ class EventDetailScreen extends StatelessWidget {
                 return Scaffold(
           appBar: _appBar(ev.title, context),
           body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
-            Container(height: 130, decoration: BoxDecoration(color: colors[0], borderRadius: BorderRadius.circular(18), border: Border.all(color: (colors[1]).withOpacity(0.25))),
-              child: Center(child: Icon(Icons.event_rounded, size: 64, color: (colors[1]).withOpacity(0.4)))),
+            SizedBox(
+              height: 180,
+              width: double.infinity,
+              child: EventCover(
+                category: ev.category,
+                coverImageUrl: ev.coverImageUrl,
+                radius: BorderRadius.circular(18),
+                iconSize: 64,
+              ),
+            ),
             const SizedBox(height: 14),
             Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(children: [
               InfoRow(label: 'Date', value: fmtDate(ev.date)),
@@ -253,7 +118,25 @@ class EventDetailScreen extends StatelessWidget {
               Text(ev.description, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary, height: 1.7)),
               if (ev.attendeeIds.isNotEmpty) ...[
                 const Divider(height: 20),
-                Text('Attendees: ${ev.attendeeIds.length}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textMuted)),
+                Text(
+                  ev.maxParticipants > 0
+                      ? 'Attendees: ${ev.attendeeIds.length} / ${ev.maxParticipants}'
+                      : 'Attendees: ${ev.attendeeIds.length}',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textMuted)),
+                if (ev.maxParticipants > 0) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    ev.isFull
+                        ? 'Event Full'
+                        : '${ev.availableSlots} slot${ev.availableSlots == 1 ? '' : 's'} available',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: ev.isFull ? AppTheme.danger : AppTheme.textMuted)),
+                ],
               ],
             ]))),
             // ── Creator management shortcut ─────────────────────────
@@ -289,10 +172,37 @@ class EventDetailScreen extends StatelessWidget {
             GradientButton(label: '📅 Add to Calendar', onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Added to calendar ✓')))),
             const SizedBox(height: 10),
             if (!userJoined)
-              GradientButton(
-                label: ev.isPaid ? '💳 Purchase Ticket' : (ev.isPrivate ? '📝 Request to Join' : '✅ Join Event'),
-                onPressed: () => _showJoinDialog(context, appState, ev, userId),
-              )
+              if (ev.isFull)
+                Container(
+                    padding:
+                        const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                    decoration: BoxDecoration(
+                        color: AppTheme.danger.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: AppTheme.danger.withOpacity(0.3))),
+                    child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.do_not_disturb_rounded,
+                              color: AppTheme.danger, size: 18),
+                          SizedBox(width: 8),
+                          Text('Registration Closed — Event Full',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.danger,
+                                  fontSize: 12))
+                        ]))
+              else
+                GradientButton(
+                  label: ev.isPaid
+                      ? '💳 Purchase Ticket'
+                      : (ev.isPrivate
+                          ? '📝 Request to Join'
+                          : '✅ Join Event'),
+                  onPressed: () =>
+                      _showJoinDialog(context, appState, ev, userId),
+                )
             else ...[
               Container(padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16), decoration: BoxDecoration(color: const Color(0xFF4CAF50).withOpacity(0.1), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFF4CAF50).withOpacity(0.3))),
                 child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.check_circle_rounded, color: Color(0xFF4CAF50), size: 18), SizedBox(width: 8), Text('You have joined this event', style: TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF4CAF50), fontSize: 12))])),
@@ -428,6 +338,12 @@ class EventDetailScreen extends StatelessWidget {
             onPressed: () async {
               if (!key.currentState!.validate()) return;
               Navigator.pop(dialogCtx);
+              // Capacity guard: refuse if the event is already full.
+              if (event.isFull) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Registration Closed — Event Full')));
+                return;
+              }
               // Check for an existing registration before attempting to join.
               final existing = await appState.joiningFor(event.id);
               if (existing != null) {
@@ -631,8 +547,9 @@ class EventDetailScreen extends StatelessWidget {
 }
 
 // ── Screen 24: Elections Info ────────────────────────────────────
-class ElectionsInfoScreen extends StatelessWidget {
-  const ElectionsInfoScreen({super.key});
+@Deprecated('Use the redesigned ElectionsInfoScreen from election_info_screen.dart.')
+class LegacyElectionsInfoScreen extends StatelessWidget {
+  const LegacyElectionsInfoScreen({super.key});
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -795,9 +712,29 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
         return StreamBuilder<List<Event>>(
           stream: appState.watchPendingEvents(),
           builder: (context, pendingSnap) {
+            if (pendingSnap.hasError) {
+              return Scaffold(
+                appBar: _appBar('Events Management', context),
+                body: EmptyState(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load events',
+                  subtitle: 'Please check your connection and try again.',
+                ),
+              );
+            }
             return StreamBuilder<List<Event>>(
               stream: appState.watchAllEvents(),
               builder: (context, allSnap) {
+                if (allSnap.hasError) {
+                  return Scaffold(
+                    appBar: _appBar('Events Management', context),
+                    body: EmptyState(
+                      icon: Icons.cloud_off_rounded,
+                      title: 'Unable to load events',
+                      subtitle: 'Please check your connection and try again.',
+                    ),
+                  );
+                }
                 final pendingList = pendingSnap.data ?? const <Event>[];
                 final publishedList = allSnap.data ?? const <Event>[];
                 final data = _showPending ? pendingList : publishedList;
@@ -986,6 +923,7 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
   late TextEditingController _locCtrl;
   late TextEditingController _orgCtrl;
   late TextEditingController _noticeCtrl;
+  late TextEditingController _maxParticipantsCtrl;
   String _category = 'Academic';
   bool _loaded = false;
 
@@ -999,6 +937,7 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
     _locCtrl = TextEditingController();
     _orgCtrl = TextEditingController();
     _noticeCtrl = TextEditingController();
+    _maxParticipantsCtrl = TextEditingController();
   }
 
   @override
@@ -1010,6 +949,7 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
     _locCtrl.dispose();
     _orgCtrl.dispose();
     _noticeCtrl.dispose();
+    _maxParticipantsCtrl.dispose();
     super.dispose();
   }
 
@@ -1044,6 +984,16 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
         return StreamBuilder<List<Event>>(
           stream: appState.watchAllEvents(),
           builder: (context, allEventsSnap) {
+            if (allEventsSnap.hasError) {
+              return Scaffold(
+                appBar: _appBar('Event Editor', context),
+                body: EmptyState(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load events',
+                  subtitle: 'Please check your connection and try again.',
+                ),
+              );
+            }
             final allEvents = allEventsSnap.data ?? const <Event>[];
             final ev = widget.id != null
               ? allEvents.firstWhere((x) => x.id == widget.id, orElse: () => const Event(
@@ -1061,6 +1011,7 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
           _locCtrl.text = ev.location;
           _orgCtrl.text = ev.organizer;
           _category = ev.category;
+          _maxParticipantsCtrl.text = ev.maxParticipants > 0 ? ev.maxParticipants.toString() : '';
           _loaded = true;
         }
 
@@ -1113,6 +1064,12 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
             TextFormField(controller: _locCtrl, decoration: const InputDecoration(labelText: 'Location')),
             const SizedBox(height: 12),
             TextFormField(controller: _orgCtrl, decoration: const InputDecoration(labelText: 'Organizer')),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _maxParticipantsCtrl,
+              decoration: const InputDecoration(labelText: 'Max Participants', hintText: '0 = unlimited'),
+              keyboardType: TextInputType.number,
+            ),
             const SizedBox(height: 18),
 
             // ── Primary Actions ─────────────────────────────────
@@ -1131,6 +1088,7 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
                       organizer: _orgCtrl.text,
                       category: _category,
                       status: ev.status == 'Published' ? ev.status : 'Published',
+                      maxParticipants: int.tryParse(_maxParticipantsCtrl.text.trim()) ?? 0,
                     );
                     await appState.updateEvent(updated);
                     _toast(context, 'Event updated');
@@ -1243,12 +1201,16 @@ class _CreateEventState extends State<CreateEventScreen> {
   final _locC = TextEditingController();
   final _orgC = TextEditingController();
   final _priceC = TextEditingController();
+  final _maxParticipantsC = TextEditingController();
   String? _catVal;
   String? _eventTypeVal;
   bool _clubIdRequired = false;
   bool _done = false;
   DateTime? _selectedDate;
   PlatformFile? _approvalPdf;
+  File? _coverImage;
+  bool _uploadingCover = false;
+  double _uploadProgress = 0;
 
   static const _cats = ['Academic', 'Sport', 'Club', 'General'];
   static const _eventTypes = ['Open', 'Club', 'Club+Payment', 'Paid'];
@@ -1262,6 +1224,7 @@ class _CreateEventState extends State<CreateEventScreen> {
     _locC.dispose();
     _orgC.dispose();
     _priceC.dispose();
+    _maxParticipantsC.dispose();
     super.dispose();
   }
 
@@ -1292,6 +1255,112 @@ class _CreateEventState extends State<CreateEventScreen> {
     setState(() {
       _approvalPdf = result.files.first;
     });
+  }
+
+  Future<void> _pickCoverImage() async {
+    try {
+      final file = await context.read<AppState>().pickEventCoverImage();
+      if (file == null) return;
+      final sizeBytes = await file.length();
+      if (sizeBytes > 5 * 1024 * 1024) {
+        _toast(context, 'Image must be under 5 MB');
+        return;
+      }
+      setState(() {
+        _coverImage = file;
+        _uploadProgress = 0;
+      });
+    } on CloudinaryException catch (e) {
+      _toast(context, e.message);
+    }
+  }
+
+  void _removeCoverImage() {
+    setState(() {
+      _coverImage = null;
+      _uploadProgress = 0;
+    });
+  }
+
+  Widget _buildCoverImagePicker() {
+    if (_coverImage != null) {
+      return Stack(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.file(
+              _coverImage!,
+              width: double.infinity,
+              height: 180,
+              fit: BoxFit.cover,
+            ),
+          ),
+          Positioned(
+            top: 8, right: 8,
+            child: GestureDetector(
+              onTap: _uploadingCover ? null : _removeCoverImage,
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: const BoxDecoration(
+                  color: Colors.black54,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
+              ),
+            ),
+          ),
+          if (_uploadingCover)
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const CircularProgressIndicator(color: Colors.white),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Uploading... ${(_uploadProgress * 100).toInt()}%',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      );
+    }
+
+    return GestureDetector(
+      onTap: _pickCoverImage,
+      child: Container(
+        width: double.infinity,
+        height: 120,
+        decoration: BoxDecoration(
+          color: AppTheme.bgCard,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: AppTheme.red.withValues(alpha: 0.2),
+            style: BorderStyle.solid,
+            width: 1,
+          ),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.add_photo_alternate_outlined, size: 36, color: AppTheme.red.withValues(alpha: 0.6)),
+            const SizedBox(height: 8),
+            Text('Tap to add cover image', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textMuted)),
+            const SizedBox(height: 2),
+            Text('JPG, PNG, WebP — max 5 MB', style: TextStyle(fontSize: 10, color: AppTheme.textMuted.withValues(alpha: 0.7))),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -1355,6 +1424,15 @@ class _CreateEventState extends State<CreateEventScreen> {
           ),
           const SizedBox(height: 12),
         ],
+        TextFormField(
+          controller: _maxParticipantsC,
+          decoration: const InputDecoration(
+            labelText: 'Max Participants',
+            hintText: '0 = unlimited',
+          ),
+          keyboardType: TextInputType.number,
+        ),
+        const SizedBox(height: 12),
         GestureDetector(
           onTap: _pickEventDate,
           child: AbsorbPointer(
@@ -1377,7 +1455,11 @@ class _CreateEventState extends State<CreateEventScreen> {
         TextFormField(controller: _orgC, decoration: const InputDecoration(labelText: 'Organizer', hintText: 'Your club/department'), validator: (v) => v!.isEmpty ? 'Required' : null),
         const SizedBox(height: 12),
         TextFormField(controller: _descC, maxLines: 3, decoration: const InputDecoration(labelText: 'Description', hintText: 'Event details...', alignLabelWithHint: true), validator: (v) => v!.isEmpty ? 'Required' : null),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
+        const SectionLabel('Cover Image (Optional)'),
+        const SizedBox(height: 8),
+        _buildCoverImagePicker(),
+        const SizedBox(height: 16),
         const SectionLabel('Approval Letter (PDF)'),
         NoticeBox(
           message:
@@ -1444,6 +1526,32 @@ class _CreateEventState extends State<CreateEventScreen> {
             final isClub = _eventTypeVal == 'Club' || _eventTypeVal == 'Club+Payment';
             final isPaid = _eventTypeVal == 'Club+Payment' || _eventTypeVal == 'Paid';
             final price = isPaid ? double.tryParse(_priceC.text) ?? 0.0 : 0.0;
+            final maxParticipants = int.tryParse(_maxParticipantsC.text.trim()) ?? 0;
+
+            // Upload cover image to Cloudinary if one was selected
+            String? coverUrl;
+            String? coverPublicId;
+            if (_coverImage != null) {
+              setState(() {
+                _uploadingCover = true;
+                _uploadProgress = 0;
+              });
+              try {
+                final result = await appState.uploadEventCoverToCloudinary(
+                  _coverImage!,
+                  onProgress: (sent, total) {
+                    setState(() => _uploadProgress = sent / total);
+                  },
+                );
+                coverUrl = result.url;
+                coverPublicId = result.publicId;
+              } on CloudinaryException catch (e) {
+                setState(() => _uploadingCover = false);
+                _toast(context, 'Cover image upload failed: ${e.message}');
+                return;
+              }
+              setState(() => _uploadingCover = false);
+            }
 
             final newEvent = Event(
               id: '',
@@ -1465,6 +1573,9 @@ class _CreateEventState extends State<CreateEventScreen> {
               clubIdRequired: isClub && _clubIdRequired,
               isPaid: isPaid,
               price: price,
+              maxParticipants: maxParticipants,
+              coverImageUrl: coverUrl,
+              coverImagePublicId: coverPublicId,
             );
             if (appState.userId == null || appState.userId!.isEmpty) {
               _toast(context, 'You must be logged in to create an event');
@@ -1521,15 +1632,6 @@ class AdminElectionsMgmtScreen extends StatelessWidget {
 }
 
 // ── Shared ────────────────────────────────────────────────────────
-class _Meta extends StatelessWidget {
-  final IconData icon; final String text;
-  const _Meta(this.icon, this.text);
-  @override
-  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
-    Icon(icon, size: 12, color: AppTheme.textMuted), const SizedBox(width: 4),
-    Text(text, style: const TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.w600))]);
-}
-
 class _TL extends StatelessWidget {
   final String date, text;
   const _TL(this.date, this.text);

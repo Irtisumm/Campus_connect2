@@ -472,15 +472,55 @@ service cloud.firestore {
         && request.resource.data.hostStudentId == resource.data.hostStudentId
         && request.resource.data.status in ['Pending', 'Under Review', 'Needs Revision'];
 
-      // Joining a published event. A participant is not the host, so this is
-      // the one write a stranger may make — and it is confined to the two
-      // roster arrays. Every other field, including `status` and `price`, is
-      // untouchable here because `affectedKeys().hasOnly` rejects the write
-      // outright if anything else moved.
+      // ── Roster updates ──────────────────────────────────────────
+      //
+      // Three tightly-scoped rules replace the previous single rule that
+      // allowed any signed-in user to modify both roster arrays freely.
+      // Each rule permits exactly the operation the app's workflow needs
+      // and nothing more.
+
+      // Student auto-join: adds only their own studentId to attendeeIds
+      // on a published event. The array must grow by exactly one element,
+      // that element must be the caller's own studentId (verified through
+      // their profile), and no other field may change. A student can
+      // therefore never inject or remove another person's ID.
+      allow update: if signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && resource.data.status == 'Published'
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['attendeeIds'])
+        && request.resource.data.attendeeIds.size()
+             == resource.data.attendeeIds.size() + 1
+        && request.resource.data.attendeeIds.hasAll(resource.data.attendeeIds)
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+             in request.resource.data.attendeeIds
+        && !(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+             in resource.data.attendeeIds);
+
+      // Student pending-join: adds one entry to pendingJoiningIds on a
+      // published event. The array must grow by exactly one element and
+      // no other field may change. A student cannot read other students'
+      // joining IDs (eventJoinings reads are owner-scoped), so they
+      // cannot inject a real joining ID — only a phantom string with no
+      // matching document, which has no effect on the workflow.
       allow update: if signedIn()
         && resource.data.status == 'Published'
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['attendeeIds', 'pendingJoiningIds']);
+             .hasOnly(['pendingJoiningIds'])
+        && request.resource.data.pendingJoiningIds.size()
+             == resource.data.pendingJoiningIds.size() + 1
+        && request.resource.data.pendingJoiningIds.hasAll(resource.data.pendingJoiningIds);
+
+      // Host roster management: the event's host may modify both roster
+      // arrays on their own published event to approve or reject
+      // participants. Status, host identity and all other fields are
+      // immutable here — only the two roster arrays may change.
+      allow update: if ownsEvent()
+        && resource.data.status == 'Published'
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['attendeeIds', 'pendingJoiningIds'])
+        && request.resource.data.hostStudentId == resource.data.hostStudentId
+        && request.resource.data.status == resource.data.status;
 
       // Admin edits: the whole review lifecycle (approve, reject, request
       // revision, mark completed) plus direct edits. The event's host is
