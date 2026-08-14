@@ -1,61 +1,33 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-import '../../data/mock_data.dart';
-import '../../services/data_service.dart';
+import '../../models/auth_result.dart';
+import '../../services/app_state.dart';
 import '../../theme/luxe.dart';
 
 const _electionInk = Color(0xFF172944);
 const _electionMuted = Color(0xFF596273);
 
-const _electionPositions = <String>[
-  'President',
-  'Vice President',
-  'Secretary General',
-  'Treasurer',
-];
-
-const _timelineEvents = <_TimelineData>[
-  _TimelineData(
-      '25 Mar 2026', 'Candidate registration closes', _TimelineTone.accent),
-  _TimelineData('28–30 Mar 2026', 'Campaigning period', _TimelineTone.accent),
-  _TimelineData('1 Apr 2026', 'Polling Day (Block A Foyer, 8am–5pm)',
-      _TimelineTone.current),
-  _TimelineData('2 Apr 2026', 'Results announced', _TimelineTone.muted),
-];
-
-const _voteSteps = <String>[
-  'Go to the designated polling station.',
-  'Bring your student ID.',
-  'Verify your identity.',
-  'Cast your ballot at the station.',
-  'Follow all official instructions.',
-];
-
-/// Temporary presentation data for the information-only elections page.
-/// Firebase-backed election data can later be mapped into this shape without
-/// changing the widgets below.
-const _electionContent = _ElectionContentData(
-  allPositionsLabel: 'All Positions',
-  noticeTitle: 'This is an information-only page.',
-  noticeBody: 'No online voting is conducted here.',
-  aboutTitle: 'About the Elections',
-  aboutBody:
-      'The Student Council Elections are held annually to elect student representatives. Physical ballot casting is at designated polling stations on campus.',
-  timelineTitle: 'Timeline',
-  upcomingLabel: 'Upcoming',
-  positionsTitle: 'Open Positions',
-  howToVoteTitle: 'How to Vote',
-  pollingLocation: 'Block A Foyer, Main Campus',
-  pollingDate: '1 Apr 2026',
-  pollingTime: '8:00 AM – 5:00 PM',
-  positions: _electionPositions,
-  timeline: _timelineEvents,
-  voteSteps: _voteSteps,
-);
-
+/// Presentation-layer adapter over the Firestore [ElectionMeta] model.
+///
+/// The widgets below were built against this shape; rather than rewrite every
+/// widget to read [ElectionMeta] directly, the model is mapped into this
+/// presentation type once at the top of the build. The `_TimelineData` /
+/// `_TimelineTone` presentation types are likewise mapped from
+/// [ElectionTimelineEntry]. This keeps the presentation layer untouched by
+/// the storage migration — the same approach the events module took.
+///
+/// This adapter is ONLY constructed from a published [ElectionMeta] document.
+/// There is no hardcoded fallback instance: when no election is published the
+/// student screen renders a real empty state instead of dummy content.
 class _ElectionContentData {
+  /// The published election's title, sourced from Firestore. Rendered in the
+  /// hero header — never hardcoded.
+  final String title;
   final String allPositionsLabel;
   final String noticeTitle;
   final String noticeBody;
@@ -73,6 +45,7 @@ class _ElectionContentData {
   final List<String> voteSteps;
 
   const _ElectionContentData({
+    required this.title,
     required this.allPositionsLabel,
     required this.noticeTitle,
     required this.noticeBody,
@@ -89,10 +62,33 @@ class _ElectionContentData {
     required this.timeline,
     required this.voteSteps,
   });
+
+  /// Maps a Firestore [ElectionMeta] document into this presentation shape.
+  factory _ElectionContentData.fromMeta(ElectionMeta meta) {
+    return _ElectionContentData(
+      title: meta.title,
+      allPositionsLabel: meta.allPositionsLabel,
+      noticeTitle: meta.noticeTitle,
+      noticeBody: meta.noticeBody,
+      aboutTitle: meta.aboutTitle,
+      aboutBody: meta.aboutBody,
+      timelineTitle: meta.timelineTitle,
+      upcomingLabel: meta.upcomingLabel,
+      positionsTitle: meta.positionsTitle,
+      howToVoteTitle: meta.howToVoteTitle,
+      pollingLocation: meta.pollingLocation,
+      pollingDate: meta.pollingDate,
+      pollingTime: meta.pollingTime,
+      positions: meta.positions,
+      timeline: meta.timeline.map(_TimelineData.fromEntry).toList(),
+      voteSteps: meta.voteSteps,
+    );
+  }
 }
 
-/// Information-only student election page. Election content remains sourced
-/// from the existing app data; this file only owns the presentation layer.
+/// Information-only student election page. Election content is sourced live
+/// from Firestore (`electionMeta` and `electionCandidates` collections) via
+/// [AppState]; this file only owns the presentation layer.
 class ElectionsInfoScreen extends StatefulWidget {
   const ElectionsInfoScreen({super.key});
 
@@ -101,7 +97,49 @@ class ElectionsInfoScreen extends StatefulWidget {
 }
 
 class _ElectionsInfoScreenState extends State<ElectionsInfoScreen> {
-  String _selectedPosition = _electionContent.allPositionsLabel;
+  /// Tracks the currently selected position filter. Reset to the "All
+  /// Positions" label whenever a new election configuration arrives, so a
+  /// stale filter from a previous cycle never persists.
+  String? _selectedPosition;
+
+  /// TEMPORARY diagnostic: logs the real Firestore error so the root cause of
+  /// the "Unable to load elections" state can be identified. Prints the error
+  /// type, code, message, the authenticated user state, and the collection
+  /// being queried. Remove once the root cause is fixed.
+  void _logElectionError(Object? error, {String collection = 'electionMeta'}) {
+    final fbUser = FirebaseAuth.instance.currentUser;
+    final uid = fbUser?.uid;
+    final isSignedIn = fbUser != null;
+
+    // The ElectionService wraps FirebaseException into AuthFailure, so the
+    // error reaching here is an AuthFailure carrying the original code. We
+    // also handle the raw FirebaseException case in case the wrapper is
+    // bypassed.
+    String code = 'unknown';
+    String message = error.toString();
+    if (error is AuthFailure) {
+      code = error.code ?? 'unknown';
+      message = error.message;
+    } else if (error is FirebaseException) {
+      code = error.code.isEmpty ? 'unknown' : error.code;
+      message = error.message ?? '';
+    }
+
+    debugPrint('═══════════════════════════════════════════════════════');
+    debugPrint('ELECTION SCREEN ERROR — diagnostic log');
+    debugPrint('  error.runtimeType : ${error.runtimeType}');
+    debugPrint('  error.toString()  : $error');
+    debugPrint('  error code        : $code');
+    debugPrint('  error message     : $message');
+    debugPrint('  collection        : $collection');
+    debugPrint('  query             : '
+        'collection("$collection").where("status", isEqualTo: "Published")'
+        '${collection == 'electionMeta' ? '.limit(1)' : ''}');
+    debugPrint('  auth.currentUser  : ${isSignedIn ? "uid=$uid" : "NULL"}');
+    debugPrint('  auth signedIn     : $isSignedIn');
+    debugPrint('  firebase project  : campus-connect-ce3e8');
+    debugPrint('═══════════════════════════════════════════════════════');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -117,56 +155,119 @@ class _ElectionsInfoScreenState extends State<ElectionsInfoScreen> {
           top: true,
           child: SingleChildScrollView(
             physics: const BouncingScrollPhysics(),
-            child: Column(
-              children: [
-                Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 760),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Consumer<DataService>(
-                        builder: (context, dataService, child) {
-                          final candidates = dataService.candidates;
-                          final visibleCandidates = _selectedPosition ==
-                                  _electionContent.allPositionsLabel
-                              ? candidates
-                              : candidates
-                                  .where((candidate) =>
-                                      candidate.position == _selectedPosition)
-                                  .toList();
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 760),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Consumer<AppState>(
+                    builder: (context, appState, child) {
+                      return StreamBuilder<ElectionMeta?>(
+                        stream: appState.watchPublishedElectionMeta(),
+                        builder: (context, metaSnap) {
+                          // ── Error state ──────────────────────────────
+                          // A Firestore failure must never look like "no
+                          // elections exist" and must never surface dummy
+                          // data. Show a real error state with a retry.
+                          if (metaSnap.hasError) {
+                            _logElectionError(metaSnap.error);
+                            return _ElectionErrorState(
+                              onRetry: () => setState(() {}),
+                            );
+                          }
 
-                          return Column(
-                            children: [
-                              const _InformationOnlyBanner(
-                                  data: _electionContent),
-                              const SizedBox(height: 12),
-                              const _ElectionOverviewCard(
-                                  data: _electionContent),
-                              const SizedBox(height: 12),
-                              _OpenPositionsCard(
-                                positions: _electionContent.positions,
-                                title: _electionContent.positionsTitle,
-                              ),
-                              const SizedBox(height: 12),
-                              _CandidatesCard(
-                                candidates: visibleCandidates,
-                                positions: _electionContent.positions,
-                                selectedPosition: _selectedPosition,
-                                onPositionSelected: (position) => setState(
-                                  () => _selectedPosition = position,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              const _HowToVoteCard(data: _electionContent),
-                              const SizedBox(height: 18),
-                            ],
+                          // ── Loading state ────────────────────────────
+                          // While the stream is loading, show a loading
+                          // indicator — never dummy election content.
+                          if (metaSnap.connectionState ==
+                              ConnectionState.waiting) {
+                            return const _ElectionLoadingState();
+                          }
+
+                          final meta = metaSnap.data;
+
+                          // ── Empty state ──────────────────────────────
+                          // No published election → real empty state. Do
+                          // NOT fall back to hardcoded election content.
+                          if (meta == null) {
+                            return const _NoElectionEmptyState();
+                          }
+
+                          // ── Published election ────────────────────────
+                          final content =
+                              _ElectionContentData.fromMeta(meta);
+
+                          // Keep the position filter valid against the
+                          // current cycle's positions, and reset it when a
+                          // new configuration arrives.
+                          final allLabel = content.allPositionsLabel;
+                          if (_selectedPosition == null ||
+                              (_selectedPosition != allLabel &&
+                                  !content.positions
+                                      .contains(_selectedPosition))) {
+                            _selectedPosition = allLabel;
+                          }
+
+                          // Candidates are only subscribed to once an
+                          // election is published — there is nothing to
+                          // show otherwise.
+                          return StreamBuilder<List<Candidate>>(
+                            stream: appState.watchPublishedCandidates(),
+                            builder: (context, candSnap) {
+                              if (candSnap.hasError) {
+                                _logElectionError(candSnap.error,
+                                    collection: 'electionCandidates');
+                                return _ElectionErrorState(
+                                  onRetry: () => setState(() {}),
+                                );
+                              }
+                              final candidates =
+                                  candSnap.data ?? const <Candidate>[];
+                              final visibleCandidates =
+                                  _selectedPosition == allLabel
+                                      ? candidates
+                                      : candidates
+                                          .where((c) =>
+                                              c.position ==
+                                              _selectedPosition)
+                                          .toList();
+
+                              return Column(
+                                children: [
+                                  _ElectionHero(title: content.title),
+                                  const SizedBox(height: 12),
+                                  _InformationOnlyBanner(data: content),
+                                  const SizedBox(height: 12),
+                                  _ElectionOverviewCard(data: content),
+                                  const SizedBox(height: 12),
+                                  _OpenPositionsCard(
+                                    positions: content.positions,
+                                    title: content.positionsTitle,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  _CandidatesCard(
+                                    candidates: visibleCandidates,
+                                    positions: content.positions,
+                                    allPositionsLabel:
+                                        content.allPositionsLabel,
+                                    selectedPosition: _selectedPosition!,
+                                    onPositionSelected: (position) =>
+                                        setState(() =>
+                                            _selectedPosition = position),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  _HowToVoteCard(data: content),
+                                  const SizedBox(height: 18),
+                                ],
+                              );
+                            },
                           );
                         },
-                      ),
-                    ),
+                      );
+                    },
                   ),
                 ),
-              ],
+              ),
             ),
           ),
         ),
@@ -226,6 +327,190 @@ class _InformationOnlyBanner extends StatelessWidget {
             ),
             child: const Icon(Icons.shield_outlined,
                 color: Luxe.primary, size: 23),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Hero header rendered at the top of the published election. The title comes
+/// from Firestore (`ElectionMeta.title`); the subtitle is a static, generic
+/// UI label — it carries no election-specific information.
+class _ElectionHero extends StatelessWidget {
+  final String title;
+
+  const _ElectionHero({required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(18, 20, 18, 20),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF8B1D0E), Color(0xFFB3321B)],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF8B1D0E).withValues(alpha: 0.25),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.how_to_vote_rounded,
+                  color: Colors.white, size: 22),
+              const SizedBox(width: 8),
+              Text('STUDENT ELECTION',
+                  style: Luxe.caption.copyWith(
+                      color: Colors.white.withValues(alpha: 0.85),
+                      letterSpacing: 1.2,
+                      fontWeight: FontWeight.w800)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            title,
+            style: Luxe.title.copyWith(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.w800,
+                height: 1.2),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Stay informed. Your voice shapes our campus.',
+            style: Luxe.body.copyWith(
+                color: Colors.white.withValues(alpha: 0.9), fontSize: 13),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Empty state shown when there is no published election. This is a real
+/// empty state — it never displays dummy election content.
+class _NoElectionEmptyState extends StatelessWidget {
+  const _NoElectionEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 80, horizontal: 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 84,
+            height: 84,
+            decoration: BoxDecoration(
+              color: Luxe.primary.withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.event_busy_rounded,
+                color: Luxe.primary, size: 40),
+          ),
+          const SizedBox(height: 20),
+          Text('No Elections Available',
+              style: Luxe.title.copyWith(
+                  color: _electionInk,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          Text(
+            'There are currently no published student elections. Please check back later.',
+            textAlign: TextAlign.center,
+            style: Luxe.body.copyWith(color: _electionMuted, fontSize: 14),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Loading state shown while the Firestore stream is loading. Never shows
+/// dummy election data.
+class _ElectionLoadingState extends StatelessWidget {
+  const _ElectionLoadingState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 80),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(
+            width: 32,
+            height: 32,
+            child: CircularProgressIndicator(
+                color: Luxe.primary, strokeWidth: 3),
+          ),
+          const SizedBox(height: 16),
+          Text('Loading elections…',
+              style: Luxe.body.copyWith(color: _electionMuted, fontSize: 14)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Error state shown when the Firestore request fails. Never falls back to
+/// dummy data — a Firestore error must never look like "no elections exist".
+class _ElectionErrorState extends StatelessWidget {
+  final VoidCallback onRetry;
+
+  const _ElectionErrorState({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 80, horizontal: 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 84,
+            height: 84,
+            decoration: BoxDecoration(
+              color: Luxe.primaryDeep.withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.cloud_off_rounded,
+                color: Luxe.primaryDeep, size: 40),
+          ),
+          const SizedBox(height: 20),
+          Text('Unable to load elections',
+              style: Luxe.title.copyWith(
+                  color: _electionInk,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800)),
+          const SizedBox(height: 8),
+          Text(
+            'Please check your connection and try again.',
+            textAlign: TextAlign.center,
+            style: Luxe.body.copyWith(color: _electionMuted, fontSize: 14),
+          ),
+          const SizedBox(height: 20),
+          FilledButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: const Text('Retry'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Luxe.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            ),
           ),
         ],
       ),
@@ -499,12 +784,14 @@ class _PositionTile extends StatelessWidget {
 class _CandidatesCard extends StatelessWidget {
   final List<Candidate> candidates;
   final List<String> positions;
+  final String allPositionsLabel;
   final String selectedPosition;
   final ValueChanged<String> onPositionSelected;
 
   const _CandidatesCard({
     required this.candidates,
     required this.positions,
+    required this.allPositionsLabel,
     required this.selectedPosition,
     required this.onPositionSelected,
   });
@@ -524,7 +811,7 @@ class _CandidatesCard extends StatelessWidget {
             child: Row(
               children: [
                 for (final position in [
-                  _electionContent.allPositionsLabel,
+                  allPositionsLabel,
                   ...positions
                 ]) ...[
                   _FilterChip(
@@ -1078,6 +1365,18 @@ class _TimelineData {
   final _TimelineTone tone;
 
   const _TimelineData(this.date, this.description, this.tone);
+
+  /// Maps a Firestore [ElectionTimelineEntry] into this presentation type,
+  /// translating the wire string (`'accent'`, `'current'`, `'muted'`) into
+  /// the [_TimelineTone] enum the timeline widget renders.
+  factory _TimelineData.fromEntry(ElectionTimelineEntry entry) {
+    final tone = switch (entry.tone) {
+      'accent' => _TimelineTone.accent,
+      'current' => _TimelineTone.current,
+      _ => _TimelineTone.muted,
+    };
+    return _TimelineData(entry.date, entry.description, tone);
+  }
 }
 
 enum _TimelineTone { accent, current, muted }

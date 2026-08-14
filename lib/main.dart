@@ -19,6 +19,9 @@ import 'screens/lost_found/lost_found_screens.dart';
 import 'screens/issues/issues_screens.dart';
 import 'screens/events/events_screens.dart';
 import 'screens/events/my_events_screen.dart';
+import 'screens/events/admin_election_detail_screen.dart';
+import 'screens/events/admin_election_editor_screen.dart';
+import 'screens/events/admin_election_archive_screen.dart';
 import 'screens/lockers/lockers_screens.dart';
 import 'screens/auth/registration_screen.dart';
 import 'screens/admin/admin_registrations_screen.dart';
@@ -133,6 +136,9 @@ void _buildRouter(AppState appState) {
     GoRoute(path: '/admin/events/editor',      builder: (_, __) => const AdminEventEditorScreen()),
     GoRoute(path: '/admin/events/editor/:id',  builder: (_, s) => AdminEventEditorScreen(id: s.pathParameters['id']!)),
     GoRoute(path: '/admin/events/elections',   builder: (_, __) => const AdminElectionsMgmtScreen()),
+    GoRoute(path: '/admin/events/elections/detail/:id',  builder: (_, s) => AdminElectionDetailScreen(id: s.pathParameters['id']!)),
+    GoRoute(path: '/admin/events/elections/editor/:id',  builder: (_, s) => AdminElectionEditorScreen(id: s.pathParameters['id']!)),
+    GoRoute(path: '/admin/events/elections/archive',     builder: (_, __) => const AdminElectionArchiveScreen()),
     // ── Lockers ─────────────────────────────────────────────────
     GoRoute(path: '/lockers/browse',           builder: (_, __) => const BrowseLockersScreen()),
     GoRoute(path: '/lockers/detail/:id',       builder: (_, s) => LockerBookingScreen(id: s.pathParameters['id']!)),

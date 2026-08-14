@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 
 import '../models/app_notification.dart';
 import '../models/auth_result.dart';
+import '../models/candidate.dart';
+import '../models/election_meta.dart';
 import '../models/event.dart';
 import '../models/event_action_result.dart';
 import '../models/event_joining.dart';
@@ -24,6 +26,7 @@ import '../models/user_profile.dart';
 import 'admin_service.dart';
 import 'auth_service.dart';
 import 'cloudinary_service.dart';
+import 'election_service.dart';
 import 'event_service.dart';
 import 'issue_service.dart';
 import 'locker_service.dart';
@@ -35,6 +38,8 @@ import 'user_service.dart';
 // Re-exported so screens keep importing a single file for session types.
 export '../models/app_notification.dart' show AppNotification;
 export '../models/auth_result.dart' show AuthResult, AuthFailure;
+export '../models/candidate.dart' show Candidate;
+export '../models/election_meta.dart' show ElectionMeta, ElectionTimelineEntry;
 export '../models/event.dart' show Event;
 export '../models/event_joining.dart' show EventJoining;
 export '../models/event_message.dart' show EventMessage;
@@ -66,6 +71,7 @@ class AppState extends ChangeNotifier {
   final LockerService _lockers;
   final PaymentService _payments;
   final EventService _eventsService;
+  final ElectionService _electionsService;
   final CloudinaryService _cloudinary;
 
   String? _firebaseUid;
@@ -82,6 +88,7 @@ class AppState extends ChangeNotifier {
     LockerService? lockerService,
     PaymentService? paymentService,
     EventService? eventService,
+    ElectionService? electionService,
     CloudinaryService? cloudinaryService,
   })  : _auth = authService ?? AuthService(),
         _users = userService ?? UserService(),
@@ -91,6 +98,7 @@ class AppState extends ChangeNotifier {
         _lockers = lockerService ?? LockerService(),
         _payments = paymentService ?? PaymentService(),
         _eventsService = eventService ?? EventService(),
+        _electionsService = electionService ?? ElectionService(),
         _cloudinary = cloudinaryService ??
             CloudinaryService(
               cloudName: 'xijxwdly',
@@ -2032,6 +2040,107 @@ class AppState extends ChangeNotifier {
   /// with an [AuthFailure] the screen has no use for. Collapsing that into a
   /// bool here keeps the try/catch out of twelve call sites.
   Future<bool> _eventWrite(Future<void> Function() write) async {
+    try {
+      await write();
+      notifyListeners();
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  // ── ELECTIONS ────────────────────────────────────────────────────
+  //
+  // Same shape as the Events section above: reads are streams straight from
+  // the service, writes are futures that return a plain bool or model so no
+  // Firebase type — and no AuthFailure — reaches a screen.
+
+  /// Published candidates, for the student elections info screen.
+  Stream<List<Candidate>> watchPublishedCandidates() =>
+      _electionsService.watchPublishedCandidates();
+
+  /// Every candidate, for the admin dashboard.
+  Stream<List<Candidate>> watchAllCandidates() =>
+      _electionsService.watchAllCandidates();
+
+  /// A single candidate, for the admin detail screen.
+  Stream<Candidate?> watchCandidate(String id) =>
+      _electionsService.watchCandidate(id);
+
+  /// The single published election configuration document, for the student
+  /// elections info screen. Emits `null` when nothing is published yet.
+  Stream<ElectionMeta?> watchPublishedElectionMeta() =>
+      _electionsService.watchPublishedElectionMeta();
+
+  /// The election configuration document regardless of status, for the admin
+  /// manage screen.
+  Stream<ElectionMeta?> watchElectionMeta(String id) =>
+      _electionsService.watchElectionMeta(id);
+
+  /// Every election configuration document, for the admin management and
+  /// archive screens.
+  Stream<List<ElectionMeta>> watchAllElectionMeta() =>
+      _electionsService.watchAllElectionMeta();
+
+  /// Creates a new candidate. Admin-only — enforced by the security rules.
+  Future<bool> createCandidate(Candidate candidate) =>
+      _electionWrite(() => _electionsService.createCandidate(candidate));
+
+  /// Overwrites an existing candidate. Admin-only.
+  Future<bool> updateCandidate(Candidate candidate) =>
+      _electionWrite(() => _electionsService.updateCandidate(candidate));
+
+  /// Publishes a candidate by moving its status to 'Published'.
+  Future<bool> publishCandidate(String id) =>
+      _electionWrite(() => _electionsService.patchCandidate(id, {'status': 'Published'}));
+
+  /// Unpublishes a candidate by moving its status back to 'Pending'.
+  Future<bool> unpublishCandidate(String id) =>
+      _electionWrite(() => _electionsService.patchCandidate(id, {'status': 'Pending'}));
+
+  /// Permanently removes a candidate. Admin-only.
+  Future<bool> deleteCandidate(String id) =>
+      _electionWrite(() => _electionsService.deleteCandidate(id));
+
+  /// Creates a new election configuration document. Admin-only.
+  Future<bool> createElectionMeta(ElectionMeta meta) =>
+      _electionWrite(() => _electionsService.createElectionMeta(meta));
+
+  /// Overwrites the election configuration. Admin-only.
+  Future<bool> updateElectionMeta(ElectionMeta meta) =>
+      _electionWrite(() => _electionsService.updateElectionMeta(meta));
+
+  /// Publishes the election configuration by moving its status to
+  /// 'Published'.
+  Future<bool> publishElectionMeta(String id) =>
+      _electionWrite(() => _electionsService.patchElectionMeta(id, {'status': 'Published'}));
+
+  /// Moves an election into the Admin Archive. The status it held is
+  /// preserved so it can be restored, and the archiving admin is taken from
+  /// the signed-in profile so no caller passes identity around.
+  Future<bool> archiveElectionMeta(String id, {required String previousStatus}) =>
+      _electionWrite(() => _electionsService.archiveElectionMeta(
+            id,
+            previousStatus: previousStatus,
+            archivedBy: _profile?.studentId ?? 'admin',
+            archivedAt: DateTime.now().toIso8601String(),
+          ));
+
+  /// Restores an archived election to its pre-archive status.
+  Future<bool> restoreElectionMeta(String id, {required String previousStatus}) =>
+      _electionWrite(() =>
+          _electionsService.restoreElectionMeta(id, previousStatus: previousStatus));
+
+  /// Unused by the UI: elections are archived, not deleted. The security
+  /// rules deny hard deletes for `electionMeta`.
+  Future<bool> deleteElectionMeta(String id) =>
+      _electionWrite(() => _electionsService.deleteElectionMeta(id));
+
+  /// Every election mutation ends the same way as an event mutation: the
+  /// write succeeds, or it fails with an [AuthFailure] the screen has no use
+  /// for. Collapsing that into a bool here keeps the try/catch out of every
+  /// call site.
+  Future<bool> _electionWrite(Future<void> Function() write) async {
     try {
       await write();
       notifyListeners();

@@ -44,6 +44,15 @@ List<String> asStringList(Object? value) {
 /// site in the models.
 String asString(Object? value) => value?.toString() ?? '';
 
+/// A Firestore value as a nullable [String], where `null` and `''` both mean
+/// "absent". Used for audit fields (`archivedAt`, `archivedBy`) where the
+/// models need to distinguish "set" from "never set" without dragging empty
+/// strings through the UI.
+String? asStringOrNull(Object? value) {
+  final s = value?.toString() ?? '';
+  return s.isEmpty ? null : s;
+}
+
 /// A Firestore value as a [bool].
 ///
 /// Only a literal `true` is true: a missing flag is false, which is what every

@@ -628,6 +628,52 @@ service cloud.firestore {
       // Roles are assigned and revoked, never edited in place.
       allow update: if false;
     }
+
+    // ── ELECTIONS ──────────────────────────────────────────────────
+    //
+    // Two collections, split the same way the Events subsystem is split: a
+    // world-readable inventory (`electionCandidates`, `electionMeta`) and
+    // admin-only writes. A published candidate / election configuration is
+    // public to signed-in users by design — exactly like a published `events`
+    // document. Students never write here; the Elections Admin publishes
+    // everything.
+
+    match /electionCandidates/{candidateId} {
+
+      // A published candidate is public to signed-in users; everything still
+      // pending is visible only to admins.
+      //
+      // On `list`: rules are not filters, so this single per-document rule
+      // covers every feed. The published query (`status == 'Published'`)
+      // passes, an admin's unfiltered query passes via isAdmin(), and a
+      // student's attempt to list the pending queue is denied — the intended
+      // outcome, mirroring `events`.
+      allow get, list: if resource.data.status == 'Published'
+        || isAdmin();
+
+      // Admins author, edit, publish/unpublish and remove candidates. The
+      // status lifecycle is enforced in the app layer, not here — the rules
+      // only gate *who* may write, not *what* they may write.
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /electionMeta/{metaId} {
+
+      // The single election configuration document. A published document is
+      // public to signed-in users; a pending one is admin-only.
+      allow get, list: if resource.data.status == 'Published'
+        || isAdmin();
+
+      // Admins author, edit, publish/unpublish and remove the configuration.
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+
+      // Elections are never hard-deleted — admins move them to the Admin
+      // Archive via status = 'Archived', and the document stays recoverable.
+      allow delete: if false;
+    }
   }
 }
 

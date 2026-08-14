@@ -1,18 +1,18 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../widgets/common.dart';
-import '../../data/mock_data.dart';
+import '../../widgets/delete_countdown_dialog.dart';
+import '../../data/mock_data.dart' hide Candidate;
 import '../../theme/app_theme.dart';
 import '../../services/app_state.dart';
 import 'widgets/event_widgets.dart';
 export 'events_hub_screen.dart';
 export 'election_info_screen.dart';
+export 'create_event_screen.dart';
 
 void _toast(BuildContext ctx, String msg) => ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
   content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -748,6 +748,16 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
           body: Column(children: [
             const Padding(padding: EdgeInsets.fromLTRB(16,8,16,0), child: AdminBar()),
             Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: HubButton(
+                icon: Icons.how_to_vote_rounded,
+                label: 'Election Management',
+                subtitle: 'Manage elections and candidates',
+                iconColor: AppTheme.red,
+                onTap: () => context.push('/admin/events/elections'),
+              ),
+            ),
+            Padding(
               padding: const EdgeInsets.all(16),
               child: Row(children: [
                 Expanded(
@@ -1186,449 +1196,315 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
   }
 }
 
-// ── Screen 26: Create Event (Student) ─────────────────────────────
-class CreateEventScreen extends StatefulWidget {
-  const CreateEventScreen({super.key});
-  @override State<CreateEventScreen> createState() => _CreateEventState();
-}
-
-class _CreateEventState extends State<CreateEventScreen> {
-  final _key = GlobalKey<FormState>();
-  final _titleC = TextEditingController();
-  final _descC = TextEditingController();
-  final _dateC = TextEditingController();
-  final _timeC = TextEditingController();
-  final _locC = TextEditingController();
-  final _orgC = TextEditingController();
-  final _priceC = TextEditingController();
-  final _maxParticipantsC = TextEditingController();
-  String? _catVal;
-  String? _eventTypeVal;
-  bool _clubIdRequired = false;
-  bool _done = false;
-  DateTime? _selectedDate;
-  PlatformFile? _approvalPdf;
-  File? _coverImage;
-  bool _uploadingCover = false;
-  double _uploadProgress = 0;
-
-  static const _cats = ['Academic', 'Sport', 'Club', 'General'];
-  static const _eventTypes = ['Open', 'Club', 'Club+Payment', 'Paid'];
-
-  @override
-  void dispose() {
-    _titleC.dispose();
-    _descC.dispose();
-    _dateC.dispose();
-    _timeC.dispose();
-    _locC.dispose();
-    _orgC.dispose();
-    _priceC.dispose();
-    _maxParticipantsC.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pickEventDate() async {
-    final now = DateTime.now();
-    final minDate = DateTime(now.year, now.month, now.day).add(const Duration(days: 10));
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate ?? minDate,
-      firstDate: minDate,
-      lastDate: now.add(const Duration(days: 365)),
-    );
-    if (picked == null) return;
-    setState(() {
-      _selectedDate = picked;
-      _dateC.text =
-          '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
-    });
-  }
-
-  Future<void> _pickApprovalPdf() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['pdf'],
-      allowMultiple: false,
-    );
-    if (result == null || result.files.isEmpty) return;
-    setState(() {
-      _approvalPdf = result.files.first;
-    });
-  }
-
-  Future<void> _pickCoverImage() async {
-    try {
-      final file = await context.read<AppState>().pickEventCoverImage();
-      if (file == null) return;
-      final sizeBytes = await file.length();
-      if (sizeBytes > 5 * 1024 * 1024) {
-        _toast(context, 'Image must be under 5 MB');
-        return;
-      }
-      setState(() {
-        _coverImage = file;
-        _uploadProgress = 0;
-      });
-    } on CloudinaryException catch (e) {
-      _toast(context, e.message);
-    }
-  }
-
-  void _removeCoverImage() {
-    setState(() {
-      _coverImage = null;
-      _uploadProgress = 0;
-    });
-  }
-
-  Widget _buildCoverImagePicker() {
-    if (_coverImage != null) {
-      return Stack(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Image.file(
-              _coverImage!,
-              width: double.infinity,
-              height: 180,
-              fit: BoxFit.cover,
-            ),
-          ),
-          Positioned(
-            top: 8, right: 8,
-            child: GestureDetector(
-              onTap: _uploadingCover ? null : _removeCoverImage,
-              child: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: const BoxDecoration(
-                  color: Colors.black54,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
-              ),
-            ),
-          ),
-          if (_uploadingCover)
-            Positioned.fill(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const CircularProgressIndicator(color: Colors.white),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Uploading... ${(_uploadProgress * 100).toInt()}%',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-        ],
-      );
-    }
-
-    return GestureDetector(
-      onTap: _pickCoverImage,
-      child: Container(
-        width: double.infinity,
-        height: 120,
-        decoration: BoxDecoration(
-          color: AppTheme.bgCard,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: AppTheme.red.withValues(alpha: 0.2),
-            style: BorderStyle.solid,
-            width: 1,
-          ),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.add_photo_alternate_outlined, size: 36, color: AppTheme.red.withValues(alpha: 0.6)),
-            const SizedBox(height: 8),
-            Text('Tap to add cover image', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textMuted)),
-            const SizedBox(height: 2),
-            Text('JPG, PNG, WebP — max 5 MB', style: TextStyle(fontSize: 10, color: AppTheme.textMuted.withValues(alpha: 0.7))),
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_done) {
-      return Scaffold(
-        body: SafeArea(child: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Container(width: 80, height: 80, decoration: const BoxDecoration(color: Color(0x1AC41E3A), shape: BoxShape.circle),
-            child: const Icon(Icons.check_circle_outline_rounded, size: 48, color: AppTheme.red)),
-          const SizedBox(height: 16),
-          const Text('Event Submitted!', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          const Text('Your event is pending admin approval.\nWe\'ll notify you when it\'s approved.', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: AppTheme.textMuted)),
-          const SizedBox(height: 24),
-          ElevatedButton(onPressed: () => context.go('/events'), child: const Text('Back to Events')),
-        ]))),
-      );
-    }
-
-    return Scaffold(
-      appBar: _appBar('Create Event', context),
-      body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Form(key: _key, child: Column(children: [
-        const NoticeBox(message: 'Your event will be reviewed and approved by admin before publishing.', icon: Icons.info_outline_rounded),
-        NoticeBox(
-          message:
-              'Events must be submitted at least 10 days before the event date to allow admin review.',
-          borderColor: AppTheme.goldDark,
-          bgColor: AppTheme.gold.withOpacity(0.12),
-          textColor: const Color(0xFF7A5B00),
-          icon: Icons.calendar_today_rounded,
-        ),
-        const SectionLabel('Event Details'),
-        TextFormField(controller: _titleC, decoration: const InputDecoration(labelText: 'Event Title', hintText: 'e.g. Tech Talks 2024'), validator: (v) => v!.isEmpty ? 'Required' : null),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String>(initialValue: _catVal, decoration: const InputDecoration(labelText: 'Category'), items: _cats.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(), onChanged: (v) => setState(() => _catVal = v), validator: (v) => v == null ? 'Required' : null),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String>(
-          initialValue: _eventTypeVal,
-          decoration: const InputDecoration(labelText: 'Event Type'),
-          items: _eventTypes.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-          onChanged: (v) => setState(() => _eventTypeVal = v),
-          validator: (v) => v == null ? 'Required' : null,
-        ),
-        const SizedBox(height: 12),
-        if (_eventTypeVal == 'Club' || _eventTypeVal == 'Club+Payment') ...[
-          CheckboxListTile(
-            title: const Text('Require Club ID for joining'),
-            value: _clubIdRequired,
-            onChanged: (v) => setState(() => _clubIdRequired = v ?? false),
-            contentPadding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-          ),
-          const SizedBox(height: 12),
-        ],
-        if (_eventTypeVal == 'Club+Payment' || _eventTypeVal == 'Paid') ...[
-          TextFormField(
-            controller: _priceC,
-            decoration: const InputDecoration(labelText: 'Entry Fee (RM)', hintText: '0.00'),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            validator: (v) => (v!.isEmpty || double.tryParse(v) == null) ? 'Enter valid amount' : null,
-          ),
-          const SizedBox(height: 12),
-        ],
-        TextFormField(
-          controller: _maxParticipantsC,
-          decoration: const InputDecoration(
-            labelText: 'Max Participants',
-            hintText: '0 = unlimited',
-          ),
-          keyboardType: TextInputType.number,
-        ),
-        const SizedBox(height: 12),
-        GestureDetector(
-          onTap: _pickEventDate,
-          child: AbsorbPointer(
-            child: TextFormField(
-              controller: _dateC,
-              decoration: const InputDecoration(
-                labelText: 'Date',
-                hintText: 'Select event date',
-                suffixIcon: Icon(Icons.calendar_month_rounded),
-              ),
-              validator: (v) => v!.isEmpty ? 'Required' : null,
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextFormField(controller: _timeC, decoration: const InputDecoration(labelText: 'Time', hintText: 'HH:MM'), validator: (v) => v!.isEmpty ? 'Required' : null),
-        const SizedBox(height: 12),
-        TextFormField(controller: _locC, decoration: const InputDecoration(labelText: 'Location', hintText: 'e.g. Auditorium A'), validator: (v) => v!.isEmpty ? 'Required' : null),
-        const SizedBox(height: 12),
-        TextFormField(controller: _orgC, decoration: const InputDecoration(labelText: 'Organizer', hintText: 'Your club/department'), validator: (v) => v!.isEmpty ? 'Required' : null),
-        const SizedBox(height: 12),
-        TextFormField(controller: _descC, maxLines: 3, decoration: const InputDecoration(labelText: 'Description', hintText: 'Event details...', alignLabelWithHint: true), validator: (v) => v!.isEmpty ? 'Required' : null),
-        const SizedBox(height: 16),
-        const SectionLabel('Cover Image (Optional)'),
-        const SizedBox(height: 8),
-        _buildCoverImagePicker(),
-        const SizedBox(height: 16),
-        const SectionLabel('Approval Letter (PDF)'),
-        NoticeBox(
-          message:
-              'Upload an official approval letter (PDF) from faculty/management. This is mandatory.',
-          borderColor: AppTheme.danger,
-          bgColor: AppTheme.danger.withOpacity(0.06),
-          textColor: const Color(0xFF8B2020),
-          icon: Icons.description_rounded,
-        ),
-        const SizedBox(height: 8),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: AppTheme.bgCard,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppTheme.red.withOpacity(0.2)),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.picture_as_pdf_rounded, color: AppTheme.red),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  _approvalPdf?.name ?? 'No PDF selected',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: _approvalPdf == null ? AppTheme.textMuted : AppTheme.textPrimary,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: _pickApprovalPdf,
-                child: const Text('Choose PDF'),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 20),
-        GradientButton(label: 'Submit for Approval', onPressed: () async {
-          if (_key.currentState!.validate() && _catVal != null) {
-            final eventDate = DateTime.tryParse(_dateC.text);
-            if (eventDate == null) {
-              _toast(context, 'Please select a valid date');
-              return;
-            }
-            final now = DateTime.now();
-            final today = DateTime(now.year, now.month, now.day);
-            final eventDay = DateTime(eventDate.year, eventDate.month, eventDate.day);
-            final daysUntilEvent = eventDay.difference(today).inDays;
-            if (daysUntilEvent < 10) {
-              _toast(context, 'Events must be submitted at least 10 days in advance');
-              return;
-            }
-            if (_approvalPdf == null) {
-              _toast(context, 'Approval letter PDF is required');
-              return;
-            }
-
-            final appState = context.read<AppState>();
-
-            // Determine event type configuration
-            final isClub = _eventTypeVal == 'Club' || _eventTypeVal == 'Club+Payment';
-            final isPaid = _eventTypeVal == 'Club+Payment' || _eventTypeVal == 'Paid';
-            final price = isPaid ? double.tryParse(_priceC.text) ?? 0.0 : 0.0;
-            final maxParticipants = int.tryParse(_maxParticipantsC.text.trim()) ?? 0;
-
-            // Upload cover image to Cloudinary if one was selected
-            String? coverUrl;
-            String? coverPublicId;
-            if (_coverImage != null) {
-              setState(() {
-                _uploadingCover = true;
-                _uploadProgress = 0;
-              });
-              try {
-                final result = await appState.uploadEventCoverToCloudinary(
-                  _coverImage!,
-                  onProgress: (sent, total) {
-                    setState(() => _uploadProgress = sent / total);
-                  },
-                );
-                coverUrl = result.url;
-                coverPublicId = result.publicId;
-              } on CloudinaryException catch (e) {
-                setState(() => _uploadingCover = false);
-                _toast(context, 'Cover image upload failed: ${e.message}');
-                return;
-              }
-              setState(() => _uploadingCover = false);
-            }
-
-            final newEvent = Event(
-              id: '',
-              title: _titleC.text,
-              category: _catVal!,
-              date: _dateC.text,
-              time: _timeC.text,
-              location: _locC.text,
-              organizer: _orgC.text,
-              description: _descC.text,
-              status: 'Pending',
-              hostStudentId: appState.userId,
-              approvalLetterPath: _approvalPdf!.path,
-              approvalLetterName: _approvalPdf!.name,
-              hasApprovalLetter: true,
-              submittedDate: DateTime.now().toString().split(' ')[0],
-              eventType: _eventTypeVal!,
-              isPrivate: isClub,
-              clubIdRequired: isClub && _clubIdRequired,
-              isPaid: isPaid,
-              price: price,
-              maxParticipants: maxParticipants,
-              coverImageUrl: coverUrl,
-              coverImagePublicId: coverPublicId,
-            );
-            if (appState.userId == null || appState.userId!.isEmpty) {
-              _toast(context, 'You must be logged in to create an event');
-              return;
-            }
-            final created = await appState.createEvent(newEvent);
-            if (created == null) {
-              _toast(context, 'Unable to submit event. Please try again.');
-              return;
-            }
-            setState(() => _done = true);
-          } else {
-            _toast(context, 'Please fill all fields');
-          }
-        }),
-        const SizedBox(height: 10),
-        OutlineBtn(label: 'Cancel', onPressed: () => context.pop()),
-      ]))),
-    );
-  }
-}
-
 // ── Screen 27: Admin Elections Management ────────────────────────
 class AdminElectionsMgmtScreen extends StatelessWidget {
   const AdminElectionsMgmtScreen({super.key});
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: _appBar('Elections Admin', context),
-      body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const AdminBar(), const SizedBox(height: 10),
-        const SectionLabel('Editable Content Blocks'),
-        Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(children: [
-          TextFormField(initialValue: 'The Student Council Elections are held annually…', maxLines: 3, decoration: const InputDecoration(labelText: 'About', alignLabelWithHint: true)),
-          const SizedBox(height: 12),
-          TextFormField(initialValue: '25 Mar – Registration closes\n1 Apr – Polling Day', maxLines: 3, decoration: const InputDecoration(labelText: 'Timeline', alignLabelWithHint: true)),
-          const SizedBox(height: 12),
-          TextFormField(initialValue: 'President, Vice President, Secretary General, Treasurer', decoration: const InputDecoration(labelText: 'Open Positions')),
-        ]))),
-        GradientButton(label: 'Save Content', onPressed: () => _toast(context, 'Content saved')),
-        const SectionLabel('Candidates'),
-        ...MockData.candidates.map((c) => Card(child: ListTile(
-          leading: Container(width: 40, height: 40, decoration: const BoxDecoration(gradient: AppTheme.primaryGradient, shape: BoxShape.circle), child: Center(child: Text(c.name[0], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)))),
-          title: Text(c.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-          subtitle: Text('${c.programme} · ${c.position}'),
-          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-            IconButton(icon: const Icon(Icons.edit_rounded, size: 18, color: AppTheme.red), onPressed: () => _toast(context, 'Edit ${c.name}')),
-            IconButton(icon: const Icon(Icons.close_rounded, size: 18, color: AppTheme.danger), onPressed: () => _toast(context, 'Candidate removed')),
-          ]),
-        ))),
-      ])),
+    return Consumer<AppState>(
+      builder: (context, appState, _) {
+        return StreamBuilder<List<Candidate>>(
+          stream: appState.watchAllCandidates(),
+          builder: (context, snap) {
+            if (snap.hasError) {
+              return Scaffold(
+                appBar: _appBar('Elections Admin', context),
+                body: EmptyState(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load candidates',
+                  subtitle: 'Please check your connection and try again.',
+                ),
+              );
+            }
+            final candidates = snap.data ?? const <Candidate>[];
+            return Scaffold(
+              appBar: _appBar('Elections Admin', context),
+              floatingActionButton: FloatingActionButton.extended(
+                onPressed: () => _showCandidateEditor(context, appState),
+                backgroundColor: AppTheme.red,
+                icon: const Icon(Icons.add, color: Colors.white),
+                label: const Text('Add Candidate',
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w700)),
+              ),
+              body: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const AdminBar(),
+                    const SizedBox(height: 10),
+                    StreamBuilder<List<ElectionMeta>>(
+                      stream: appState.watchAllElectionMeta(),
+                      builder: (context, metaSnap) {
+                        final activeMetas = (metaSnap.data ?? const <ElectionMeta>[])
+                            .where((m) => !m.isArchived)
+                            .toList();
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SectionLabel('Elections'),
+                            if (metaSnap.connectionState == ConnectionState.waiting && activeMetas.isEmpty)
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 24),
+                                child: Center(child: CircularProgressIndicator()),
+                              )
+                            else if (activeMetas.isEmpty)
+                              const EmptyState(
+                                icon: Icons.how_to_vote_rounded,
+                                title: 'No elections yet',
+                                subtitle: 'Elections are created via the seed tool.',
+                              )
+                            else
+                              ...activeMetas.map((meta) => Card(
+                                    child: ListTile(
+                                      leading: Container(
+                                        width: 40,
+                                        height: 40,
+                                        decoration: const BoxDecoration(
+                                            gradient: AppTheme.primaryGradient,
+                                            shape: BoxShape.circle),
+                                        child: Center(
+                                            child: Text(
+                                                meta.title.isNotEmpty ? meta.title[0] : '?',
+                                                style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.w800))),
+                                      ),
+                                      title: Text(meta.title,
+                                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                                      subtitle: Text('${meta.status} · ${meta.pollingDate}'),
+                                      trailing: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton(
+                                                icon: const Icon(Icons.visibility_outlined,
+                                                    size: 18, color: AppTheme.red),
+                                                tooltip: 'View',
+                                                onPressed: () => context.push(
+                                                    '/admin/events/elections/detail/${meta.id}')),
+                                            IconButton(
+                                                icon: const Icon(Icons.edit_rounded,
+                                                    size: 18, color: AppTheme.red),
+                                                tooltip: 'Edit',
+                                                onPressed: () => context.push(
+                                                    '/admin/events/elections/editor/${meta.id}')),
+                                            IconButton(
+                                                icon: const Icon(Icons.archive_outlined,
+                                                    size: 18, color: AppTheme.danger),
+                                                tooltip: 'Archive',
+                                                onPressed: () async {
+                                                  final confirmed = await showArchiveCountdownDialog(
+                                                    context,
+                                                    itemName: meta.title,
+                                                    warning: 'This election will be moved to the Admin Archive. It will no longer appear as an active election.',
+                                                  );
+                                                  if (confirmed != true || !context.mounted) return;
+                                                  final ok = await appState.archiveElectionMeta(
+                                                      meta.id, previousStatus: meta.status);
+                                                  if (!context.mounted) return;
+                                                  _toast(context, ok ? 'Election archived' : 'Archive failed');
+                                                }),
+                                          ]),
+                                    ),
+                                  )),
+                            const SizedBox(height: 10),
+                            HubButton(
+                              icon: Icons.inventory_2_rounded,
+                              label: 'Archived Elections',
+                              subtitle: 'View and restore archived elections',
+                              iconColor: AppTheme.red,
+                              onTap: () => context.push('/admin/events/elections/archive'),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    const SectionLabel('Candidates'),
+                    if (snap.connectionState == ConnectionState.waiting &&
+                        candidates.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Center(child: CircularProgressIndicator()),
+                      )
+                    else if (candidates.isEmpty)
+                      EmptyState(
+                        icon: Icons.how_to_vote_rounded,
+                        title: 'No candidates yet',
+                        subtitle:
+                            'Tap "Add Candidate" to create the first one.',
+                      )
+                    else
+                      ...candidates.map((c) => Card(
+                            child: ListTile(
+                              leading: Container(
+                                width: 40,
+                                height: 40,
+                                decoration: const BoxDecoration(
+                                    gradient: AppTheme.primaryGradient,
+                                    shape: BoxShape.circle),
+                                child: Center(
+                                    child: Text(c.name[0],
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w800))),
+                              ),
+                              title: Text(c.name,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700)),
+                              subtitle: Text(
+                                  '${c.programme} · ${c.position}${c.status == 'Published' ? '' : ' · ${c.status}'}'),
+                              trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                        icon: Icon(
+                                            c.status == 'Published'
+                                                ? Icons.visibility_off_outlined
+                                                : Icons.visibility_outlined,
+                                            size: 18,
+                                            color: AppTheme.red),
+                                        tooltip: c.status == 'Published'
+                                            ? 'Unpublish'
+                                            : 'Publish',
+                                        onPressed: () async {
+                                          final wasPublished =
+                                              c.status == 'Published';
+                                          final ok = wasPublished
+                                              ? await appState
+                                                  .unpublishCandidate(c.id)
+                                              : await appState
+                                                  .publishCandidate(c.id);
+                                          if (!context.mounted) return;
+                                          _toast(
+                                              context,
+                                              ok
+                                                  ? (wasPublished
+                                                      ? 'Candidate unpublished'
+                                                      : 'Candidate published')
+                                                  : 'Action failed');
+                                        }),
+                                    IconButton(
+                                        icon: const Icon(Icons.edit_rounded,
+                                            size: 18, color: AppTheme.red),
+                                        onPressed: () => _showCandidateEditor(
+                                            context, appState,
+                                            candidate: c),
+                                    ),
+                                    IconButton(
+                                        icon: const Icon(Icons.close_rounded,
+                                            size: 18, color: AppTheme.danger),
+                                        onPressed: () async {
+                                          final ok = await appState
+                                              .deleteCandidate(c.id);
+                                          if (!context.mounted) return;
+                                          _toast(
+                                              context,
+                                              ok
+                                                  ? 'Candidate removed'
+                                                  : 'Remove failed');
+                                        }),
+                                  ]),
+                            ),
+                          )),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
+}
+
+/// Dialog-based create/update form for a [Candidate]. Mirrors the lightweight
+/// admin editor pattern used elsewhere in this module — keeps the elections
+/// admin self-contained without introducing a new routed screen.
+Future<void> _showCandidateEditor(
+  BuildContext context,
+  AppState appState, {
+  Candidate? candidate,
+}) async {
+  final isEdit = candidate != null;
+  final nameCtrl = TextEditingController(text: candidate?.name ?? '');
+  final programmeCtrl =
+      TextEditingController(text: candidate?.programme ?? '');
+  final positionCtrl =
+      TextEditingController(text: candidate?.position ?? '');
+  final manifestoCtrl =
+      TextEditingController(text: candidate?.manifesto ?? '');
+
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(isEdit ? 'Edit Candidate' : 'New Candidate'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Name')),
+            const SizedBox(height: 12),
+            TextField(
+                controller: programmeCtrl,
+                decoration: const InputDecoration(labelText: 'Programme')),
+            const SizedBox(height: 12),
+            TextField(
+                controller: positionCtrl,
+                decoration: const InputDecoration(labelText: 'Position')),
+            const SizedBox(height: 12),
+            TextField(
+                controller: manifestoCtrl,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                    labelText: 'Manifesto', alignLabelWithHint: true)),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel')),
+        FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save')),
+      ],
+    ),
+  );
+
+  if (result != true) return;
+  final name = nameCtrl.text.trim();
+  if (name.isEmpty) {
+    _toast(context, 'Name is required');
+    return;
+  }
+  final programme = programmeCtrl.text.trim();
+  final position = positionCtrl.text.trim();
+  final manifesto = manifestoCtrl.text.trim();
+  bool ok;
+  if (isEdit) {
+    ok = await appState.updateCandidate(candidate.copyWith(
+      name: name,
+      programme: programme,
+      position: position,
+      manifesto: manifesto,
+    ));
+  } else {
+    ok = await appState.createCandidate(Candidate(
+      id: '',
+      name: name,
+      programme: programme,
+      position: position,
+      manifesto: manifesto,
+      status: 'Pending',
+    ));
+  }
+  if (!context.mounted) return;
+  _toast(context,
+      ok ? (isEdit ? 'Candidate updated' : 'Candidate created') : 'Save failed');
 }
 
 // ── Shared ────────────────────────────────────────────────────────
