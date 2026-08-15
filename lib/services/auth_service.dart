@@ -104,6 +104,45 @@ class AuthService {
     }
   }
 
+  /// Changes the signed-in user's password.
+  ///
+  /// Firebase requires a fresh credential before a sensitive update like this,
+  /// so the caller supplies the current password and we reauthenticate with an
+  /// `EmailAuthProvider` credential built from `currentUser.email` (which is
+  /// the immutable `authEmail`). The current/new passwords are never logged,
+  /// cached, or persisted — they exist only for this call.
+  ///
+  /// Throws [AuthFailure] with a user-safe message for wrong-current-password,
+  /// weak password, too-many-requests, or requires-recent-login cases.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    _assertAvailable();
+    final user = _authOrNull?.currentUser;
+    if (user == null) {
+      throw const AuthFailure('Please sign in again to continue.');
+    }
+    if (newPassword.length < 6) {
+      throw const AuthFailure(
+          'Password must contain at least six characters.');
+    }
+    final email = user.email;
+    if (email == null || email.isEmpty) {
+      throw const AuthFailure('Please sign in again to continue.');
+    }
+    try {
+      final credential = EmailAuthProvider.credential(
+        email: email,
+        password: currentPassword,
+      );
+      await user.reauthenticateWithCredential(credential);
+      await user.updatePassword(newPassword);
+    } on FirebaseAuthException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
   /// Deletes the currently signed-in account. Used to roll back a
   /// registration whose Firestore profile write failed, so no orphaned
   /// credential is left behind.

@@ -46,6 +46,10 @@ enum AccountStatus {
   }
 }
 
+/// Where a profile load stands, so the Profile screen can show a loading or
+/// retry state instead of hard-coded fallback data.
+enum ProfileLoadStatus { idle, loading, ready, missing, error }
+
 /// A document from the Firestore `users` collection.
 ///
 /// Field names follow the Firestore schema. The legacy getters [userId],
@@ -72,6 +76,26 @@ class UserProfile {
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
+  /// Per-category toggles persisted on the student's own document. Defaults
+  /// mirror the on-screen switches so a fresh account matches the UI.
+  final Map<String, bool> notificationPrefs;
+
+  /// Stored language preference. English is the only supported value today
+  /// (the app has no localization framework); the field is persisted so the
+  /// preference survives relogin and a future i18n layer can read it.
+  final String preferredLanguage;
+
+  /// Default notification toggles for a newly created profile.
+  static const Map<String, bool> defaultNotificationPrefs = {
+    'lostFoundMatches': true,
+    'eventUpdates': true,
+    'issueStatus': true,
+    'lockerReminders': true,
+  };
+
+  /// The only language the app currently supports.
+  static const String defaultLanguage = 'English';
+
   const UserProfile({
     required this.uid,
     required this.studentId,
@@ -82,6 +106,8 @@ class UserProfile {
     required this.role,
     required this.status,
     this.phone = '',
+    this.notificationPrefs = defaultNotificationPrefs,
+    this.preferredLanguage = defaultLanguage,
     this.createdAt,
     this.updatedAt,
   });
@@ -102,6 +128,8 @@ class UserProfile {
     String? faculty,
     String? phone,
     AccountStatus? status,
+    Map<String, bool>? notificationPrefs,
+    String? preferredLanguage,
     DateTime? updatedAt,
   }) {
     return UserProfile(
@@ -115,6 +143,8 @@ class UserProfile {
       role: role,
       status: status ?? this.status,
       phone: phone ?? this.phone,
+      notificationPrefs: notificationPrefs ?? this.notificationPrefs,
+      preferredLanguage: preferredLanguage ?? this.preferredLanguage,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -133,6 +163,8 @@ class UserProfile {
       'role': role.wireValue,
       'status': status.wireValue,
       'phone': phone,
+      'notificationPrefs': notificationPrefs,
+      'preferredLanguage': preferredLanguage,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     };
@@ -157,9 +189,27 @@ class UserProfile {
         fallback: role == UserRole.admin ? AccountStatus.active : AccountStatus.pending,
       ),
       phone: data['phone']?.toString() ?? '',
+      notificationPrefs: _readPrefs(data['notificationPrefs']),
+      preferredLanguage: _readLanguage(data['preferredLanguage']),
       createdAt: _asDate(data['createdAt']),
       updatedAt: _asDate(data['updatedAt']),
     );
+  }
+
+  /// Merges stored toggles over the defaults so a document written before
+  /// these fields existed — or one missing a key — still resolves fully.
+  static Map<String, bool> _readPrefs(Object? value) {
+    final merged = Map<String, bool>.from(defaultNotificationPrefs);
+    if (value is Map) {
+      value.forEach((k, v) => merged[k.toString()] = v == true);
+    }
+    return merged;
+  }
+
+  /// Falls back to the supported default when the field is absent or empty.
+  static String _readLanguage(Object? value) {
+    final raw = value?.toString().trim();
+    return (raw == null || raw.isEmpty) ? defaultLanguage : raw;
   }
 
   static DateTime? _asDate(Object? value) {

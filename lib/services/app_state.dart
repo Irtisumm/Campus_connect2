@@ -52,7 +52,8 @@ export '../models/locker_history.dart' show LockerHistory;
 export '../models/locker_issue.dart' show LockerIssue;
 export '../models/locker_notification.dart' show LockerNotification;
 export '../models/payment.dart' show Payment, PaymentResult;
-export '../models/user_profile.dart' show UserProfile, UserRole, AccountStatus;
+export '../models/user_profile.dart'
+    show UserProfile, UserRole, AccountStatus, ProfileLoadStatus;
 export 'cloudinary_service.dart' show CloudinaryUploadResult, CloudinaryException;
 
 /// App-wide session state and the orchestrator across the three services:
@@ -76,6 +77,7 @@ class AppState extends ChangeNotifier {
 
   String? _firebaseUid;
   UserProfile? _profile;
+  ProfileLoadStatus _profileStatus = ProfileLoadStatus.idle;
   AccountCounts _counts = AccountCounts.empty;
   StreamSubscription<String?>? _authSub;
 
@@ -111,6 +113,26 @@ class AppState extends ChangeNotifier {
     _authSub = _auth.uidChanges().listen(_onUidChanged);
   }
 
+  /// Test-only constructor that seeds a known profile (and optional load
+  /// status) so the Profile screen can be rendered with deterministic data
+  /// in widget tests. Firebase is not initialised in tests, so the default
+  /// constructor would otherwise leave the profile null and the screen in its
+  /// empty state. Never used in production.
+  @visibleForTesting
+  factory AppState.forTesting({
+    UserProfile? profile,
+    ProfileLoadStatus status = ProfileLoadStatus.idle,
+  }) {
+    final state = AppState();
+    // A signed-in-but-unloaded user (loading/missing/error) still has a uid.
+    state._firebaseUid =
+        profile?.uid ?? (status == ProfileLoadStatus.idle ? null : 'test-uid');
+    state._profile = profile;
+    state._profileStatus =
+        profile == null ? status : ProfileLoadStatus.ready;
+    return state;
+  }
+
   bool get _servicesReady =>
       _auth.isAvailable && _users.isAvailable && _admin.isAvailable;
 
@@ -133,6 +155,10 @@ class AppState extends ChangeNotifier {
   AccountStatus? get userStatus => _profile?.status;
   UserProfile? get currentUserProfile => _profile;
 
+  /// Where the current profile load stands, so the Profile screen can show a
+  /// loading or retry state instead of hard-coded fallback data.
+  ProfileLoadStatus get profileLoadStatus => _profileStatus;
+
   // ── USER ANALYTICS ────────────────────────────────────────────────
   int get totalAccounts => _counts.total;
   int get totalStudentAccounts => _counts.students;
@@ -151,15 +177,22 @@ class AppState extends ChangeNotifier {
     _firebaseUid = uid;
     if (uid == null) {
       _profile = null;
+      _profileStatus = ProfileLoadStatus.idle;
       notifyListeners();
       return;
     }
     // Restore the profile after a cold start or Firebase session restore.
     if (_profile == null || _profile!.uid != uid) {
+      _profileStatus = ProfileLoadStatus.loading;
+      notifyListeners();
       try {
         _profile = await _users.fetchProfile(uid);
+        _profileStatus = _profile == null
+            ? ProfileLoadStatus.missing
+            : ProfileLoadStatus.ready;
       } on AuthFailure {
         _profile = null;
+        _profileStatus = ProfileLoadStatus.error;
       }
     }
     // Apply the same gate checks as loginUser so a restored session
@@ -172,11 +205,35 @@ class AppState extends ChangeNotifier {
         } on AuthFailure { /* clear local state regardless */ }
         _firebaseUid = null;
         _profile = null;
+        _profileStatus = ProfileLoadStatus.idle;
       } else if (_profile!.isAdmin) {
         // Only admins can fetch account stats — the queries count all users
         // and are denied by Firestore rules for students.
         unawaited(refreshAccountStats());
       }
+    }
+    notifyListeners();
+  }
+
+  /// Re-fetches the current user's profile. Used by the Profile screen's
+  /// retry affordance when a load failed or the document was missing.
+  Future<void> retryLoadProfile() async {
+    final uid = _firebaseUid;
+    if (uid == null || !_servicesReady) {
+      _profileStatus = ProfileLoadStatus.idle;
+      notifyListeners();
+      return;
+    }
+    _profileStatus = ProfileLoadStatus.loading;
+    notifyListeners();
+    try {
+      _profile = await _users.fetchProfile(uid);
+      _profileStatus = _profile == null
+          ? ProfileLoadStatus.missing
+          : ProfileLoadStatus.ready;
+    } on AuthFailure {
+      _profile = null;
+      _profileStatus = ProfileLoadStatus.error;
     }
     notifyListeners();
   }
@@ -215,6 +272,7 @@ class AppState extends ChangeNotifier {
 
       _firebaseUid = uid;
       _profile = profile;
+      _profileStatus = ProfileLoadStatus.ready;
       notifyListeners();
       // Only fetch account stats for admins — the queries count all users
       // and are denied by Firestore rules for students.
@@ -331,6 +389,7 @@ class AppState extends ChangeNotifier {
     await _auth.clearRememberedIdentifier();
     _firebaseUid = null;
     _profile = null;
+    _profileStatus = ProfileLoadStatus.idle;
     notifyListeners();
   }
 
@@ -1709,6 +1768,57 @@ class AppState extends ChangeNotifier {
         faculty: programme,
         phone: phone,
       );
+      notifyListeners();
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Changes the signed-in student's password. The returned record carries a
+  /// user-safe message; `success && message == null` is not a state — on
+  /// success `message` confirms the change.
+  Future<({bool success, String? message})> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    if (!_servicesReady) {
+      return (success: false, message: 'Please sign in again to continue.');
+    }
+    try {
+      await _auth.changePassword(
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      );
+      return (success: true, message: 'Password changed successfully.');
+    } on AuthFailure catch (failure) {
+      return (success: false, message: failure.message);
+    }
+  }
+
+  /// Persists the signed-in student's notification toggles and refreshes the
+  /// cached profile so the Profile screen reflects the saved state.
+  Future<bool> updateNotificationPrefs(Map<String, bool> prefs) async {
+    final current = _profile;
+    if (current == null || !_servicesReady) return false;
+    try {
+      await _users.updateNotificationPrefs(uid: current.uid, prefs: prefs);
+      _profile = current.copyWith(notificationPrefs: prefs);
+      notifyListeners();
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Persists the signed-in student's preferred language and refreshes the
+  /// cached profile.
+  Future<bool> updatePreferredLanguage(String language) async {
+    final current = _profile;
+    if (current == null || !_servicesReady) return false;
+    try {
+      await _users.updatePreferredLanguage(uid: current.uid, language: language);
+      _profile = current.copyWith(preferredLanguage: language);
       notifyListeners();
       return true;
     } on AuthFailure {

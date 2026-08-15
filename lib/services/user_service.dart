@@ -115,6 +115,40 @@ class UserService {
     }
   }
 
+  /// Persists the notification toggles for the signed-in student. The map is
+  /// written whole so toggles the student turns off are not left stale.
+  Future<void> updateNotificationPrefs({
+    required String uid,
+    required Map<String, bool> prefs,
+  }) async {
+    _assertAvailable();
+    try {
+      await _users.doc(uid).update({
+        'notificationPrefs': prefs,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
+  /// Persists the student's preferred language. The security rules' self-
+  /// update path permits this field, so no rules change is required.
+  Future<void> updatePreferredLanguage({
+    required String uid,
+    required String language,
+  }) async {
+    _assertAvailable();
+    try {
+      await _users.doc(uid).update({
+        'preferredLanguage': language,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
   Future<bool> isStudentIdTaken(String studentId) async {
     _assertAvailable();
     final id = studentId.trim().toUpperCase();
