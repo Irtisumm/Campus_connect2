@@ -35,10 +35,17 @@ class AppNotification {
     switch (item.status) {
       case ItemStatus.active:
         text = 'Your $kind report “${item.title}” is active.';
+      case ItemStatus.awaitingHandover:
+        text = 'Your found report “${item.title}” is awaiting handover — '
+            'please bring the item to the Inventory Office.';
       case ItemStatus.matchedPending:
         text = 'A possible match is pending for “${item.title}”.';
+      case ItemStatus.inInventory:
+        text = 'Your found report “${item.title}” is in inventory.';
       case ItemStatus.resolved:
         text = 'Your $kind report “${item.title}” was resolved.';
+      case ItemStatus.returned:
+        text = 'Your found item “${item.title}” was returned to its owner.';
       case ItemStatus.closed:
         text = 'Your $kind report “${item.title}” was closed.';
     }

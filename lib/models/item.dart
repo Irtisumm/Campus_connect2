@@ -25,16 +25,25 @@ enum ItemType {
 ///
 /// The wire values are the exact strings the existing screens already display
 /// and filter on, so nothing had to be renamed to move this into Firestore.
+///
+/// The last three values belong to the full-workflow build (Workflows 2 and
+/// 3): a found report is born `Awaiting Handover`, moves to `In Inventory`
+/// when the admin confirms the physical handover, and to `Returned` when the
+/// item goes back to its owner.
 enum ItemStatus {
   active('Active'),
+  awaitingHandover('Awaiting Handover'),
   matchedPending('Matched - Pending'),
+  inInventory('In Inventory'),
   resolved('Resolved'),
+  returned('Returned'),
   closed('Closed');
 
   const ItemStatus(this.wireValue);
   final String wireValue;
 
-  static ItemStatus fromWire(Object? value, {ItemStatus fallback = ItemStatus.active}) {
+  static ItemStatus fromWire(Object? value,
+      {ItemStatus fallback = ItemStatus.active}) {
     final raw = value?.toString();
     for (final status in ItemStatus.values) {
       if (status.wireValue == raw) return status;
@@ -158,6 +167,25 @@ class Item {
       'status': status.wireValue,
       'isDeleted': isDeleted,
       'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+  }
+
+  /// The payload written when an existing report is edited.
+  ///
+  /// Only the editable fields are included — `type`, `reportedByUid`,
+  /// `reportedByStudentId`, and `createdAt` are deliberately absent because
+  /// they are immutable (enforced by both `copyWith` and the Firestore rules).
+  /// `updatedAt` is always refreshed via a server timestamp.
+  Map<String, dynamic> toUpdateMap() {
+    return {
+      'title': title,
+      'category': category,
+      'description': description,
+      'whereLost': whereLost,
+      'imageUrls': imageUrls,
+      'status': status.wireValue,
+      'isDeleted': isDeleted,
       'updatedAt': FieldValue.serverTimestamp(),
     };
   }
