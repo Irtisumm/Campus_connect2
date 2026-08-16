@@ -88,6 +88,13 @@ class AppState extends ChangeNotifier {
   final CloudinaryService _cloudinary;
   final CloudinaryService _lostFoundCloudinary;
 
+  /// Fixed `closeReason` values written by the two authorized admin closure
+  /// paths. Never sourced from client input — the Firestore rules accept only
+  /// these two strings.
+  static const String closeReasonStudentRequestApproved =
+      'STUDENT_REQUEST_APPROVED';
+  static const String closeReasonAdminResolved = 'ADMIN_RESOLVED';
+
   String? _firebaseUid;
   UserProfile? _profile;
   ProfileLoadStatus _profileStatus = ProfileLoadStatus.idle;
@@ -549,11 +556,14 @@ class AppState extends ChangeNotifier {
 
   /// Creates a new report, uploading images first (if any).
   ///
-  /// A found report is always born `Awaiting Handover` (the finder must still
-  /// physically hand the item to the Inventory Office), a lost report is born
-  /// `Active` — the status is coerced here so no caller can create a report
-  /// in the wrong state. The Firestore rules enforce the same pair of birth
-  /// statuses independently.
+  /// Both lost and found reports are born `Active` — the status is coerced
+  /// here so no caller can create a report in the wrong state. A found report
+  /// stays `Active` until the admin confirms the physical handover (moving it
+  /// to `In Inventory`); the Firestore rules enforce the same birth status
+  /// independently.
+  ///
+  /// `reportedByName` is captured here from the authenticated profile — never
+  /// from form input — so a student cannot submit a false reporter name.
   ///
   /// Flow: validate → upload all images → write to Firestore. If any image
   /// upload fails, the report is NOT created — the caller receives the
@@ -562,8 +572,22 @@ class AppState extends ChangeNotifier {
   /// [AuthFailure] and can retry the write (the Cloudinary assets are
   /// orphaned — see handoff orphan-handling section).
   Future<Item> createReport(Item item, {List<File>? images}) async {
-    var report = item.copyWith(
-      status: item.isFound ? ItemStatus.awaitingHandover : ItemStatus.active,
+    var report = Item(
+      id: item.id,
+      type: item.type,
+      title: item.title,
+      category: item.category,
+      description: item.description,
+      whereLost: item.whereLost,
+      whenLost: item.whenLost,
+      reportedByUid: item.reportedByUid,
+      reportedByStudentId: item.reportedByStudentId,
+      reportedByName: _profile?.fullName ?? '',
+      imageUrls: item.imageUrls,
+      status: ItemStatus.active,
+      isDeleted: item.isDeleted,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
     );
     if (images != null && images.isNotEmpty) {
       final urls = await uploadReportImages(images);
@@ -572,14 +596,57 @@ class AppState extends ChangeNotifier {
     return _lostFound.createItem(report);
   }
 
-  /// Closes a report that is still in the student's hands.
+  /// Closes a report that is still in the student's hands (admin-only for
+  /// found reports — the admin found-detail "Close Report" path).
   ///
-  /// The only student transitions the Firestore rules permit are
-  /// Active → Closed (lost) and Awaiting Handover → Closed (found, before it
-  /// reaches inventory). Both are expressed by this single call — the rules
-  /// reject any other transition at the database level.
+  /// A student can no longer close a lost report directly: they request
+  /// closure ([requestClose]) and an admin approves it ([approveCloseRequest]).
+  /// The Firestore rules reject a student's lost Active → Closed transition.
   Future<void> closeReport(String id) =>
       _lostFound.updateStatus(id, ItemStatus.closed);
+
+  /// Student request to close their own lost report.
+  ///
+  /// The only permitted transition is Active → Requested Close. The Firestore
+  /// rules reject every other student transition (including a direct
+  /// Active → Closed), and a duplicate request on an already-requested report
+  /// is a no-op at the database level.
+  Future<void> requestClose(String id) =>
+      _lostFound.updateStatus(id, ItemStatus.requestedClose);
+
+  /// Admin approves a student's closure request.
+  ///
+  /// The report must currently be `Requested Close`; it moves to `Closed` with
+  /// `closeReason = STUDENT_REQUEST_APPROVED`. Any still-active match on the
+  /// report is rejected so no dangling reservation survives. The reason is a
+  /// server-fixed constant — never client input.
+  Future<void> approveCloseRequest(String id) async {
+    await _lostFound.updateStatusWithReason(
+        id, ItemStatus.closed, closeReasonStudentRequestApproved);
+    await _lfWorkflow.rejectActiveMatchesForReport(id);
+  }
+
+  /// Admin marks an eligible open report as resolved.
+  ///
+  /// Moves the report to `Closed` with `closeReason = ADMIN_RESOLVED` and
+  /// rejects any still-active match. Replaces the old `Resolved` status path.
+  Future<void> markAsResolved(String id) async {
+    await _lostFound.updateStatusWithReason(
+        id, ItemStatus.closed, closeReasonAdminResolved);
+    await _lfWorkflow.rejectActiveMatchesForReport(id);
+  }
+
+  /// Resolves a reporter's display name for a legacy report that predates
+  /// `reportedByName`. Returns null when the profile cannot be loaded.
+  Future<String?> fetchReporterName(String uid) async {
+    if (uid.isEmpty) return null;
+    try {
+      final profile = await _users.fetchProfile(uid);
+      return profile?.fullName;
+    } on AuthFailure {
+      return null;
+    }
+  }
 
   /// Updates an existing report, uploading new images first (if any).
   ///
@@ -596,13 +663,6 @@ class AppState extends ChangeNotifier {
     }
     return _lostFound.updateItem(report);
   }
-
-  /// Sets a report's status to Resolved (admin-only by policy).
-  ///
-  /// The Firestore rules allow an admin to set any valid status. A student
-  /// attempting this is denied at the database level.
-  Future<void> resolveReport(String id) =>
-      _lostFound.updateStatus(id, ItemStatus.resolved);
 
   /// Sets a report's status to Matched - Pending (admin-only by policy).
   Future<void> matchReport(String id) =>
@@ -677,6 +737,16 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Live count of unread Lost & Found notifications for the signed-in user —
+  /// a student's own, or every notification for an admin. Drives the bell
+  /// badge's unread dot, which clears only once every notification is read.
+  Stream<int> watchUnreadLfNotifications() {
+    final Stream<List<LfNotification>> stream = isAdmin
+        ? _lfWorkflow.watchAllLfNotifications()
+        : _lfWorkflow.watchMyLfNotifications(userId ?? '');
+    return stream.map((list) => list.where((n) => !n.read).length);
+  }
+
   /// Issues a Handover QR for a found report awaiting handover
   /// (admin-only). The returned transaction carries the [QrTransaction.token]
   /// to encode in the QR image.
@@ -732,6 +802,17 @@ class AppState extends ChangeNotifier {
         lostReportTitle: '',
         inventoryTitle: '',
       );
+
+  /// Reserves an inventory item while an admin links it to a lost report.
+  Future<void> reserveInventoryItem(String inventoryItemId) =>
+      _lfWorkflow.reserveInventoryItem(inventoryItemId);
+
+  /// Releases a reserved inventory item back to `In Inventory`.
+  Future<void> releaseInventoryItem(String inventoryItemId) =>
+      _lfWorkflow.releaseInventoryItem(inventoryItemId);
+
+  /// Rejects a match and releases its inventory item atomically.
+  Future<void> rejectMatch(String matchId) => _lfWorkflow.rejectMatch(matchId);
 
   /// Live feed of the signed-in student's own issues, newest first.
   ///

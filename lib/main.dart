@@ -140,6 +140,9 @@ void _buildRouter(AppState appState) {
           path: '/admin/lost-found/inventory',
           builder: (_, __) => const AdminInventoryScreen()),
       GoRoute(
+          path: '/admin/lost-found/inventory/archive',
+          builder: (_, __) => const AdminInventoryArchiveScreen()),
+      GoRoute(
           path: '/admin/lost-found/inventory/:id',
           builder: (_, s) =>
               AdminInventoryDetailScreen(id: s.pathParameters['id']!)),
@@ -663,12 +666,18 @@ class AppShell extends StatelessWidget {
                               Consumer2<DataService, AppState>(
                                 builder:
                                     (context, dataService, appState, child) {
-                                  final unreadCount = dataService
+                                  final legacyUnread = dataService
                                       .unreadNotificationCountForUser(
                                           appState.userId, appState.isAdmin);
-                                  return Stack(
-                                    clipBehavior: Clip.none,
-                                    children: [
+                                  return StreamBuilder<int>(
+                                    stream: appState.watchUnreadLfNotifications(),
+                                    initialData: 0,
+                                    builder: (context, snap) {
+                                      final unreadCount =
+                                          legacyUnread + (snap.data ?? 0);
+                                      return Stack(
+                                        clipBehavior: Clip.none,
+                                        children: [
                                       lightHeader
                                           ? Container(
                                               decoration: BoxDecoration(
@@ -748,7 +757,9 @@ class AppShell extends StatelessWidget {
                                                     curve: Curves.easeInOut),
                                           ),
                                         ),
-                                    ],
+                                        ],
+                                      );
+                                    },
                                   );
                                 },
                               ),

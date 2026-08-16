@@ -113,58 +113,98 @@ service cloud.firestore {
       // beginning of its lifecycle and cannot be born already resolved or
       // already deleted. If a later feature needs to create a report in
       // another state, relax that one line to the same enum list used below.
-      // A lost report is born 'Active'; a found report is born
-      // 'Awaiting Handover' because the finder must still physically hand
-      // the item to the Inventory Office before it enters inventory.
+      // A report is born 'Active' for both lost and found. A found report
+      // stays 'Active' until the admin confirms the physical handover and
+      // moves it to 'In Inventory'.
       allow create: if isSelf(request.resource.data.reportedByUid)
         && request.resource.data.reportedByStudentId is string
+        && request.resource.data.reportedByName is string
         && request.resource.data.type in ['lost', 'found']
-        && request.resource.data.status
-             == (request.resource.data.type == 'found' ? 'Awaiting Handover' : 'Active')
+        && request.resource.data.status == 'Active'
         && request.resource.data.isDeleted == false;
 
       // Edits by the reporter. `isSelf(resource.data.reportedByUid)` reads the
       // owner off the STORED document, so it is the existing owner who is
       // checked — not whatever the incoming payload claims (requirement 5).
       //
-      // reportedByUid and reportedByStudentId are then held equal to their
-      // stored values, so a report can never be reassigned to someone else
-      // (requirement 6). `type` is immutable for the same reason it is fixed in
-      // the Item model: flipping lost <-> found would invalidate any match
-      // already made against the report.
+      // reportedByUid, reportedByStudentId and reportedByName are then held
+      // equal to their stored values, so a report can never be reassigned to
+      // someone else or have its reporter name rewritten (requirement 6).
+      // `type` is immutable for the same reason it is fixed in the Item model:
+      // flipping lost <-> found would invalidate any match already made.
+      // `closeReason` is admin-only, so a student may never set it.
       //
-      // Status transitions: a student may leave the status unchanged (when
-      // editing other fields) or close their own report while it is still in
-      // their hands — Active -> Closed for a lost report, Awaiting Handover ->
-      // Closed for a found report that has not reached inventory yet. All
-      // official statuses are admin-only — enforced here at the database
-      // level, not just in the client.
+      // Status transitions are type-aware. A student may leave the status
+      // unchanged (when editing other fields) or:
+      //   - lost:  Active -> Requested Close (a closure request, never a
+      //            direct close — the admin must approve it);
+      //   - found: Active -> Closed, and the legacy 'Awaiting Handover' ->
+      //            Closed for reports created before found reports were born
+      //            'Active'.
+      // A student can never move a lost report directly to Closed, and every
+      // official status is admin-only — enforced here at the database level,
+      // not just in the client.
       //
       // This rule is also the soft-delete path — `isDeleted` is not pinned, so
       // the owner may flip it to true (requirement 7).
       allow update: if isSelf(resource.data.reportedByUid)
         && request.resource.data.reportedByUid == resource.data.reportedByUid
         && request.resource.data.reportedByStudentId == resource.data.reportedByStudentId
+        && request.resource.data.get('reportedByName', '') == resource.data.get('reportedByName', '')
+        && request.resource.data.get('closeReason', '') == resource.data.get('closeReason', '')
         && request.resource.data.type == resource.data.type
         && request.resource.data.isDeleted is bool
         && (
           request.resource.data.status == resource.data.status
-          || (resource.data.status == 'Active' && request.resource.data.status == 'Closed')
-          || (resource.data.status == 'Awaiting Handover' && request.resource.data.status == 'Closed')
+          || (resource.data.type == 'lost'
+              && resource.data.status == 'Active'
+              && request.resource.data.status == 'Requested Close')
+          || (resource.data.type == 'found'
+              && resource.data.status == 'Active'
+              && request.resource.data.status == 'Closed')
+          || (resource.data.type == 'found'
+              && resource.data.status == 'Awaiting Handover'
+              && request.resource.data.status == 'Closed')
+          // Student handover completion (Workflow 2): the finder's scan moves
+          // the report to 'In Inventory' in the same transaction that confirms
+          // their handover code. `handoverTxnId` must point at a code that is
+          // 'Confirmed' by this same student for this same report — enforced
+          // via getAfter, so a report can never close without a matching
+          // confirmed handover, and a code can never confirm without the
+          // report closing (see the qrTransactions rule).
+          || (resource.data.type == 'found'
+              && resource.data.status in ['Active', 'Awaiting Handover']
+              && request.resource.data.status == 'In Inventory'
+              && request.resource.data.handoverTxnId is string
+              && existsAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId))
+              && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.kind == 'handover'
+              && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.foundReportId == itemId
+              && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.intendedStudentUid == request.auth.uid
+              && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.status == 'Confirmed'
+              && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.confirmedByUid == request.auth.uid)
         );
 
       // Admins moderate any report — resolve it, close it, soft-delete it, or
       // move it through the handover/inventory/return lifecycle — but may not
-      // rewrite who filed it either (requirements 6 and 8).
+      // rewrite who filed it or the reporter's name (requirements 6 and 8).
+      //
+      // `closeReason` is the only field an admin may change beyond the status:
+      // it must stay unchanged, or be set to exactly one of the two fixed
+      // closure reasons. An arbitrary client-supplied reason is rejected.
       allow update: if isAdmin()
         && request.resource.data.reportedByUid == resource.data.reportedByUid
         && request.resource.data.reportedByStudentId == resource.data.reportedByStudentId
+        && request.resource.data.get('reportedByName', '') == resource.data.get('reportedByName', '')
         && request.resource.data.type == resource.data.type
         && request.resource.data.isDeleted is bool
         && request.resource.data.status in [
              'Active', 'Awaiting Handover', 'Matched - Pending',
-             'In Inventory', 'Resolved', 'Returned', 'Closed'
-           ];
+             'In Inventory', 'Resolved', 'Returned', 'Closed', 'Requested Close'
+           ]
+        && (
+          request.resource.data.get('closeReason', '') == resource.data.get('closeReason', '')
+          || request.resource.data.get('closeReason', '') in ['STUDENT_REQUEST_APPROVED', 'ADMIN_RESOLVED']
+        );
 
       // Reports are never hard-deleted, by students or by admins. Removal is
       // `isDeleted: true` through the update rules above, so admin history and
@@ -223,6 +263,25 @@ service cloud.firestore {
              .hasOnly(['status', 'scannedAt'])
         && request.resource.data.status == 'Scanned';
 
+      // Student handover completion (Workflow 2): the intended student's scan
+      // closes the physical handover atomically. The code jumps straight from
+      // 'Issued' to 'Confirmed' (skipping 'Scanned'), and the report must have
+      // moved to 'In Inventory' — pointing back at this code via
+      // `handoverTxnId` — in the same transaction. `confirmedByUid` is the
+      // student's own UID. The `getAfter` cross-document checks make a code
+      // impossible to confirm without the report closing, and vice versa.
+      allow update: if signedIn()
+        && request.auth.uid == resource.data.intendedStudentUid
+        && resource.data.kind == 'handover'
+        && resource.data.status == 'Issued'
+        && request.time < resource.data.expiresAt
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'scannedAt', 'confirmedAt', 'confirmedByUid', 'updatedAt'])
+        && request.resource.data.status == 'Confirmed'
+        && request.resource.data.confirmedByUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/items/$(resource.data.foundReportId)).data.status == 'In Inventory'
+        && getAfter(/databases/$(database)/documents/items/$(resource.data.foundReportId)).data.handoverTxnId == txnId;
+
       // Admin confirmation/cancellation. Confirmation requires the intended
       // student to have scanned first ('Scanned' -> 'Confirmed'), still
       // within expiry. Cancellation is 'Issued' -> 'Cancelled'. Every
@@ -259,14 +318,34 @@ service cloud.firestore {
         && request.resource.data.finderUid is string
         && request.resource.data.finderStudentId is string;
 
-      // Admin-only edits: status moves only In Inventory -> Returned, and
-      // the record can never be re-pointed at another finder or report.
+      // Student handover completion (Workflow 2): the finder creates their
+      // own inventory record in the same transaction that confirms their
+      // handover code. The record must point back at a code that is
+      // 'Confirmed' by this same student for this same report — enforced via
+      // getAfter, so an inventory record can never be born without a matching
+      // confirmed handover.
+      allow create: if signedIn()
+        && request.resource.data.status == 'In Inventory'
+        && request.resource.data.foundReportId is string
+        && request.resource.data.finderUid == request.auth.uid
+        && request.resource.data.finderStudentId is string
+        && request.resource.data.handoverTxnId is string
+        && existsAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId))
+        && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.kind == 'handover'
+        && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.foundReportId == request.resource.data.foundReportId
+        && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.intendedStudentUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.status == 'Confirmed'
+        && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.confirmedByUid == request.auth.uid;
+
+      // Admin-only edits: status moves only In Inventory -> Reserved ->
+      // In Inventory (release) or Returned, and the record can never be
+      // re-pointed at another finder or report.
       allow update: if isAdmin()
         && request.resource.data.foundReportId == resource.data.foundReportId
         && request.resource.data.finderUid == resource.data.finderUid
         && request.resource.data.finderStudentId == resource.data.finderStudentId
-        && resource.data.status == 'In Inventory'
-        && request.resource.data.status in ['In Inventory', 'Returned'];
+        && resource.data.status in ['In Inventory', 'Reserved']
+        && request.resource.data.status in ['In Inventory', 'Reserved', 'Returned'];
 
       // Inventory records are audit history, never deleted.
       allow delete: if false;
@@ -295,7 +374,7 @@ service cloud.firestore {
         && request.resource.data.inventoryItemId == resource.data.inventoryItemId
         && request.resource.data.lostOwnerUid == resource.data.lostOwnerUid
         && request.resource.data.lostOwnerStudentId == resource.data.lostOwnerStudentId
-        && request.resource.data.status in ['Proposed', 'Approved', 'Completed'];
+        && request.resource.data.status in ['Proposed', 'Approved', 'Completed', 'Rejected'];
 
       // Matches are audit records, never deleted.
       allow delete: if false;

@@ -46,6 +46,8 @@ class AppNotification {
         text = 'Your $kind report “${item.title}” was resolved.';
       case ItemStatus.returned:
         text = 'Your found item “${item.title}” was returned to its owner.';
+      case ItemStatus.requestedClose:
+        text = 'Your $kind report “${item.title}” is awaiting closure approval.';
       case ItemStatus.closed:
         text = 'Your $kind report “${item.title}” was closed.';
     }

@@ -499,11 +499,18 @@ class EventDetailScreen extends StatelessWidget {
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: AppTheme.textMuted.withOpacity(0.2))),
-                  child: QrImageView(
-                    data: qrCode,
-                    version: QrVersions.auto,
-                    size: 200,
-                    gapless: false,
+                  // Fixed SizedBox: QrImageView uses an internal LayoutBuilder,
+                  // which throws when AlertDialog measures content via an
+                  // intrinsic-width pass. A tight box answers with its own size.
+                  child: SizedBox(
+                    width: 200,
+                    height: 200,
+                    child: QrImageView(
+                      data: qrCode,
+                      version: QrVersions.auto,
+                      size: 200,
+                      gapless: false,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),

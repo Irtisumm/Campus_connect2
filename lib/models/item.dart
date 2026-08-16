@@ -27,9 +27,9 @@ enum ItemType {
 /// and filter on, so nothing had to be renamed to move this into Firestore.
 ///
 /// The last three values belong to the full-workflow build (Workflows 2 and
-/// 3): a found report is born `Awaiting Handover`, moves to `In Inventory`
-/// when the admin confirms the physical handover, and to `Returned` when the
-/// item goes back to its owner.
+/// 3): a found report is born `Active`, moves to `In Inventory` when the
+/// admin confirms the physical handover, and to `Returned` when the item
+/// goes back to its owner.
 enum ItemStatus {
   active('Active'),
   awaitingHandover('Awaiting Handover'),
@@ -37,6 +37,7 @@ enum ItemStatus {
   inInventory('In Inventory'),
   resolved('Resolved'),
   returned('Returned'),
+  requestedClose('Requested Close'),
   closed('Closed');
 
   const ItemStatus(this.wireValue);
@@ -83,8 +84,17 @@ class Item {
   /// can show who reported an item without a second read.
   final String reportedByStudentId;
 
+  /// Display name of the reporter, captured at creation from the authenticated
+  /// profile. Immutable — never editable by the student or admin, and never a
+  /// fallback to [reportedByStudentId].
+  final String reportedByName;
+
   final List<String> imageUrls;
   final ItemStatus status;
+
+  /// Why the report reached `Closed`. Set only by the authorized admin closure
+  /// paths (`STUDENT_REQUEST_APPROVED` / `ADMIN_RESOLVED`); null otherwise.
+  final String? closeReason;
 
   /// Soft delete. Reports are hidden rather than removed so admin history and
   /// any match already made against them survive.
@@ -102,9 +112,11 @@ class Item {
     required this.whereLost,
     required this.reportedByUid,
     required this.reportedByStudentId,
+    this.reportedByName = '',
     this.whenLost,
     this.imageUrls = const <String>[],
     this.status = ItemStatus.active,
+    this.closeReason,
     this.isDeleted = false,
     this.createdAt,
     this.updatedAt,
@@ -142,8 +154,10 @@ class Item {
       // Reporter identity is fixed at creation.
       reportedByUid: reportedByUid,
       reportedByStudentId: reportedByStudentId,
+      reportedByName: reportedByName,
       imageUrls: imageUrls ?? this.imageUrls,
       status: status ?? this.status,
+      closeReason: closeReason,
       isDeleted: isDeleted ?? this.isDeleted,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -163,6 +177,7 @@ class Item {
       'whenLost': whenLost == null ? null : Timestamp.fromDate(whenLost!),
       'reportedByUid': reportedByUid,
       'reportedByStudentId': reportedByStudentId,
+      'reportedByName': reportedByName,
       'imageUrls': imageUrls,
       'status': status.wireValue,
       'isDeleted': isDeleted,
@@ -201,8 +216,10 @@ class Item {
       whenLost: _asDate(data['whenLost']),
       reportedByUid: data['reportedByUid']?.toString() ?? '',
       reportedByStudentId: data['reportedByStudentId']?.toString() ?? '',
+      reportedByName: data['reportedByName']?.toString() ?? '',
       imageUrls: _asStringList(data['imageUrls']),
       status: ItemStatus.fromWire(data['status']),
+      closeReason: data['closeReason']?.toString(),
       isDeleted: data['isDeleted'] == true,
       createdAt: _asDate(data['createdAt']),
       updatedAt: _asDate(data['updatedAt']),

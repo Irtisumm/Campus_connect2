@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../models/item.dart';
 import '../../widgets/common.dart';
 import '../../theme/app_theme.dart';
@@ -78,6 +80,12 @@ class _LostFoundHubScreenState extends State<LostFoundHubScreen> {
         final all = snapshot.data ?? const <Item>[];
         final lost = all.where((r) => r.isLost).toList(growable: false);
         final found = all.where((r) => r.isFound).toList(growable: false);
+        // "Found Reports" counts only found reports that are still Active —
+        // once a found report is handed over (In Inventory), returned,
+        // resolved, or closed it no longer counts as an active found report.
+        final activeFound = found
+            .where((r) => r.status == ItemStatus.active)
+            .length;
         final active = all
             .where((r) =>
                 r.status == ItemStatus.active ||
@@ -96,7 +104,7 @@ class _LostFoundHubScreenState extends State<LostFoundHubScreen> {
               children: [
                 const _LostFoundIdentityRow(),
                 const _LostFoundHero(),
-                const SizedBox(height: Luxe.s1),
+                const SizedBox(height: Luxe.s2),
                 const _PrivacyCard()
                     .animate()
                     .fadeIn(duration: 420.ms)
@@ -108,7 +116,6 @@ class _LostFoundHubScreenState extends State<LostFoundHubScreen> {
                   final cards = [
                     _HeroActionCard(
                       title: 'Report Lost Item',
-                      subtitle: "I've lost something on campus",
                       icon: Icons.search_rounded,
                       gradient: Luxe.lostGradient,
                       glow: Luxe.primary,
@@ -121,7 +128,6 @@ class _LostFoundHubScreenState extends State<LostFoundHubScreen> {
                     ),
                     _HeroActionCard(
                       title: 'Report Found Item',
-                      subtitle: 'I found something on campus',
                       icon: Icons.inventory_2_rounded,
                       gradient: Luxe.foundGradient,
                       glow: Luxe.accent,
@@ -147,7 +153,7 @@ class _LostFoundHubScreenState extends State<LostFoundHubScreen> {
                 }),
                 const SizedBox(height: Luxe.s4),
                 _StatsCard(
-                    lost: lost.length, found: found.length, active: active),
+                    lost: lost.length, found: activeFound, active: active),
                 const SizedBox(height: Luxe.s4),
                 _HubSectionHeader(
                   'MY REPORTS',
@@ -425,12 +431,17 @@ class _LostFoundIdentityRow extends StatelessWidget {
               SizedBox(width: gap),
               Consumer2<DataService, AppState>(
                 builder: (context, dataService, appState, child) {
-                  final unreadCount =
+                  final legacyUnread =
                       dataService.unreadNotificationCountForUser(
                           appState.userId, appState.isAdmin);
-                  return Stack(
-                    clipBehavior: Clip.none,
-                    children: [
+                  return StreamBuilder<int>(
+                    stream: appState.watchUnreadLfNotifications(),
+                    initialData: 0,
+                    builder: (context, snap) {
+                      final unreadCount = legacyUnread + (snap.data ?? 0);
+                      return Stack(
+                        clipBehavior: Clip.none,
+                        children: [
                       _IdentityIconButton(
                         size: controlSize,
                         iconSize: iconSize,
@@ -464,7 +475,9 @@ class _LostFoundIdentityRow extends StatelessWidget {
                             ),
                           ),
                         ),
-                    ],
+                        ],
+                      );
+                    },
                   );
                 },
               ),
@@ -529,7 +542,7 @@ class _LostFoundHero extends StatelessWidget {
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 390;
         return SizedBox(
-          height: compact ? 140 : 148,
+          height: compact ? 112 : 120,
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -568,12 +581,12 @@ class _LostFoundHero extends StatelessWidget {
                         ),
                         const SizedBox(height: Luxe.s3),
                         Text(
-                          'Report lost or found items and help our campus community.',
+                          'Report lost items and report found items.',
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: Luxe.body.copyWith(
                             color: Luxe.inkSoft,
-                            fontSize: compact ? 14 : 15,
+                            fontSize: compact ? 15 : 16,
                             height: 1.48,
                           ),
                         ),
@@ -584,7 +597,7 @@ class _LostFoundHero extends StatelessWidget {
               ),
               Positioned(
                 right: compact ? -8 : 0,
-                top: compact ? 6 : 8,
+                top: compact ? -18 : -24,
                 child: _LostFoundArtwork(size: compact ? 122 : 134),
               ),
             ],
@@ -1027,17 +1040,34 @@ class _PrivacyCard extends StatelessWidget {
               const SizedBox(height: Luxe.s2),
               Container(height: 1, color: Luxe.hairline),
               const SizedBox(height: Luxe.s1),
-              const FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
+              const SizedBox(
+                width: double.infinity,
                 child: Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    LuxeSecurityChip('Secure'),
-                    SizedBox(width: Luxe.s2),
-                    LuxeSecurityChip('Encrypted'),
-                    SizedBox(width: Luxe.s2),
-                    LuxeSecurityChip('Trusted'),
+                    const Expanded(
+                      child: Center(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: LuxeSecurityChip('Secure'),
+                        ),
+                      ),
+                    ),
+                    const Expanded(
+                      child: Center(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: LuxeSecurityChip('Encrypted'),
+                        ),
+                      ),
+                    ),
+                    const Expanded(
+                      child: Center(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: LuxeSecurityChip('Trusted'),
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -1051,7 +1081,7 @@ class _PrivacyCard extends StatelessWidget {
 
 /// ── Hero action card (Report Lost / Report Found) ─────────────────
 class _HeroActionCard extends StatelessWidget {
-  final String title, subtitle;
+  final String title;
   final IconData icon;
   final Gradient gradient;
   final Color glow;
@@ -1060,7 +1090,6 @@ class _HeroActionCard extends StatelessWidget {
 
   const _HeroActionCard({
     required this.title,
-    required this.subtitle,
     required this.icon,
     required this.gradient,
     required this.glow,
@@ -1070,11 +1099,10 @@ class _HeroActionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final helperText = subtitle.replaceFirst(' on campus', '\non campus');
     return LayoutBuilder(
       builder: (context, constraints) {
         final narrowCard = constraints.maxWidth < 170;
-        final cardHeight = narrowCard ? 116.0 : 112.0;
+        final cardHeight = narrowCard ? 132.0 : 128.0;
         final semanticLabel = title == 'Report Lost Item'
             ? 'Report a lost item'
             : 'Report a found item';
@@ -1121,28 +1149,26 @@ class _HeroActionCard extends StatelessWidget {
                           ),
                           child: Icon(icon, color: Colors.white, size: 21),
                         ),
-                        const Spacer(),
-                        FittedBox(
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.centerLeft,
-                          child: Text(title,
-                              maxLines: 1,
-                              style: Luxe.cardTitle.copyWith(
-                                  fontSize: 14.5, color: Colors.white)),
-                        ),
-                        const SizedBox(height: 3),
-                        Padding(
-                          padding: const EdgeInsets.only(right: 36),
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            alignment: Alignment.centerLeft,
-                            child: Text(helperText,
-                                maxLines: 2,
-                                style: Luxe.body.copyWith(
-                                    fontSize: 11,
-                                    height: 1.25,
-                                    color:
-                                        Colors.white.withValues(alpha: 0.90))),
+                        Expanded(
+                          child: Center(
+                            child: Transform.translate(
+                              offset: const Offset(0, -14),
+                              child: Padding(
+                                padding: const EdgeInsets.only(right: 16),
+                                child: SizedBox(
+                                  width: double.infinity,
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    alignment: Alignment.center,
+                                    child: Text(title,
+                                        maxLines: 1,
+                                        textAlign: TextAlign.center,
+                                        style: Luxe.cardTitle.copyWith(
+                                            fontSize: 18, color: Colors.white)),
+                                  ),
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ],
@@ -1508,8 +1534,8 @@ class _ReportLostHeader extends StatelessWidget {
                       button: true,
                       label: 'Back',
                       child: Container(
-                        width: 48,
-                        height: 48,
+                        width: 44,
+                        height: 44,
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: .16),
                           borderRadius: BorderRadius.circular(16),
@@ -2035,6 +2061,23 @@ class _ReportFoundState extends State<ReportFoundScreen> {
     'Other'
   ];
 
+  @override
+  void initState() {
+    super.initState();
+    _descC.addListener(_descriptionChanged);
+  }
+
+  void _descriptionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _descC.removeListener(_descriptionChanged);
+    _descC.dispose();
+    super.dispose();
+  }
+
   /// Persists the found report to Firestore through [LostFoundService].
   ///
   /// Mirrors `_ReportLostState._submit` — the only difference is
@@ -2088,46 +2131,445 @@ class _ReportFoundState extends State<ReportFoundScreen> {
       return _FoundReportStepperView(
           onHome: () => context.go('/lost-found'),
           onViewReports: () => context.push('/lost-found/my-found'));
+    final horizontal = MediaQuery.sizeOf(context).width < 360 ? 18.0 : 24.0;
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom +
+        MediaQuery.paddingOf(context).bottom +
+        24;
     return Scaffold(
-      appBar: _gradientAppBar('Report Found Item', context),
+      backgroundColor: Colors.white,
+      appBar: PreferredSize(
+        // 88 dp of content plus the device's safe-area inset keeps the full
+        // hero compact while still making room for the status bar/cutout.
+        preferredSize: Size.fromHeight(MediaQuery.paddingOf(context).top + 88),
+        child: const _ReportFoundHeader(),
+      ),
       body: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(children: [
-            NoticeBox(
-                message:
-                    'Please hand the item to Lost & Found Office (Block A, Level 1) after submitting.',
-                borderColor: AppTheme.red,
-                bgColor: AppTheme.red.withOpacity(0.08),
-                textColor: const Color(0xFF8B1428)),
-            _Drop(
-                label: 'Category',
-                value: _cat,
-                items: _cats,
-                onChanged: (v) => setState(() => _cat = v)),
-            _Area(
-                label: 'Description',
-                hint: 'Describe what you found',
-                ctrl: _descC),
-            _Drop(
-                label: 'Where Found',
-                value: _loc,
-                items: _locs,
-                onChanged: (v) => setState(() => _loc = v)),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+        padding: EdgeInsets.fromLTRB(horizontal, 22, horizontal, bottomInset),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const _ReportFoundReminder(),
+            const SizedBox(height: 24),
+            _FoundSelectField(
+              label: 'Category',
+              hint: 'Select category',
+              value: _cat,
+              items: _cats,
+              onChanged: (v) => setState(() => _cat = v),
+            ),
+            const SizedBox(height: 20),
+            _FoundDescriptionField(controller: _descC),
+            const SizedBox(height: 20),
+            _FoundSelectField(
+              label: 'Where Found',
+              hint: 'Select location',
+              value: _loc,
+              items: _locs,
+              onChanged: (v) => setState(() => _loc = v),
+            ),
+            const SizedBox(height: 24),
             _PhotoBox(
-                onImagesChanged: (imgs) => _images
-                  ..clear()
-                  ..addAll(imgs)),
-            const SizedBox(height: 16),
-            GradientButton(
-                label: 'Submit Report', onPressed: _saving ? null : _submit),
-            const SizedBox(height: 10),
-            OutlineBtn(label: 'Cancel', onPressed: () => context.pop()),
-          ])),
+              foundStyle: true,
+              onImagesChanged: (imgs) => _images
+                ..clear()
+                ..addAll(imgs),
+            ),
+            const SizedBox(height: 24),
+            _ReportFoundSubmitButton(
+              saving: _saving,
+              onPressed: _saving ? null : _submit,
+            ),
+            const SizedBox(height: 12),
+            _ReportFoundCancelButton(onPressed: () => context.pop()),
+          ],
+        ),
+      ),
     );
   }
 }
 
 // ── Screen 4: My Lost Reports ────────────────────────────────────
+class _ReportFoundHeader extends StatelessWidget {
+  const _ReportFoundHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light
+          .copyWith(statusBarColor: Colors.transparent),
+      child: Container(
+        clipBehavior: Clip.hardEdge,
+        decoration: const BoxDecoration(
+          gradient: Luxe.heroGradient,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(30)),
+        ),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Opacity(
+                  opacity: .22,
+                  child: CustomPaint(painter: HeaderBackdropPainter()),
+                ),
+              ),
+            ),
+            Positioned(
+              right: 10,
+              top: 26,
+              child: IgnorePointer(
+                child: Opacity(
+                  opacity: .18,
+                  child: ShieldMark(size: 72, showCheck: false),
+                ),
+              ),
+            ),
+            Positioned(
+              right: -8,
+              bottom: -10,
+              child: IgnorePointer(
+                child: Icon(Icons.inventory_2_rounded,
+                    color: Colors.white.withValues(alpha: .06), size: 62),
+              ),
+            ),
+            SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 7, 20, 17),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Semantics(
+                      button: true,
+                      label: 'Back',
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                        ),
+                        child: IconButton(
+                          padding: EdgeInsets.zero,
+                          tooltip: 'Back',
+                          onPressed: () => context.pop(),
+                          icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                              color: Luxe.primaryDeep, size: 18),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Report Found Item',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 25,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -.55,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Help return items to their rightful owners',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                height: 1.25,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReportFoundReminder extends StatelessWidget {
+  const _ReportFoundReminder();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 9, 14, 9),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF4F5),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: Luxe.lift(tint: Luxe.primary, strength: .35),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: EdgeInsets.only(top: 1),
+            child: Icon(Icons.info_outline_rounded,
+                color: Luxe.primaryDeep, size: 18),
+          ),
+          SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Important Reminder',
+                  style: TextStyle(
+                    color: Luxe.primaryDeep,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  'After submitting, hand the item to Lost & Found Office (Block A, Level 1).',
+                  style: TextStyle(
+                    color: Luxe.inkSoft,
+                    fontSize: 11.5,
+                    height: 1.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+InputDecoration _foundInputDecoration({String? hintText}) {
+  return InputDecoration(
+    hintText: hintText,
+    hintStyle: const TextStyle(color: Luxe.inkMuted, fontSize: 14),
+    filled: true,
+    fillColor: Colors.white,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(color: Luxe.inkMuted.withValues(alpha: .34)),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: BorderSide(color: Luxe.inkMuted.withValues(alpha: .34)),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(14),
+      borderSide: const BorderSide(color: Luxe.primary, width: 1.5),
+    ),
+  );
+}
+
+class _FoundSelectField extends StatelessWidget {
+  final String label;
+  final String hint;
+  final String? value;
+  final List<String> items;
+  final ValueChanged<String?> onChanged;
+
+  const _FoundSelectField({
+    required this.label,
+    required this.hint,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(label,
+            style: const TextStyle(
+                color: Luxe.ink, fontSize: 15, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<String>(
+          initialValue: value,
+          isExpanded: true,
+          hint: Text(hint,
+              style: const TextStyle(color: Luxe.inkMuted, fontSize: 14)),
+          icon: const Icon(Icons.keyboard_arrow_down_rounded,
+              color: Luxe.inkSoft, size: 24),
+          style: const TextStyle(
+              color: Luxe.ink, fontSize: 14, fontWeight: FontWeight.w500),
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          decoration: _foundInputDecoration(),
+          items: items
+              .map((item) => DropdownMenuItem<String>(
+                    value: item,
+                    child: Text(item),
+                  ))
+              .toList(),
+          onChanged: onChanged,
+        ),
+      ],
+    );
+  }
+}
+
+class _FoundDescriptionField extends StatelessWidget {
+  final TextEditingController controller;
+
+  const _FoundDescriptionField({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('Description',
+            style: TextStyle(
+                color: Luxe.ink, fontSize: 15, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 8),
+        Stack(
+          children: [
+            TextFormField(
+              controller: controller,
+              minLines: 5,
+              maxLines: 5,
+              textInputAction: TextInputAction.newline,
+              style: const TextStyle(color: Luxe.ink, fontSize: 14),
+              decoration: _foundInputDecoration(
+                hintText: 'Describe the item in detail…',
+              ).copyWith(
+                alignLabelWithHint: true,
+                contentPadding: const EdgeInsets.fromLTRB(16, 16, 16, 38),
+              ),
+            ),
+            Positioned(
+              right: 14,
+              bottom: 10,
+              child: Text(
+                '${controller.text.length}/300',
+                style: const TextStyle(color: Luxe.inkSoft, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _ReportFoundSubmitButton extends StatelessWidget {
+  final bool saving;
+  final VoidCallback? onPressed;
+
+  const _ReportFoundSubmitButton({required this.saving, this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      enabled: onPressed != null,
+      label: 'Submit Report',
+      child: GestureDetector(
+        onTap: onPressed,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 56),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            gradient: Luxe.heroGradient,
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: Luxe.liftStrong(tint: Luxe.primary),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (saving)
+                const SizedBox(
+                  width: 19,
+                  height: 19,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2.2, color: Colors.white),
+                )
+              else
+                const Icon(Icons.send_rounded, color: Colors.white, size: 21),
+              const SizedBox(width: 10),
+              Text(
+                saving ? 'Submitting…' : 'Submit Report',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReportFoundCancelButton extends StatelessWidget {
+  final VoidCallback onPressed;
+
+  const _ReportFoundCancelButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 56,
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: onPressed,
+        icon: const Icon(Icons.close_rounded, size: 21),
+        label: const Text('Cancel'),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Luxe.primaryDeep,
+          backgroundColor: Colors.white,
+          side: const BorderSide(color: Luxe.primary, width: 1.2),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Student-facing lost-report status view ───────────────────────
+//
+// Students see exactly three buckets for their lost reports, never the raw
+// internal lifecycle. Every historic status is collapsed into one of the
+// three so no report is ever hidden from the student.
+
+/// True when a lost report has no further student action — the item was
+/// returned/claimed (`Resolved`), or the student closed it themselves
+/// (`Closed`). These render under the single student-facing label "Closed".
+extension LostReportStudentView on Item {
+  bool get isLostClosed =>
+      status == ItemStatus.resolved ||
+      status == ItemStatus.returned ||
+      status == ItemStatus.closed;
+}
+
+/// A match is "unresolved" while it is not yet completed — a draft
+/// (`Proposed`) or a confirmed possible match (`Approved`). Either one keeps
+/// its lost report in the student's "Possible Matches" section.
+bool _isUnresolvedMatch(LfMatch m) =>
+    m.status == MatchStatus.proposed || m.status == MatchStatus.approved;
+
 class MyLostReportsScreen extends StatefulWidget {
   const MyLostReportsScreen({super.key});
   @override
@@ -2137,11 +2579,17 @@ class MyLostReportsScreen extends StatefulWidget {
 class _MyLostReportsScreenState extends State<MyLostReportsScreen> {
   /// Held in a field so rebuilds do not re-subscribe to Firestore.
   late final Stream<List<Item>> _reports;
+  late final Stream<List<LfMatch>> _matches;
+
+  /// Which section is shown. 0 = Possible Matches, 1 = Active, 2 = Closed.
+  /// Defaults to Active.
+  int _selected = 1;
 
   @override
   void initState() {
     super.initState();
     _reports = context.read<AppState>().watchMyLostReports();
+    _matches = context.read<AppState>().watchMyMatches();
   }
 
   @override
@@ -2149,56 +2597,346 @@ class _MyLostReportsScreenState extends State<MyLostReportsScreen> {
     return StreamBuilder<List<Item>>(
       stream: _reports,
       builder: (context, snapshot) {
-        final data = snapshot.data ?? const <Item>[];
+        final reports = snapshot.data ?? const <Item>[];
         final isLoading = snapshot.connectionState == ConnectionState.waiting;
         // The service maps every FirebaseException to an AuthFailure, so this
         // message is already safe to show — permission denied, offline and
         // network failures all arrive here with their own wording.
         final error = snapshot.error;
-        return Scaffold(
-          appBar: _gradientAppBar('My Lost Reports', context, actions: [
-            TextButton.icon(
-                onPressed: () => context.push('/lost-found/report-lost'),
-                icon: const Icon(Icons.add, color: Colors.white, size: 16),
-                label: const Text('Report',
-                    style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w700))),
-          ]),
-          body: isLoading && data.isEmpty
-              ? const Center(
-                  child: CircularProgressIndicator(color: AppTheme.red))
-              : error != null
-                  ? EmptyState(
-                      title: 'Could Not Load Reports',
-                      subtitle: error is AuthFailure
-                          ? error.message
-                          : 'Something went wrong. Please try again.',
-                      icon: Icons.cloud_off_rounded,
-                    )
-                  : data.isEmpty
-                      ? const EmptyState(
-                          title: 'No Lost Reports',
-                          icon: Icons.search_off_rounded)
-                      : ListView.builder(
-                          padding: const EdgeInsets.all(16),
-                          itemCount: data.length,
-                          itemBuilder: (ctx, i) {
-                            final r = data[i];
-                            return CardRow(
-                                    title: r.title,
-                                    subtitle: '${r.category} · ${r.whereLost}',
-                                    extra: relativeTime(r.whenLostLabel),
-                                    status: r.status.wireValue,
-                                    onTap: () => context
-                                        .push('/lost-found/lost/${r.id}'))
-                                .animate()
-                                .fadeIn(delay: (i * 60).ms)
-                                .slideY(begin: 0.15);
-                          }),
+        return StreamBuilder<List<LfMatch>>(
+          stream: _matches,
+          builder: (context, matchSnap) {
+            final matches = matchSnap.data ?? const <LfMatch>[];
+            // Count unresolved matches per lost report, so a report moves to
+            // Possible Matches the moment any candidate is proposed/approved.
+            final unresolved = <String, int>{};
+            for (final m in matches) {
+              if (_isUnresolvedMatch(m)) {
+                unresolved[m.lostReportId] =
+                    (unresolved[m.lostReportId] ?? 0) + 1;
+              }
+            }
+
+            final possible = reports
+                .where((r) =>
+                    !r.isLostClosed && (unresolved[r.id] ?? 0) > 0)
+                .toList();
+            final active = reports
+                .where((r) =>
+                    !r.isLostClosed && (unresolved[r.id] ?? 0) == 0)
+                .toList();
+            final closed = reports.where((r) => r.isLostClosed).toList();
+
+            final List<Item> visible = switch (_selected) {
+              0 => possible,
+              2 => closed,
+              _ => active,
+            };
+
+            return Scaffold(
+              appBar: _gradientAppBar('My Lost Reports', context, actions: [
+                TextButton.icon(
+                    onPressed: () => context.push('/lost-found/report-lost'),
+                    icon: const Icon(Icons.add, color: Colors.white, size: 16),
+                    label: const Text('Report',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700))),
+              ]),
+              body: isLoading && reports.isEmpty
+                  ? const Center(
+                      child: CircularProgressIndicator(color: AppTheme.red))
+                  : error != null
+                      ? EmptyState(
+                          title: 'Could Not Load Reports',
+                          subtitle: error is AuthFailure
+                              ? error.message
+                              : 'Something went wrong. Please try again.',
+                          icon: Icons.cloud_off_rounded,
+                        )
+                      : Column(children: [
+                          _LostSectionSwitcher(
+                            possibleCount: possible.length,
+                            activeCount: active.length,
+                            closedCount: closed.length,
+                            selected: _selected,
+                            onChanged: (i) => setState(() => _selected = i),
+                          ),
+                          Expanded(
+                            child: visible.isEmpty
+                                ? _lostEmptyState(_selected)
+                                : ListView.builder(
+                                    padding: const EdgeInsets.fromLTRB(
+                                        16, 8, 16, 16),
+                                    itemCount: visible.length,
+                                    itemBuilder: (ctx, i) {
+                                      final r = visible[i];
+                                      return _LostReportCard(
+                                        report: r,
+                                        badgeLabel: _selected == 0
+                                            ? 'Possible Match'
+                                            : _selected == 2
+                                                ? 'Closed'
+                                                : r.status ==
+                                                        ItemStatus.requestedClose
+                                                    ? 'Closure Requested'
+                                                    : 'Active',
+                                        matchCount: unresolved[r.id] ?? 0,
+                                        onTap: () => context.push(
+                                            '/lost-found/lost/${r.id}'),
+                                      )
+                                          .animate()
+                                          .fadeIn(delay: (i * 50).ms)
+                                          .slideY(begin: 0.12);
+                                    },
+                                  ),
+                          ),
+                        ]),
+            );
+          },
         );
       },
     );
   }
+
+  Widget _lostEmptyState(int section) {
+    return switch (section) {
+      0 => const EmptyState(
+          title: 'No possible matches yet.',
+          icon: Icons.link_rounded),
+      2 => const EmptyState(
+          title: 'No closed lost reports yet.',
+          icon: Icons.archive_rounded),
+      _ => const EmptyState(
+          title: 'No active lost reports.',
+          icon: Icons.search_off_rounded),
+    };
+  }
+}
+
+/// Compact three-option segmented control: Possible Matches / Active / Closed,
+/// with live counts. The selected segment uses the app's red-to-pink gradient;
+/// there is no fourth option and no filter/overflow affordance.
+class _LostSectionSwitcher extends StatelessWidget {
+  final int possibleCount;
+  final int activeCount;
+  final int closedCount;
+  final int selected;
+  final ValueChanged<int> onChanged;
+
+  const _LostSectionSwitcher({
+    required this.possibleCount,
+    required this.activeCount,
+    required this.closedCount,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF1F3F6),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(children: [
+          _segment('Possible Matches', possibleCount, 0),
+          _segment('Active', activeCount, 1),
+          _segment('Closed', closedCount, 2),
+        ]),
+      ),
+    );
+  }
+
+  Widget _segment(String label, int count, int index) {
+    final isSelected = selected == index;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => onChanged(index),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
+          decoration: BoxDecoration(
+            gradient: isSelected ? AppTheme.primaryGradient : null,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            '$label ($count)',
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: isSelected ? Colors.white : AppTheme.textSecondary,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One lost report in the student list. Shows the first photo (or a
+/// placeholder), category, description, location, reported date and a compact
+/// status badge — with no vertical accent line or left-border indicator.
+class _LostReportCard extends StatelessWidget {
+  final Item report;
+  final String badgeLabel;
+  final int matchCount;
+  final VoidCallback onTap;
+  const _LostReportCard({
+    required this.report,
+    required this.badgeLabel,
+    required this.matchCount,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final closed = report.isLostClosed;
+    final returnedAt = report.updatedAt;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: AppTheme.red.withOpacity(0.08)),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _thumb(),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Expanded(
+                        child: Text(report.category,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.red)),
+                      ),
+                      StatusBadge(badgeLabel),
+                    ]),
+                    const SizedBox(height: 4),
+                    Text(report.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary)),
+                    const SizedBox(height: 4),
+                    Text('Lost at ${report.whereLost}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 11, color: AppTheme.textMuted)),
+                    const SizedBox(height: 2),
+                    Text('Reported ${fmtDate(report.whenLostLabel)}',
+                        style: const TextStyle(
+                            fontSize: 11, color: AppTheme.textMuted)),
+                    if (matchCount > 0) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        matchCount == 1
+                            ? '1 possible match'
+                            : '$matchCount possible matches',
+                        style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.red),
+                      ),
+                    ],
+                    if (closed && returnedAt != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'Item returned on ${fmtDate(returnedAt.toIso8601String())}',
+                        style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF2E7D32)),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.chevron_right_rounded,
+                  color: AppTheme.textMuted, size: 18),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _thumb() {
+    final hasPhoto = report.imageUrls.isNotEmpty;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox(
+        width: 56,
+        height: 56,
+        child: hasPhoto
+            ? Image.network(
+                report.imageUrls.first,
+                fit: BoxFit.cover,
+                loadingBuilder: (context, child, progress) =>
+                    progress == null ? child : _placeholder(),
+                errorBuilder: (context, error, stack) => _placeholder(),
+              )
+            : _placeholder(),
+      ),
+    );
+  }
+
+  Widget _placeholder() {
+    return Container(
+      color: const Color(0xFFF0F2F5),
+      child: const Icon(Icons.search_rounded,
+          color: AppTheme.textMuted, size: 26),
+    );
+  }
+}
+
+// ── Student-facing found-report status view ──────────────────────
+//
+// Students see exactly two buckets for their found reports, never the raw
+// internal lifecycle. Every historic status is collapsed into one of the two
+// so no report is ever hidden from the student.
+
+/// True when a found report has no further student action — the physical
+/// handover has been confirmed (`In Inventory`), the item was returned to its
+/// owner (`Returned`), an admin resolved it (`Resolved`), or the student
+/// closed it themselves (`Closed`). These all render under the single
+/// student-facing label "Closed".
+extension FoundReportStudentView on Item {
+  bool get isFoundClosed =>
+      status == ItemStatus.inInventory ||
+      status == ItemStatus.resolved ||
+      status == ItemStatus.returned ||
+      status == ItemStatus.closed;
+
+  /// The only two labels a student ever sees for a found report. The internal
+  /// wire value "Awaiting Handover" is deliberately never surfaced — students
+  /// see the short label "Awaiting".
+  String get foundStudentStatus => isFoundClosed ? 'Closed' : 'Awaiting';
 }
 
 // ── Screen 5: My Found Reports ───────────────────────────────────
@@ -2212,6 +2950,9 @@ class _MyFoundReportsScreenState extends State<MyFoundReportsScreen> {
   /// Held in a field so rebuilds do not re-subscribe to Firestore.
   late final Stream<List<Item>> _reports;
 
+  /// Which section is shown. Defaults to Awaiting.
+  bool _showClosed = false;
+
   @override
   void initState() {
     super.initState();
@@ -2223,7 +2964,10 @@ class _MyFoundReportsScreenState extends State<MyFoundReportsScreen> {
     return StreamBuilder<List<Item>>(
       stream: _reports,
       builder: (context, snapshot) {
-        final data = snapshot.data ?? const <Item>[];
+        final all = snapshot.data ?? const <Item>[];
+        final awaiting = all.where((r) => !r.isFoundClosed).toList();
+        final closed = all.where((r) => r.isFoundClosed).toList();
+        final visible = _showClosed ? closed : awaiting;
         final isLoading = snapshot.connectionState == ConnectionState.waiting;
         // The service maps every FirebaseException to an AuthFailure, so this
         // message is already safe to show — permission denied, offline and
@@ -2231,7 +2975,7 @@ class _MyFoundReportsScreenState extends State<MyFoundReportsScreen> {
         final error = snapshot.error;
         return Scaffold(
           appBar: _gradientAppBar('My Found Reports', context),
-          body: isLoading && data.isEmpty
+          body: isLoading && all.isEmpty
               ? const Center(
                   child: CircularProgressIndicator(color: AppTheme.red))
               : error != null
@@ -2242,29 +2986,264 @@ class _MyFoundReportsScreenState extends State<MyFoundReportsScreen> {
                           : 'Something went wrong. Please try again.',
                       icon: Icons.cloud_off_rounded,
                     )
-                  : data.isEmpty
-                      ? const EmptyState(
-                          title: 'No Found Reports',
-                          icon: Icons.upload_file_rounded)
-                      : ListView.builder(
-                          padding: const EdgeInsets.all(16),
-                          itemCount: data.length,
-                          itemBuilder: (ctx, i) {
-                            final r = data[i];
-                            return CardRow(
-                              title: r.description,
-                              subtitle: '${r.category} · ${r.whereLost}',
-                              extra: relativeTime(r.whenLostLabel),
-                              status: r.status.wireValue,
-                              onTap: () =>
-                                  context.push('/lost-found/found/${r.id}'),
-                            )
-                                .animate()
-                                .fadeIn(delay: (i * 60).ms)
-                                .slideY(begin: 0.15);
-                          }),
+                  : Column(children: [
+                      _FoundSectionSwitcher(
+                        awaitingCount: awaiting.length,
+                        closedCount: closed.length,
+                        showClosed: _showClosed,
+                        onChanged: (v) => setState(() => _showClosed = v),
+                      ),
+                      if (!_showClosed && awaiting.isNotEmpty)
+                        const _FoundReminder(),
+                      Expanded(
+                        child: visible.isEmpty
+                            ? EmptyState(
+                                title: _showClosed
+                                    ? 'No closed found reports yet.'
+                                    : 'No items awaiting handover.',
+                                icon: _showClosed
+                                    ? Icons.archive_rounded
+                                    : Icons.inventory_2_rounded,
+                              )
+                            : ListView.builder(
+                                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                                itemCount: visible.length,
+                                itemBuilder: (ctx, i) {
+                                  final r = visible[i];
+                                  return _FoundReportCard(
+                                    report: r,
+                                    onTap: () => context
+                                        .push('/lost-found/found/${r.id}'),
+                                  )
+                                      .animate()
+                                      .fadeIn(delay: (i * 50).ms)
+                                      .slideY(begin: 0.12);
+                                },
+                              ),
+                      ),
+                    ]),
         );
       },
+    );
+  }
+}
+
+/// Compact two-option segmented control: Awaiting / Closed, with live counts.
+/// The selected segment uses the app's red-to-pink gradient; there is no
+/// third option and no overflow/filter affordance.
+class _FoundSectionSwitcher extends StatelessWidget {
+  final int awaitingCount;
+  final int closedCount;
+  final bool showClosed;
+  final ValueChanged<bool> onChanged;
+
+  const _FoundSectionSwitcher({
+    required this.awaitingCount,
+    required this.closedCount,
+    required this.showClosed,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF1F3F6),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(children: [
+          _segment('Awaiting', awaitingCount,
+              selected: !showClosed, onTap: () => onChanged(false)),
+          _segment('Closed', closedCount,
+              selected: showClosed, onTap: () => onChanged(true)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _segment(String label, int count,
+      {required bool selected, required VoidCallback onTap}) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          decoration: BoxDecoration(
+            gradient: selected ? AppTheme.primaryGradient : null,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            '$label ($count)',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: selected ? Colors.white : AppTheme.textSecondary,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Short reminder shown above the Awaiting list. Deliberately has no left
+/// accent border — the screen uses only spacing, typography and the badge to
+/// communicate state.
+class _FoundReminder extends StatelessWidget {
+  const _FoundReminder();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.red.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.info_outline_rounded,
+              size: 16, color: AppTheme.red),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Please hand this item to the Lost & Found Office (Block A, Level 1).',
+              style: const TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textSecondary,
+                  height: 1.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One found report in the student list. Shows the first photo (or a
+/// placeholder), category, description, location, submitted date and a compact
+/// status badge — with no vertical accent line or left-border indicator.
+class _FoundReportCard extends StatelessWidget {
+  final Item report;
+  final VoidCallback onTap;
+  const _FoundReportCard({required this.report, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final closed = report.isFoundClosed;
+    // `updatedAt` is the moment the handover/return was confirmed for the two
+    // staff-confirmed states; for a student self-close it is not a handover
+    // timestamp, so no "Handover completed" line is shown there.
+    final bool handoverConfirmed = report.status == ItemStatus.inInventory ||
+        report.status == ItemStatus.returned;
+    final handoverAt = report.updatedAt;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: AppTheme.red.withOpacity(0.08)),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _thumb(),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Expanded(
+                        child: Text(report.category,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.red)),
+                      ),
+                      StatusBadge(report.foundStudentStatus),
+                    ]),
+                    const SizedBox(height: 4),
+                    Text(report.description,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textPrimary)),
+                    const SizedBox(height: 4),
+                    Text('Found at ${report.whereLost}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 11, color: AppTheme.textMuted)),
+                    const SizedBox(height: 2),
+                    Text('Submitted ${fmtDate(report.whenLostLabel)}',
+                        style: const TextStyle(
+                            fontSize: 11, color: AppTheme.textMuted)),
+                    if (closed && handoverConfirmed && handoverAt != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'Handover completed on ${fmtDate(handoverAt.toIso8601String())}',
+                        style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF2E7D32)),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.chevron_right_rounded,
+                  color: AppTheme.textMuted, size: 18),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _thumb() {
+    final hasPhoto = report.imageUrls.isNotEmpty;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox(
+        width: 56,
+        height: 56,
+        child: hasPhoto
+            ? Image.network(
+                report.imageUrls.first,
+                fit: BoxFit.cover,
+                loadingBuilder: (context, child, progress) =>
+                    progress == null ? child : _placeholder(),
+                errorBuilder: (context, error, stack) => _placeholder(),
+              )
+            : _placeholder(),
+      ),
+    );
+  }
+
+  Widget _placeholder() {
+    return Container(
+      color: const Color(0xFFF0F2F5),
+      child: const Icon(Icons.inventory_2_rounded,
+          color: AppTheme.textMuted, size: 26),
     );
   }
 }
@@ -2285,6 +3264,10 @@ class _LostDetailScreenState extends State<LostDetailScreen> {
   /// The body filters both to this report.
   late final Stream<List<LfMatch>> _matches;
   late final Stream<List<QrTransaction>> _returnQr;
+
+  /// Guards the one-shot "Collected" dialog so it appears exactly once, when
+  /// the match first becomes Completed.
+  bool _collectedShown = false;
 
   @override
   void initState() {
@@ -2352,6 +3335,13 @@ class _LostDetailScreenState extends State<LostDetailScreen> {
             match != null && match.status == MatchStatus.approved;
         final bool completed =
             match != null && match.status == MatchStatus.completed;
+        if (completed && !_collectedShown) {
+          _collectedShown = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _showCollectedDialog(context);
+          });
+        }
 
         return StreamBuilder<List<QrTransaction>>(
           stream: _returnQr,
@@ -2428,7 +3418,7 @@ class _LostDetailScreenState extends State<LostDetailScreen> {
                     const SectionLabel('Collect Your Item'),
                     _QrScanSection(
                       instruction:
-                          'The office has a Return QR ready for you. Scan it with your camera or enter the code when you collect your item.',
+                          'The office has a Return QR ready for you. Tap Scan QR to use your camera (or upload a photo), or tap Input Key and type the key shown under the QR code.',
                       onSuccess: () => _toast(context,
                           'Code verified. Please wait for the office to confirm.'),
                     ),
@@ -2442,22 +3432,16 @@ class _LostDetailScreenState extends State<LostDetailScreen> {
                   ],
                   if (r.status == ItemStatus.active)
                     OutlineBtn(
-                      label: 'Close Report',
+                      label: 'Request to Close',
                       color: AppTheme.danger,
-                      onPressed: () async {
-                        final appState = context.read<AppState>();
-                        try {
-                          await appState.closeReport(widget.id);
-                          if (!mounted) return;
-                          _toast(context, 'Report closed');
-                        } on AuthFailure catch (e) {
-                          if (!mounted) return;
-                          _toast(context, e.message);
-                        } catch (_) {
-                          if (!mounted) return;
-                          _toast(context, 'Could not close report. Try again.');
-                        }
-                      },
+                      onPressed: () => _requestClose(context),
+                    )
+                  else if (r.status == ItemStatus.requestedClose)
+                    NoticeBox(
+                      message:
+                          'Closure Requested — an admin will review and approve your request.',
+                      borderColor: AppTheme.red,
+                      icon: Icons.hourglass_top_rounded,
                     ),
                 ],
               ),
@@ -2467,9 +3451,63 @@ class _LostDetailScreenState extends State<LostDetailScreen> {
       },
     );
   }
-}
 
-// ── Screen 7: Found Detail (Student) ────────────────────────────
+  /// Student confirmation flow for requesting closure of their own lost
+  /// report. The request only moves the report to `Requested Close` — an admin
+  /// must still approve it, so this never closes the report directly.
+  Future<void> _requestClose(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Request to Close Report?'),
+        content: const Text(
+            'Are you sure you want to request closure of this lost report? '
+            'An admin must review and approve your request.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Request to Close'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final appState = context.read<AppState>();
+    try {
+      await appState.requestClose(widget.id);
+      if (!mounted) return;
+      _toast(context, 'Closure requested');
+    } on AuthFailure catch (e) {
+      if (!mounted) return;
+      _toast(context, e.message);
+    } catch (_) {
+      if (!mounted) return;
+      _toast(context, 'Could not request closure. Try again.');
+    }
+  }
+
+  /// The one-shot "Collected" success dialog, shown when the match first
+  /// becomes Completed (the item is physically back with the student).
+  void _showCollectedDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Collected'),
+        content: const Text('Your item has been collected successfully.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+}
 class FoundDetailScreen extends StatefulWidget {
   final String id;
   const FoundDetailScreen({super.key, required this.id});
@@ -2484,10 +3522,6 @@ class _FoundDetailScreenState extends State<FoundDetailScreen> {
   /// The signed-in student's own handover QR transactions (Workflow 2). The
   /// body filters this to the current report by `foundReportId`.
   late final Stream<List<QrTransaction>> _activeQr;
-
-  /// Guards the one-shot "handover confirmed" dialog so it fires only on the
-  /// Awaiting Handover → In Inventory transition, not on every rebuild.
-  bool _handoverDialogShown = false;
 
   @override
   void initState() {
@@ -2556,25 +3590,21 @@ class _FoundDetailScreenState extends State<FoundDetailScreen> {
         final QrTransaction? qr =
             forThisReport.isEmpty ? null : forThisReport.first;
 
-        final bool awaiting = r.status == ItemStatus.awaitingHandover;
+        final bool awaiting = r.status == ItemStatus.active ||
+            r.status == ItemStatus.awaitingHandover;
         final bool inInventory = r.status == ItemStatus.inInventory;
         final bool returned = r.status == ItemStatus.returned;
         final bool qrIssued = qr != null && qr.status == QrStatus.issued;
         final bool qrScanned = qr != null && qr.status == QrStatus.scanned;
 
-        // One-shot success dialog on the Awaiting Handover → In Inventory
-        // transition (the admin has confirmed the physical handover).
-        if (inInventory && !_handoverDialogShown) {
-          _handoverDialogShown = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) _showHandoverSuccessDialog(context);
-          });
-        }
-
+        // The moment the office issues the QR, steps 1-4 (report, visit,
+        // hand over, QR issued) are considered done automatically — only
+        // "Handover Complete" still awaits the office confirmation.
+        // 6 means every step is complete.
         final int step = inInventory || returned
-            ? 5
+            ? 6
             : (qrIssued || qrScanned)
-                ? 4
+                ? 5
                 : awaiting
                     ? 2
                     : 1;
@@ -2596,7 +3626,7 @@ class _FoundDetailScreenState extends State<FoundDetailScreen> {
                                 style: const TextStyle(
                                     fontSize: 17,
                                     fontWeight: FontWeight.w800))),
-                        StatusBadge(r.status.wireValue),
+                        StatusBadge(r.foundStudentStatus),
                       ]),
                       const Divider(height: 20),
                       InfoRow(label: 'Category', value: r.category),
@@ -2616,9 +3646,8 @@ class _FoundDetailScreenState extends State<FoundDetailScreen> {
                 const SectionLabel('Scan QR Code'),
                 _QrScanSection(
                   instruction:
-                      'The admin has generated a QR code for item handover. Scan it with your camera or enter the code to confirm you have handed over the item.',
-                  onSuccess: () => _toast(context,
-                      'Code verified. Please wait for the office to confirm.'),
+                      'The admin has generated a QR code for item handover. Tap Scan QR to use your camera (or upload a photo of the QR), or tap Input Key and type the key shown under the QR code.',
+                  onSuccess: () => _showThankYouDialog(context),
                 ),
               ],
 
@@ -2660,28 +3689,33 @@ class _FoundDetailScreenState extends State<FoundDetailScreen> {
     );
   }
 
-  void _showHandoverSuccessDialog(BuildContext context) {
-    showDialog(
+  /// One-shot "Thank You" dialog shown when the student's Handover QR scan is
+  /// verified by the backend. It is only reachable from [_QrScanSection]'s
+  /// `onSuccess` (a single scan event), so it cannot re-fire on rebuild or on
+  /// app reopen. The scan itself completes the physical handover: the report
+  /// moves to `In Inventory` (shown to the student as `Closed`) in the same
+  /// atomic transaction that confirms the code, so this dialog only appears
+  /// after that backend confirmation succeeds.
+  void _showThankYouDialog(BuildContext context) {
+    showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(children: [
-          Icon(Icons.check_circle_rounded, color: Colors.green, size: 28),
-          SizedBox(width: 10),
-          Text('Done!',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-        ]),
-        content: const Column(mainAxisSize: MainAxisSize.min, children: [
-          Text(
-              'Item handover has been confirmed successfully.\n\nThank you for handing over the found item. You can track the progress in "My Found Reports".',
-              style: TextStyle(
-                  fontSize: 13, color: AppTheme.textSecondary, height: 1.55)),
-        ]),
+        title: const Text('Thank You',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+        content: const Text(
+          'Thank you for handing over the item to the Lost & Found Office.',
+          style: TextStyle(
+              fontSize: 13, color: AppTheme.textSecondary, height: 1.55),
+        ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('OK',
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              if (context.mounted) context.pop();
+            },
+            child: const Text('Close',
                 style: TextStyle(
                     color: AppTheme.red, fontWeight: FontWeight.w700)),
           ),
@@ -2967,8 +4001,27 @@ class _AdminLFDashboardScreenState extends State<AdminLFDashboardScreen> {
 
                   // Soft-deleted reports are already excluded by the service
                   // query, so no screen-side isDeleted check is needed here.
-                  final lost = all.where((r) => r.isLost).length;
-                  final found = all.where((r) => r.isFound).length;
+                  // The "View Lost Reports" count is the authoritative open
+                  // count — Active + Notified. `Requested Close` remains in
+                  // Active, so it is included; Closed / Resolved / Returned /
+                  // archived reports are excluded.
+                  final lost = all
+                      .where((r) =>
+                          r.isLost &&
+                          r.status != ItemStatus.resolved &&
+                          r.status != ItemStatus.returned &&
+                          r.status != ItemStatus.closed)
+                      .length;
+                  // Once a found item is handed over to the Inventory Office
+                  // (In Inventory) or claimed by its owner (Returned), it no
+                  // longer belongs in the "found report" bucket — it lives in
+                  // the Inventory Office / Archive instead.
+                  final found = all
+                      .where((r) =>
+                          r.isFound &&
+                          r.status != ItemStatus.inInventory &&
+                          r.status != ItemStatus.returned)
+                      .length;
                   final activeLost = all
                       .where((r) => r.isLost && r.status == ItemStatus.active)
                       .length;
@@ -3003,7 +4056,7 @@ class _AdminLFDashboardScreenState extends State<AdminLFDashboardScreen> {
                           Expanded(
                               child: StatCard(
                                   value: '$found',
-                                  label: 'In Inventory',
+                                  label: 'Found Reports',
                                   valueColor: AppTheme.redDark,
                                   bgColor: AppTheme.red.withOpacity(0.07))),
                         ]).animate().fadeIn(delay: 50.ms),
@@ -3013,14 +4066,14 @@ class _AdminLFDashboardScreenState extends State<AdminLFDashboardScreen> {
                               label: 'View Lost Reports',
                               subtitle: isLoading || error != null
                                   ? 'Loading…'
-                                  : '$lost total',
+                                  : '$lost open',
                               onTap: () =>
                                   context.push('/admin/lost-found/lost-list'))
                           .animate()
                           .fadeIn(delay: 100.ms),
                       HubButton(
                               icon: Icons.inventory_rounded,
-                              label: 'Found / Inventory',
+                              label: 'View found report',
                               subtitle: isLoading || error != null
                                   ? 'Loading…'
                                   : '$found items',
@@ -3109,6 +4162,329 @@ class _AdminLFDashboardScreenState extends State<AdminLFDashboardScreen> {
   }
 }
 
+// ── Shared admin section switcher + countdown dialog ──────────────
+
+/// The three-section tab bar used by the admin Lost and Found report lists.
+/// Unlike the student switchers, the tabs are always Active / Notified /
+/// Closed (no vertical indicator lines, matching the student design).
+class _AdminSectionSwitcher extends StatelessWidget {
+  final int activeCount;
+  final int notifiedCount;
+  final int closedCount;
+  final int selected;
+  final ValueChanged<int> onChanged;
+
+  const _AdminSectionSwitcher({
+    required this.activeCount,
+    required this.notifiedCount,
+    required this.closedCount,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF1F3F6),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(children: [
+          _segment('Active', activeCount, 0),
+          _segment('Notified', notifiedCount, 1),
+          _segment('Closed', closedCount, 2),
+        ]),
+      ),
+    );
+  }
+
+  Widget _segment(String label, int count, int index) {
+    final isSelected = selected == index;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => onChanged(index),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
+          decoration: BoxDecoration(
+            gradient: isSelected ? AppTheme.primaryGradient : null,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            '$label ($count)',
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: isSelected ? Colors.white : AppTheme.textSecondary,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Two-section tab bar (Active / Closed) for the admin found-report list.
+/// Found reports have no "Notified" section — a handed-over item stays in
+/// Active until it is closed/returned/resolved.
+class _AdminFoundSectionSwitcher extends StatelessWidget {
+  final int activeCount;
+  final int closedCount;
+  final int selected;
+  final ValueChanged<int> onChanged;
+
+  const _AdminFoundSectionSwitcher({
+    required this.activeCount,
+    required this.closedCount,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF1F3F6),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(children: [
+          _segment('Active', activeCount, 0),
+          _segment('Closed', closedCount, 1),
+        ]),
+      ),
+    );
+  }
+
+  Widget _segment(String label, int count, int index) {
+    final isSelected = selected == index;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => onChanged(index),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 4),
+          decoration: BoxDecoration(
+            gradient: isSelected ? AppTheme.primaryGradient : null,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            '$label ($count)',
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: isSelected ? Colors.white : AppTheme.textSecondary,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A mandatory 3-second confirmation countdown for consequential admin
+/// actions (e.g. "Mark as Resolved"). The confirm button stays disabled until
+/// the countdown reaches zero, forcing a deliberate pause before the write.
+/// Pops `true` once the admin confirms; the caller performs the actual write.
+class _ConfirmCountdownDialog extends StatefulWidget {
+  final String title;
+  final String message;
+  final String confirmLabel;
+
+  const _ConfirmCountdownDialog({
+    required this.title,
+    required this.message,
+    required this.confirmLabel,
+  });
+
+  @override
+  State<_ConfirmCountdownDialog> createState() =>
+      _ConfirmCountdownDialogState();
+}
+
+class _ConfirmCountdownDialogState extends State<_ConfirmCountdownDialog> {
+  int _remaining = 3;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() {
+        if (_remaining > 0) _remaining--;
+      });
+      if (_remaining == 0) _timer?.cancel();
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: Text(widget.message),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: _remaining == 0
+              ? () => Navigator.of(context).pop(true)
+              : null,
+          child: Text(
+            _remaining == 0
+                ? widget.confirmLabel
+                : '${widget.confirmLabel} ($_remaining)',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Whether a lost report belongs in the "Notified" section: it has at least
+/// one approved match, meaning its owner has been told about the possible
+/// match.
+bool _lostReportNotified(Item r, List<LfMatch> matches) => matches
+    .any((m) =>
+        m.lostReportId == r.id && m.status == MatchStatus.approved);
+
+/// Admin-facing status label. `Requested Close` is shown to admins as
+/// `Req for Close` (the student sees `Closure Requested` instead).
+String _adminStatusLabel(ItemStatus s) =>
+    s == ItemStatus.requestedClose ? 'Req for Close' : s.wireValue;
+
+/// Smart title-case for free-text titles: capitalises the first letter of any
+/// all-lowercase word and leaves already-mixed-case words (acronyms like "HP",
+/// brands like "iPhone") untouched. "Hp laptop" → "Hp Laptop".
+String _titleCase(String s) {
+  final words = s.trim().split(RegExp(r'\s+'));
+  return words.map((w) {
+    if (w.isEmpty) return w;
+    if (w == w.toLowerCase()) return w[0].toUpperCase() + w.substring(1);
+    return w;
+  }).join(' ');
+}
+
+/// Horizontal strip of a report's photos. Shows nothing when there are none,
+/// and renders each `imageUrls` entry with a graceful loading/error fallback
+/// (the same pattern as the list thumbnails).
+class _PhotoStrip extends StatelessWidget {
+  final List<String> urls;
+  const _PhotoStrip({required this.urls});
+
+  @override
+  Widget build(BuildContext context) {
+    if (urls.isEmpty) return const SizedBox.shrink();
+    const double thumb = 112;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Photos',
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppTheme.textMuted)),
+        const SizedBox(height: 8),
+        if (urls.length == 1)
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: SizedBox(
+              width: thumb,
+              height: thumb,
+              child: _image(urls.first),
+            ),
+          )
+        else
+          SizedBox(
+            height: thumb,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: urls.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) => ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  width: thumb,
+                  height: thumb,
+                  child: _image(urls[i]),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _image(String url) => Image.network(
+        url,
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, progress) =>
+            progress == null ? child : _photoPlaceholder(),
+        errorBuilder: (context, error, stack) => _photoPlaceholder(),
+      );
+
+  Widget _photoPlaceholder() => Container(
+        color: const Color(0xFFF0F2F5),
+        child: const Icon(Icons.image_rounded,
+            color: AppTheme.textMuted, size: 26),
+      );
+}
+
+/// Student-name row for the admin detail pages. Prefers the immutable
+/// `reportedByName`; for legacy reports without it, resolves the name from the
+/// reporter's profile on demand. Never falls back to the Student ID.
+class _ReporterNameInfoRow extends StatefulWidget {
+  final Item report;
+  const _ReporterNameInfoRow({required this.report});
+  @override
+  State<_ReporterNameInfoRow> createState() => _ReporterNameInfoRowState();
+}
+
+class _ReporterNameInfoRowState extends State<_ReporterNameInfoRow> {
+  String? _resolved;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.report.reportedByName.isEmpty) _resolve();
+  }
+
+  Future<void> _resolve() async {
+    final name = await context
+        .read<AppState>()
+        .fetchReporterName(widget.report.reportedByUid);
+    if (!mounted) return;
+    setState(() => _resolved = name ?? '');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = widget.report;
+    final name =
+        r.reportedByName.isNotEmpty ? r.reportedByName : (_resolved ?? '');
+    return InfoRow(label: 'Reported by', value: name.isEmpty ? '—' : name);
+  }
+}
+
 // ── Screen 10: Admin Lost List ───────────────────────────────────
 class AdminLostListScreen extends StatefulWidget {
   const AdminLostListScreen({super.key});
@@ -3119,11 +4495,14 @@ class AdminLostListScreen extends StatefulWidget {
 class _AdminLostListScreenState extends State<AdminLostListScreen> {
   /// Held in a field so rebuilds do not re-subscribe to Firestore.
   late final Stream<List<Item>> _reports;
+  late final Stream<List<LfMatch>> _matches;
+  int _selected = 0;
 
   @override
   void initState() {
     super.initState();
     _reports = context.read<AppState>().watchAdminLostReports();
+    _matches = context.read<AppState>().watchAllMatches();
   }
 
   @override
@@ -3137,52 +4516,90 @@ class _AdminLostListScreenState extends State<AdminLostListScreen> {
         // message is already safe to show — permission denied, offline and
         // network failures all arrive here with their own wording.
         final error = snapshot.error;
-        return Scaffold(
-          appBar: _gradientAppBar('All Lost Reports', context),
-          body: Column(children: [
-            const Padding(
-                padding: EdgeInsets.fromLTRB(16, 8, 16, 0), child: AdminBar()),
-            Expanded(
-                child: isLoading && data.isEmpty
-                    ? const Center(
-                        child: CircularProgressIndicator(color: AppTheme.red))
-                    : error != null
-                        ? EmptyState(
-                            title: 'Could Not Load Reports',
-                            subtitle: error is AuthFailure
-                                ? error.message
-                                : 'Something went wrong. Please try again.',
-                            icon: Icons.cloud_off_rounded,
-                          )
-                        : data.isEmpty
-                            ? const EmptyState(
-                                title: 'No Lost Reports',
-                                icon: Icons.search_off_rounded)
-                            : ListView.builder(
-                                padding: const EdgeInsets.all(16),
-                                itemCount: data.length,
-                                itemBuilder: (ctx, i) {
-                                  final r = data[i];
-                                  return CardRow(
-                                    // `title` is the report's headline; `reportedByStudentId`
-                                    // backs the "S220101 · Category" subtitle the original
-                                    // showed via AdminLostReport.studentId.
-                                    title: r.title,
-                                    subtitle:
-                                        '${r.reportedByStudentId} · ${r.category}',
-                                    // `whenLostLabel` (YYYY-MM-DD) is the closest
-                                    // counterpart to the mock's `createdDate`; fmtDate
-                                    // renders it as "20 Mar 2026".
-                                    extra: fmtDate(r.whenLostLabel),
-                                    status: r.status.wireValue,
-                                    onTap: () => context
-                                        .push('/admin/lost-found/lost/${r.id}'),
-                                  )
-                                      .animate()
-                                      .fadeIn(delay: (i * 55).ms)
-                                      .slideY(begin: 0.12);
-                                })),
-          ]),
+        return StreamBuilder<List<LfMatch>>(
+          stream: _matches,
+          builder: (context, matchSnap) {
+            final matches = matchSnap.data ?? const <LfMatch>[];
+            final active = <Item>[];
+            final notified = <Item>[];
+            final closed = <Item>[];
+            for (final r in data) {
+              if (r.status == ItemStatus.resolved ||
+                  r.status == ItemStatus.returned ||
+                  r.status == ItemStatus.closed) {
+                closed.add(r);
+              } else if (_lostReportNotified(r, matches)) {
+                notified.add(r);
+              } else {
+                active.add(r);
+              }
+            }
+            final shown = _selected == 0
+                ? active
+                : _selected == 1
+                    ? notified
+                    : closed;
+            return Scaffold(
+              appBar: _gradientAppBar('All Lost Reports', context),
+              body: Column(children: [
+                const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: AdminBar()),
+                _AdminSectionSwitcher(
+                  activeCount: active.length,
+                  notifiedCount: notified.length,
+                  closedCount: closed.length,
+                  selected: _selected,
+                  onChanged: (i) => setState(() => _selected = i),
+                ),
+                Expanded(
+                    child: isLoading && data.isEmpty
+                        ? const Center(
+                            child:
+                                CircularProgressIndicator(color: AppTheme.red))
+                        : error != null
+                            ? EmptyState(
+                                title: 'Could Not Load Reports',
+                                subtitle: error is AuthFailure
+                                    ? error.message
+                                    : 'Something went wrong. Please try again.',
+                                icon: Icons.cloud_off_rounded,
+                              )
+                            : shown.isEmpty
+                                ? EmptyState(
+                                    title: _selected == 0
+                                        ? 'No Active Lost Reports'
+                                        : _selected == 1
+                                            ? 'No Notified Lost Reports'
+                                            : 'No Closed Lost Reports',
+                                    icon: Icons.search_off_rounded)
+                                : ListView.builder(
+                                    padding: const EdgeInsets.all(16),
+                                    itemCount: shown.length,
+                                    itemBuilder: (ctx, i) {
+                                      final r = shown[i];
+                                      return CardRow(
+                                        // `title` is the report's headline; `reportedByStudentId`
+                                        // backs the "S220101 · Category" subtitle the original
+                                        // showed via AdminLostReport.studentId.
+                                        title: r.title,
+                                        subtitle:
+                                            '${r.reportedByStudentId} · ${r.category}',
+                                        // `whenLostLabel` (YYYY-MM-DD) is the closest
+                                        // counterpart to the mock's `createdDate`; fmtDate
+                                        // renders it as "20 Mar 2026".
+                                        extra: fmtDate(r.whenLostLabel),
+                                        status: _adminStatusLabel(r.status),
+                                        onTap: () => context.push(
+                                            '/admin/lost-found/lost/${r.id}'),
+                                      )
+                                          .animate()
+                                          .fadeIn(delay: (i * 55).ms)
+                                          .slideY(begin: 0.12);
+                                    })),
+              ]),
+            );
+          },
         );
       },
     );
@@ -3199,6 +4616,7 @@ class AdminFoundListScreen extends StatefulWidget {
 class _AdminFoundListScreenState extends State<AdminFoundListScreen> {
   /// Held in a field so rebuilds do not re-subscribe to Firestore.
   late final Stream<List<Item>> _reports;
+  int _selected = 0;
 
   @override
   void initState() {
@@ -3212,13 +4630,35 @@ class _AdminFoundListScreenState extends State<AdminFoundListScreen> {
       stream: _reports,
       builder: (context, snapshot) {
         final data = snapshot.data ?? const <Item>[];
+        final active = <Item>[];
+        final closed = <Item>[];
+        for (final r in data) {
+          if (r.status == ItemStatus.resolved ||
+              r.status == ItemStatus.returned ||
+              r.status == ItemStatus.closed ||
+              r.status == ItemStatus.inInventory) {
+            // Closed — resolved, returned, closed, and In Inventory (handover
+            // completed). A handed-over item has left the active found queue.
+            closed.add(r);
+          } else {
+            // Active — Awaiting Handover, Active, and Matched - Pending.
+            active.add(r);
+          }
+        }
+        final shown = _selected == 0 ? active : closed;
         final isLoading = snapshot.connectionState == ConnectionState.waiting;
         final error = snapshot.error;
         return Scaffold(
-          appBar: _gradientAppBar('Found / Inventory', context),
+          appBar: _gradientAppBar('View Found Reports', context),
           body: Column(children: [
             const Padding(
                 padding: EdgeInsets.fromLTRB(16, 8, 16, 0), child: AdminBar()),
+            _AdminFoundSectionSwitcher(
+              activeCount: active.length,
+              closedCount: closed.length,
+              selected: _selected,
+              onChanged: (i) => setState(() => _selected = i),
+            ),
             Expanded(
                 child: isLoading && data.isEmpty
                     ? const Center(
@@ -3231,15 +4671,17 @@ class _AdminFoundListScreenState extends State<AdminFoundListScreen> {
                                 : 'Something went wrong. Please try again.',
                             icon: Icons.cloud_off_rounded,
                           )
-                        : data.isEmpty
-                            ? const EmptyState(
-                                title: 'No Found Reports',
+                        : shown.isEmpty
+                            ? EmptyState(
+                                title: _selected == 0
+                                    ? 'No Active Found Reports'
+                                    : 'No Closed Found Reports',
                                 icon: Icons.inventory_rounded)
                             : ListView.builder(
                                 padding: const EdgeInsets.all(16),
-                                itemCount: data.length,
+                                itemCount: shown.length,
                                 itemBuilder: (ctx, i) {
-                                  final r = data[i];
+                                  final r = shown[i];
                                   // Found reports store location/date in the shared
                                   // `whereLost` / `whenLost` fields (see Phase 4's
                                   // `_ReportFoundState._submit`), so those back the
@@ -3273,11 +4715,13 @@ class _AdminLostDetailScreenState extends State<AdminLostDetailScreen> {
   /// Held in a field so rebuilds do not re-subscribe to Firestore. Same shape
   /// as the student [LostDetailScreen] — only the body differs.
   late final Stream<Item?> _report;
+  late final Stream<List<LfMatch>> _matches;
 
   @override
   void initState() {
     super.initState();
     _report = context.read<AppState>().watchReport(widget.id);
+    _matches = context.read<AppState>().watchAllMatches();
   }
 
   @override
@@ -3321,15 +4765,6 @@ class _AdminLostDetailScreenState extends State<AdminLostDetailScreen> {
   }
 
   Widget _adminLostDetailBody(BuildContext context, Item r) {
-    // `aiScore`, `matchedFoundId` and `matches` have no Firestore counterpart
-    // yet — AI matching is out of scope for this phase. Held as inert locals so
-    // the original AI / Potential Matches sections keep their place in the tree
-    // but render only when data backs them, which is never for a plain
-    // Firestore document today.
-    final int? aiScore = null;
-    final String? matchedFoundId = null;
-    final List<Object> matchList = const [];
-
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -3345,76 +4780,164 @@ class _AdminLostDetailScreenState extends State<AdminLostDetailScreen> {
                           child: Text(r.title,
                               style: const TextStyle(
                                   fontSize: 16, fontWeight: FontWeight.w800))),
-                      StatusBadge(r.status.wireValue)
+                      StatusBadge(_adminStatusLabel(r.status))
                     ]),
                     const Divider(height: 18),
+                    _ReporterNameInfoRow(report: r),
                     InfoRow(label: 'Student ID', value: r.reportedByStudentId),
                     InfoRow(label: 'Category', value: r.category),
                     InfoRow(label: 'Where Lost', value: r.whereLost),
                     InfoRow(
                         label: 'Submitted', value: fmtDate(r.whenLostLabel)),
+                    const Divider(height: 12),
+                    const Text('Description',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textMuted)),
+                    const SizedBox(height: 8),
+                    Text(r.description,
+                        style: const TextStyle(
+                            fontSize: 13,
+                            color: AppTheme.textSecondary,
+                            height: 1.65)),
+                    const SizedBox(height: 12),
+                    _PhotoStrip(urls: r.imageUrls),
                   ]))),
-          if (aiScore != null) ...[
-            const SectionLabel('AI Match Score'),
-            Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                    gradient: LinearGradient(colors: [
-                      AppTheme.red.withOpacity(0.08),
-                      AppTheme.redLight.withOpacity(0.06)
-                    ]),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppTheme.red.withOpacity(0.2))),
-                child: Row(children: [
-                  const Icon(Icons.psychology_rounded,
-                      color: AppTheme.red, size: 28),
-                  const SizedBox(width: 12),
-                  Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('AI Confidence',
-                            style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: AppTheme.red)),
-                        Text(
-                            '$aiScore% match with ${matchedFoundId ?? "found item"}',
-                            style: const TextStyle(
-                                fontSize: 14, fontWeight: FontWeight.w800)),
-                      ])
-                ])),
-          ],
-          if (matchList.isNotEmpty) ...[
-            const SectionLabel('Potential Matches'),
-            // Out of scope this phase; the list is always empty against a plain
-            // Firestore document, so nothing renders here today.
-            ...matchList.map((m) => const SizedBox.shrink()),
-          ],
           const SizedBox(height: 10),
-          // The "Mark as Resolved" action writes status, which has no Firestore
-          // path yet (status transitions are out of scope for this phase). The
-          // button is kept visually unchanged per the no-redesign rule, but its
-          // tap surfaces the situation instead of calling DataService.
-          if (r.status != ItemStatus.resolved)
+          // Workflow A — match this lost report against an inventory item.
+          if (r.status == ItemStatus.active ||
+              r.status == ItemStatus.matchedPending)
+            _findMatchSection(context, r),
+          // Matches already linked to this lost report.
+          StreamBuilder<List<LfMatch>>(
+            stream: _matches,
+            builder: (context, snap) {
+              final all = snap.data ?? const <LfMatch>[];
+              final mine =
+                  all.where((m) => m.lostReportId == widget.id).toList();
+              if (mine.isEmpty) return const SizedBox.shrink();
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SectionLabel('Matches'),
+                  ...mine.map((m) => _matchCard(context, m)),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 10),
+          // Closure request approval — the report is in Requested Close.
+          if (r.status == ItemStatus.requestedClose)
+            GradientButton(
+                label: 'Close',
+                onPressed: () => _confirmApproveClose(context)),
+          // Mark as Resolved — guarded by a mandatory 3-second countdown.
+          if (r.status == ItemStatus.active ||
+              r.status == ItemStatus.matchedPending)
             GradientButton(
                 label: 'Mark as Resolved',
-                onPressed: () async {
-                  final appState = context.read<AppState>();
-                  try {
-                    await appState.resolveReport(widget.id);
-                    if (!mounted) return;
-                    _toast(context, 'Report marked as resolved');
-                  } on AuthFailure catch (e) {
-                    if (!mounted) return;
-                    _toast(context, e.message);
-                  } catch (_) {
-                    if (!mounted) return;
-                    _toast(context, 'Could not update status. Try again.');
-                  }
-                }),
+                onPressed: () => _confirmResolve(context)),
         ],
       ),
     );
+  }
+
+  Widget _findMatchSection(BuildContext context, Item r) {
+    return Column(children: [
+      const NoticeBox(
+        message:
+            'Search the Inventory Office for an item that may match this lost report, then notify the student to come and verify it.',
+        icon: Icons.compare_arrows_rounded,
+      ),
+      GradientButton(
+          label: 'Find Match',
+          onPressed: () => _pickInventoryItem(context, r)),
+    ]);
+  }
+
+  Future<void> _pickInventoryItem(BuildContext context, Item r) async {
+    final item = await showModalBottomSheet<InventoryItem>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (sheetCtx) => const _InventoryPickerSheet(),
+    );
+    if (item == null || !mounted) return;
+    final appState = context.read<AppState>();
+    try {
+      await appState.createMatch(LfMatch(
+        lostReportId: r.id,
+        inventoryItemId: item.id,
+        lostOwnerUid: r.reportedByUid,
+        lostOwnerStudentId: r.reportedByStudentId,
+        status: MatchStatus.proposed,
+        notes: '${item.title} ↔ ${r.title}',
+      ));
+      await appState.reserveInventoryItem(item.id);
+      if (!mounted) return;
+      _toast(context, 'Match created. Notify the student to send it.');
+    } on AuthFailure catch (e) {
+      if (!mounted) return;
+      _toast(context, e.message);
+    } catch (_) {
+      if (!mounted) return;
+      _toast(context, 'Could not create the match. Try again.');
+    }
+  }
+
+  Future<void> _confirmResolve(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => const _ConfirmCountdownDialog(
+        title: 'Mark as Resolved',
+        message:
+            'This will mark the report as resolved. This action cannot be undone.',
+        confirmLabel: 'Resolve',
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final appState = context.read<AppState>();
+    try {
+      await appState.markAsResolved(widget.id);
+      if (!mounted) return;
+      _toast(context, 'Report marked as resolved');
+    } on AuthFailure catch (e) {
+      if (!mounted) return;
+      _toast(context, e.message);
+    } catch (_) {
+      if (!mounted) return;
+      _toast(context, 'Could not update status. Try again.');
+    }
+  }
+
+  /// Admin approval of a student's closure request, guarded by the same
+  /// 3-second countdown. Moves the report to Closed with
+  /// `STUDENT_REQUEST_APPROVED`.
+  Future<void> _confirmApproveClose(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => const _ConfirmCountdownDialog(
+        title: 'Close Report',
+        message:
+            'Approve this closure request? The report will be closed and the student notified.',
+        confirmLabel: 'Close',
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final appState = context.read<AppState>();
+    try {
+      await appState.approveCloseRequest(widget.id);
+      if (!mounted) return;
+      _toast(context, 'Closure request approved');
+    } on AuthFailure catch (e) {
+      if (!mounted) return;
+      _toast(context, e.message);
+    } catch (_) {
+      if (!mounted) return;
+      _toast(context, 'Could not close report. Try again.');
+    }
   }
 }
 
@@ -3447,7 +4970,7 @@ class _AdminFoundDetailScreenState extends State<AdminFoundDetailScreen> {
         final r = snapshot.data;
 
         return Scaffold(
-          appBar: _gradientAppBar(r?.id ?? widget.id, context),
+          appBar: _gradientAppBar('Found Item Details', context),
           body: isLoading && r == null
               ? const Center(
                   child: CircularProgressIndicator(color: AppTheme.red))
@@ -3465,13 +4988,13 @@ class _AdminFoundDetailScreenState extends State<AdminFoundDetailScreen> {
                           subtitle: 'This report may have been removed.',
                           icon: Icons.search_off_rounded,
                         )
-                      : r.isDeleted
-                          ? const EmptyState(
-                              title: 'Report Deleted',
-                              subtitle: 'This report is no longer available.',
-                              icon: Icons.delete_outline_rounded,
-                            )
-                          : _adminFoundDetailBody(context, r),
+                  : r.isDeleted
+                      ? const EmptyState(
+                          title: 'Report Deleted',
+                          subtitle: 'This report is no longer available.',
+                          icon: Icons.delete_outline_rounded,
+                        )
+                      : _adminFoundDetailBody(context, r),
         );
       },
     );
@@ -3483,33 +5006,75 @@ class _AdminFoundDetailScreenState extends State<AdminFoundDetailScreen> {
     // "Where Found" / "When Found" rows here.
     final String whereFound = r.whereLost;
     final String whenFound = r.whenLostLabel;
+    // Found reports store the item name in both `title` and `description`
+    // (see `_ReportFoundState._submit`), so a Description row is only shown
+    // when it carries information beyond the title — never a blank or
+    // duplicate row.
+    final bool hasDescription = r.description.trim().isNotEmpty &&
+        r.description.trim() != r.title.trim();
+    // Found reports are born Active (or the legacy Awaiting Handover status);
+    // both are open and eligible for the physical handover workflow.
+    final bool eligibleForHandover = r.status == ItemStatus.active ||
+        r.status == ItemStatus.awaitingHandover;
+    // Open reports an admin may resolve. Handover-eligible reports also show
+    // this, so the admin can resolve without going through handover.
+    final bool openForResolve = r.status == ItemStatus.active ||
+        r.status == ItemStatus.awaitingHandover ||
+        r.status == ItemStatus.matchedPending;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const AdminBar(), const SizedBox(height: 8),
+          const AdminBar(),
+          const SizedBox(height: 8),
           Card(
               child: Padding(
                   padding: const EdgeInsets.all(16),
-                  child: Column(children: [
-                    Row(children: [
-                      Expanded(
-                          child: Text(r.description,
-                              style: const TextStyle(
-                                  fontSize: 16, fontWeight: FontWeight.w800))),
-                      StatusBadge(r.status.wireValue)
-                    ]),
-                    const Divider(height: 18),
-                    InfoRow(label: 'Finder ID', value: r.reportedByStudentId),
-                    InfoRow(label: 'Category', value: r.category),
-                    InfoRow(label: 'Where Found', value: whereFound),
-                    InfoRow(label: 'When Found', value: fmtDate(whenFound)),
-                  ]))),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                  child: Text(_titleCase(r.title),
+                                      style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w800))),
+                              const SizedBox(width: 8),
+                              StatusBadge(_adminStatusLabel(r.status)),
+                            ]),
+                        const SizedBox(height: 4),
+                        Text('Report ID: ${r.id}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 11, color: AppTheme.textMuted)),
+                        const Divider(height: 18),
+                        _ReporterNameInfoRow(report: r),
+                        InfoRow(
+                            label: 'Student ID',
+                            value: r.reportedByStudentId),
+                        InfoRow(label: 'Category', value: r.category),
+                        InfoRow(label: 'Where Found', value: whereFound),
+                        InfoRow(label: 'When Found', value: fmtDate(whenFound)),
+                        if (hasDescription)
+                          InfoRow(label: 'Description', value: r.description),
+                        _PhotoStrip(urls: r.imageUrls),
+                      ]))),
           const SizedBox(height: 10),
           // Workflow 2 — handover controls while the item awaits handover.
-          if (r.status == ItemStatus.awaitingHandover)
-            _handoverControls(context, r),
+          if (eligibleForHandover) _handoverControls(context, r),
+          // Single secondary action: resolve an open report. Closed / resolved
+          // / returned / in-inventory reports render read-only below.
+          if (openForResolve) ...[
+            const SizedBox(height: 10),
+            OutlineBtn(
+                label: 'Mark as Resolved',
+                onPressed: () => _confirmResolve(context)),
+          ],
           if (r.status == ItemStatus.inInventory) ...[
             const SizedBox(height: 10),
             const _StatusBanner(
@@ -3525,45 +5090,8 @@ class _AdminFoundDetailScreenState extends State<AdminFoundDetailScreen> {
             const _StatusBanner(
                 text: 'This item has been returned to its owner.'),
           ],
-          // Status-based fallbacks. Admins can resolve or close any report.
-          if (r.status == ItemStatus.active ||
-              r.status == ItemStatus.matchedPending) ...[
-            GradientButton(
-                label: 'Mark as Resolved',
-                onPressed: () async {
-                  final appState = context.read<AppState>();
-                  try {
-                    await appState.resolveReport(widget.id);
-                    if (!mounted) return;
-                    _toast(context, 'Report marked as resolved');
-                  } on AuthFailure catch (e) {
-                    if (!mounted) return;
-                    _toast(context, e.message);
-                  } catch (_) {
-                    if (!mounted) return;
-                    _toast(context, 'Could not update status. Try again.');
-                  }
-                }),
-            const SizedBox(height: 10),
-            OutlineBtn(
-                label: 'Close Report',
-                color: AppTheme.danger,
-                onPressed: () async {
-                  final appState = context.read<AppState>();
-                  try {
-                    await appState.closeReport(widget.id);
-                    if (!mounted) return;
-                    _toast(context, 'Report closed');
-                  } on AuthFailure catch (e) {
-                    if (!mounted) return;
-                    _toast(context, e.message);
-                  } catch (_) {
-                    if (!mounted) return;
-                    _toast(context, 'Could not close report. Try again.');
-                  }
-                }),
-          ],
           if (r.status == ItemStatus.resolved) ...[
+            const SizedBox(height: 10),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(14),
@@ -3585,26 +5113,9 @@ class _AdminFoundDetailScreenState extends State<AdminFoundDetailScreen> {
                 )),
               ]),
             ),
-            const SizedBox(height: 10),
-            OutlineBtn(
-                label: 'Close Report',
-                color: AppTheme.danger,
-                onPressed: () async {
-                  final appState = context.read<AppState>();
-                  try {
-                    await appState.closeReport(widget.id);
-                    if (!mounted) return;
-                    _toast(context, 'Report closed');
-                  } on AuthFailure catch (e) {
-                    if (!mounted) return;
-                    _toast(context, e.message);
-                  } catch (_) {
-                    if (!mounted) return;
-                    _toast(context, 'Could not close report. Try again.');
-                  }
-                }),
           ],
           if (r.status == ItemStatus.closed) ...[
+            const SizedBox(height: 10),
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(14),
@@ -3632,6 +5143,32 @@ class _AdminFoundDetailScreenState extends State<AdminFoundDetailScreen> {
     );
   }
 
+  /// "Mark as Resolved" guarded by a mandatory 3-second countdown.
+  Future<void> _confirmResolve(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => const _ConfirmCountdownDialog(
+        title: 'Mark as Resolved',
+        message:
+            'This will mark the report as resolved. This action cannot be undone.',
+        confirmLabel: 'Mark as Resolved',
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final appState = context.read<AppState>();
+    try {
+      await appState.markAsResolved(widget.id);
+      if (!mounted) return;
+      _toast(context, 'Report marked as resolved');
+    } on AuthFailure catch (e) {
+      if (!mounted) return;
+      _toast(context, e.message);
+    } catch (_) {
+      if (!mounted) return;
+      _toast(context, 'Could not update status. Try again.');
+    }
+  }
+
   /// Cached so rebuilds of the report stream do not re-subscribe.
   Stream<List<QrTransaction>>? _handoverQrStream;
 
@@ -3654,10 +5191,31 @@ class _AdminFoundDetailScreenState extends State<AdminFoundDetailScreen> {
         }
         if (active == null) {
           return Column(children: [
-            const NoticeBox(
-              message:
-                  'Generate a Handover QR for the finder to scan when they hand over the item at the office. The code expires in 10 minutes and can only be scanned by this finder.',
-              icon: Icons.qr_code_2_rounded,
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppTheme.red.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.qr_code_2_rounded,
+                      size: 16, color: AppTheme.red),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Generate a Handover QR for the finder to scan when they hand over the item at the office. The code expires in 10 minutes and can only be scanned by this finder.',
+                      style: const TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textSecondary,
+                          height: 1.45),
+                    ),
+                  ),
+                ],
+              ),
             ),
             GradientButton(
                 label: 'Generate Handover QR',
@@ -3700,15 +5258,34 @@ class _AdminFoundDetailScreenState extends State<AdminFoundDetailScreen> {
                             ])),
                       ]),
                       const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: AppTheme.red.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: SelectableText(
+                          'Key: ${txn.token}',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.5,
+                              color: AppTheme.textPrimary),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
                       Row(children: [
                         Expanded(
-                            child: OutlineBtn(
-                                label: 'Show Full QR',
+                            child: GradientButton(
+                                label: 'Show Full QR & Key',
                                 onPressed: () => _showQRDialog(
                                     context,
                                     'Handover QR',
                                     txn.token,
-                                    'Ask ${txn.intendedStudentId} to scan this code in the app to confirm handover. It expires in 10 minutes.'))),
+                                    'Ask ${txn.intendedStudentId} to scan this code in the app, or give them the key to enter under "Input Key". It expires in 10 minutes.'))),
                         const SizedBox(width: 10),
                         Expanded(
                             child: OutlineBtn(
@@ -3797,66 +5374,109 @@ class _AdminFoundDetailScreenState extends State<AdminFoundDetailScreen> {
   }
 }
 
-void _showQRDialog(
+Future<void> _showQRDialog(
     BuildContext context, String title, String code, String message) {
-  showDialog(
+  return showDialog<void>(
     context: context,
     builder: (ctx) => AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      title: Row(children: [
-        const Icon(Icons.qr_code_2_rounded, color: AppTheme.red, size: 28),
-        const SizedBox(width: 10),
-        Expanded(
-            child: Text(title,
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w800))),
-      ]),
-      content: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(colors: [
-              AppTheme.red.withOpacity(0.08),
-              AppTheme.redLight.withOpacity(0.05)
-            ]),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppTheme.red.withOpacity(0.3), width: 2),
-          ),
-          child: Column(children: [
-            // The QR image encodes only the opaque token — no personal data,
-            // no write authority. Scanning it alone never changes a status.
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-              ),
+      title: Text(title,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+      content: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // The QR image encodes only the opaque token — no personal data,
+          // no write authority. Scanning it alone never changes a status.
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE0E0E0)),
+            ),
+            // The fixed SizedBox matters: QrImageView builds with an internal
+            // LayoutBuilder, and AlertDialog measures its content through an
+            // intrinsic-width pass that LayoutBuilder cannot answer. A tight
+            // box returns its size without querying the child, so the dialog
+            // can lay out.
+            child: SizedBox(
+              width: 190,
+              height: 190,
               child: QrImageView(
                 data: code,
                 version: QrVersions.auto,
-                size: 180,
+                size: 190,
                 backgroundColor: Colors.white,
+                errorStateBuilder: (context, error) => Container(
+                  width: 190,
+                  height: 190,
+                  alignment: Alignment.center,
+                  color: Colors.white,
+                  child: const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text(
+                      'QR preview unavailable — use the key below.',
+                      textAlign: TextAlign.center,
+                      style:
+                          TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                    ),
+                  ),
+                ),
               ),
             ),
-            const SizedBox(height: 12),
-            SelectableText(
-              code,
-              style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w900,
+          ),
+          const SizedBox(height: 14),
+          const Text('KEY',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
                   letterSpacing: 2,
-                  color: AppTheme.textPrimary),
-              textAlign: TextAlign.center,
+                  color: AppTheme.textMuted)),
+          const SizedBox(height: 6),
+          Row(children: [
+            Expanded(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppTheme.red.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.red.withOpacity(0.25)),
+                ),
+                child: SelectableText(
+                  code,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 2,
+                      color: AppTheme.textPrimary),
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              tooltip: 'Copy key',
+              icon: const Icon(Icons.copy_rounded, color: AppTheme.red),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: code));
+                if (ctx.mounted) _toast(ctx, 'Key copied');
+              },
             ),
           ]),
-        ),
-        const SizedBox(height: 14),
-        Text(message,
-            style: const TextStyle(
-                fontSize: 12, color: AppTheme.textSecondary, height: 1.55),
-            textAlign: TextAlign.center),
-      ]),
+          const SizedBox(height: 10),
+          const Text(
+            'If the QR does not work, give the student this key — they enter it under "Input Key" in the app.',
+            textAlign: TextAlign.center,
+            style:
+                TextStyle(fontSize: 11, color: AppTheme.textMuted, height: 1.5),
+          ),
+          const SizedBox(height: 12),
+          Text(message,
+              style: const TextStyle(
+                  fontSize: 12, color: AppTheme.textSecondary, height: 1.55),
+              textAlign: TextAlign.center),
+        ]),
+      ),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(ctx).pop(),
@@ -3891,11 +5511,23 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
     return StreamBuilder<List<InventoryItem>>(
       stream: _items,
       builder: (context, snapshot) {
-        final data = snapshot.data ?? const <InventoryItem>[];
+        // Only items currently sitting in the office (In Inventory) belong
+        // here. Items claimed by their owner (Returned) move to the Archive.
+        final data = (snapshot.data ?? const <InventoryItem>[])
+            .where((item) => !item.isReturned)
+            .toList();
         final isLoading = snapshot.connectionState == ConnectionState.waiting;
         final error = snapshot.error;
         return Scaffold(
           appBar: _gradientAppBar('Inventory Office', context),
+          floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
+          floatingActionButton: FloatingActionButton(
+            backgroundColor: AppTheme.red,
+            foregroundColor: Colors.white,
+            onPressed: () =>
+                context.push('/admin/lost-found/inventory/archive'),
+            child: const Icon(Icons.archive_rounded),
+          ),
           body: Column(children: [
             const Padding(
                 padding: EdgeInsets.fromLTRB(16, 8, 16, 0), child: AdminBar()),
@@ -3941,7 +5573,86 @@ class _AdminInventoryScreenState extends State<AdminInventoryScreen> {
   }
 }
 
-// ── Screen 15: Admin Inventory Detail ─────────────────────────────
+// ── Screen 15: Admin Inventory Archive ────────────────────────────
+class AdminInventoryArchiveScreen extends StatefulWidget {
+  const AdminInventoryArchiveScreen({super.key});
+  @override
+  State<AdminInventoryArchiveScreen> createState() =>
+      _AdminInventoryArchiveScreenState();
+}
+
+class _AdminInventoryArchiveScreenState
+    extends State<AdminInventoryArchiveScreen> {
+  /// Held in a field so rebuilds do not re-subscribe to Firestore.
+  late final Stream<List<InventoryItem>> _items;
+
+  @override
+  void initState() {
+    super.initState();
+    _items = context.read<AppState>().watchAllInventoryItems();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<InventoryItem>>(
+      stream: _items,
+      builder: (context, snapshot) {
+        // The archive holds only items that have been claimed by their owner
+        // (Returned). Everything still in the office stays on the Inventory
+        // Office screen.
+        final data = (snapshot.data ?? const <InventoryItem>[])
+            .where((item) => item.isReturned)
+            .toList();
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
+        final error = snapshot.error;
+        return Scaffold(
+          appBar: _gradientAppBar('Archive', context),
+          body: Column(children: [
+            const Padding(
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 0), child: AdminBar()),
+            Expanded(
+                child: isLoading && data.isEmpty
+                    ? const Center(
+                        child: CircularProgressIndicator(color: AppTheme.red))
+                    : error != null
+                        ? EmptyState(
+                            title: 'Could Not Load Archive',
+                            subtitle: error is AuthFailure
+                                ? error.message
+                                : 'Something went wrong. Please try again.',
+                            icon: Icons.cloud_off_rounded,
+                          )
+                        : data.isEmpty
+                            ? const EmptyState(
+                                title: 'No Archived Items',
+                                subtitle:
+                                    'Items claimed by their owner appear here.',
+                                icon: Icons.archive_rounded)
+                            : ListView.builder(
+                                padding: const EdgeInsets.all(16),
+                                itemCount: data.length,
+                                itemBuilder: (ctx, i) {
+                                  final item = data[i];
+                                  return CardRow(
+                                    title: item.title,
+                                    subtitle:
+                                        '${item.category} · Finder ${item.finderStudentId}',
+                                    extra: item.returnedAt == null
+                                        ? null
+                                        : 'Returned ${fmtDate(item.returnedAt!.toIso8601String())}',
+                                    status: item.status.wireValue,
+                                    onTap: () => context.push(
+                                        '/admin/lost-found/inventory/${item.id}'),
+                                  ).animate().fadeIn(delay: (i * 55).ms);
+                                })),
+          ]),
+        );
+      },
+    );
+  }
+}
+
+// ── Screen 16: Admin Inventory Detail ─────────────────────────────
 class AdminInventoryDetailScreen extends StatefulWidget {
   final String id;
   const AdminInventoryDetailScreen({super.key, required this.id});
@@ -4324,6 +6035,25 @@ class _MatchActionsState extends State<_MatchActions> {
     }
   }
 
+  Future<void> _reject() async {
+    final appState = context.read<AppState>();
+    setState(() => _busy = true);
+    try {
+      await appState.rejectMatch(widget.match.id);
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _toast(context, 'Match rejected — the item is available again.');
+    } on AuthFailure catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _toast(context, e.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      _toast(context, 'Could not reject the match. Try again.');
+    }
+  }
+
   Future<void> _generateReturnQr() async {
     final appState = context.read<AppState>();
     setState(() => _busy = true);
@@ -4386,14 +6116,24 @@ class _MatchActionsState extends State<_MatchActions> {
   Widget build(BuildContext context) {
     final m = widget.match;
     return Column(children: [
-      if (m.status == MatchStatus.proposed)
+      if (m.status == MatchStatus.proposed) ...[
         GradientButton(
             label: 'Approve Match & Notify Student',
             onPressed: _busy ? null : _approve),
+        const SizedBox(height: 10),
+        OutlineBtn(
+            label: 'Reject Match',
+            color: AppTheme.danger,
+            onPressed: _busy ? null : _reject),
+      ],
       if (m.status == MatchStatus.approved) _returnQrSection(),
       if (m.status == MatchStatus.completed) ...[
         const _StatusBanner(
             text: 'Return completed — this item is back with its owner.'),
+      ],
+      if (m.status == MatchStatus.rejected) ...[
+        const _StatusBanner(
+            text: 'This match was rejected — the item is available again.'),
       ],
     ]);
   }
@@ -4461,15 +6201,34 @@ class _MatchActionsState extends State<_MatchActions> {
                             ])),
                       ]),
                       const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: AppTheme.red.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: SelectableText(
+                          'Key: ${txn.token}',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.5,
+                              color: AppTheme.textPrimary),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
                       Row(children: [
                         Expanded(
-                            child: OutlineBtn(
-                                label: 'Show Full QR',
+                            child: GradientButton(
+                                label: 'Show Full QR & Key',
                                 onPressed: () => _showQRDialog(
                                     context,
                                     'Return QR',
                                     txn.token,
-                                    'Ask ${txn.intendedStudentId} to scan this code in the app when collecting the item. It expires in 10 minutes.'))),
+                                    'Ask ${txn.intendedStudentId} to scan this code in the app when collecting the item, or give them the key to enter under "Input Key". It expires in 10 minutes.'))),
                         const SizedBox(width: 10),
                         Expanded(
                             child: OutlineBtn(
@@ -4569,6 +6328,114 @@ class _LostReportPickerSheetState extends State<_LostReportPickerSheet> {
   }
 }
 
+/// Bottom sheet listing inventory items (In Inventory, not reserved) so an
+/// admin can pick the one that matches a lost report. Includes a search box.
+/// Pops with the chosen [InventoryItem].
+class _InventoryPickerSheet extends StatefulWidget {
+  const _InventoryPickerSheet();
+
+  @override
+  State<_InventoryPickerSheet> createState() => _InventoryPickerSheetState();
+}
+
+class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
+  late final Stream<List<InventoryItem>> _items;
+  final TextEditingController _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _items = context.read<AppState>().watchAllInventoryItems();
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.7,
+        child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 8, 8),
+            child: Row(children: [
+              const Text('Find a Matching Item',
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.textPrimary)),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.close_rounded,
+                    color: AppTheme.textSecondary),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ]),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              controller: _search,
+              onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+              decoration: InputDecoration(
+                hintText: 'Search by title or category',
+                prefixIcon: const Icon(Icons.search_rounded),
+                isDense: true,
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ),
+          Expanded(
+            child: StreamBuilder<List<InventoryItem>>(
+              stream: _items,
+              builder: (context, snapshot) {
+                final data = snapshot.data ?? const <InventoryItem>[];
+                final available = data
+                    .where(
+                        (item) => item.status == InventoryStatus.inInventory)
+                    .where((item) =>
+                        _query.isEmpty ||
+                        item.title.toLowerCase().contains(_query) ||
+                        item.category.toLowerCase().contains(_query))
+                    .toList();
+                if (available.isEmpty) {
+                  return const EmptyState(
+                      title: 'No Available Items',
+                      subtitle: 'Items handed over at the office appear here.',
+                      icon: Icons.inventory_rounded);
+                }
+                return ListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: available.length,
+                  itemBuilder: (ctx, i) {
+                    final item = available[i];
+                    return CardRow(
+                      title: item.title,
+                      subtitle:
+                          '${item.category} · Finder ${item.finderStudentId}',
+                      extra: item.handedOverAt == null
+                          ? null
+                          : 'Handed over ${fmtDate(item.handedOverAt!.toIso8601String())}',
+                      status: item.status.wireValue,
+                      onTap: () => Navigator.of(context).pop(item),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
 // ── Shared Private Widgets ────────────────────────────────────────
 class _Drop extends StatelessWidget {
   final String label;
@@ -4627,7 +6494,12 @@ class _Area extends StatelessWidget {
 class _PhotoBox extends StatefulWidget {
   final ValueChanged<List<File>> onImagesChanged;
   final bool polished;
-  const _PhotoBox({required this.onImagesChanged, this.polished = false});
+  final bool foundStyle;
+  const _PhotoBox({
+    required this.onImagesChanged,
+    this.polished = false,
+    this.foundStyle = false,
+  });
 
   @override
   State<_PhotoBox> createState() => _PhotoBoxState();
@@ -4701,6 +6573,42 @@ class _PhotoBoxState extends State<_PhotoBox> {
   @override
   Widget build(BuildContext context) {
     if (_images.isEmpty) {
+      if (widget.foundStyle) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _FoundPhotoLabel(count: _images.length),
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: _showSourceSheet,
+              child: CustomPaint(
+                painter: const _ReportLostDashedBorderPainter(),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Column(
+                    children: [
+                      _FoundPhotoUploadTile(),
+                      SizedBox(height: 10),
+                      Text('Tap to add photos',
+                          style: TextStyle(
+                              color: Luxe.ink,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800)),
+                      SizedBox(height: 4),
+                      Text('You can add up to 3 photos',
+                          style: TextStyle(color: Luxe.inkSoft, fontSize: 13)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      }
       if (widget.polished) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -4820,6 +6728,24 @@ class _PhotoBoxState extends State<_PhotoBox> {
         ),
       ],
     );
+    if (widget.foundStyle) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _FoundPhotoLabel(count: _images.length),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Luxe.primary.withValues(alpha: .12)),
+            ),
+            child: content,
+          ),
+        ],
+      );
+    }
     if (!widget.polished) return content;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -4838,6 +6764,60 @@ class _PhotoBoxState extends State<_PhotoBox> {
           child: content,
         ),
       ],
+    );
+  }
+}
+
+class _FoundPhotoLabel extends StatelessWidget {
+  final int count;
+
+  const _FoundPhotoLabel({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Expanded(
+          child: Text(
+            'Add Photos (Optional)',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+                color: Luxe.ink, fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF4F6F8),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Text('$count/3',
+              style: const TextStyle(
+                  color: Luxe.inkSoft,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700)),
+        ),
+      ],
+    );
+  }
+}
+
+class _FoundPhotoUploadTile extends StatelessWidget {
+  const _FoundPhotoUploadTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 56,
+      height: 56,
+      decoration: BoxDecoration(
+        color: Luxe.primary.withValues(alpha: .10),
+        shape: BoxShape.circle,
+      ),
+      child: const Icon(Icons.add_a_photo_outlined,
+          color: Luxe.primaryDeep, size: 29),
     );
   }
 }
@@ -5131,11 +7111,11 @@ class _StatusBanner extends StatelessWidget {
   }
 }
 
-/// Student scan section: manual token entry plus a camera scan button.
-///
-/// Both paths call [AppState.scanQrCode], so the Firestore rules are the
-/// gate for every write — the camera and the text field are two front doors
-/// to the same single-use, intended-student-only token check.
+/// Student scan section: two front doors to the same single-use token check
+/// — "Scan QR" (camera, with a gallery-image fallback) and "Input Key"
+/// (manual entry of the key shown under the office QR). Both paths call
+/// [AppState.scanQrCode], so the Firestore rules are the gate for every
+/// write no matter which door is used.
 class _QrScanSection extends StatefulWidget {
   final String instruction;
   final VoidCallback onSuccess;
@@ -5148,6 +7128,7 @@ class _QrScanSection extends StatefulWidget {
 class _QrScanSectionState extends State<_QrScanSection> {
   final _codeController = TextEditingController();
   bool _busy = false;
+  bool _showKeyInput = false;
 
   @override
   void dispose() {
@@ -5159,7 +7140,7 @@ class _QrScanSectionState extends State<_QrScanSection> {
     if (_busy) return;
     final code = token.trim();
     if (code.isEmpty) {
-      _toast(context, 'Please enter or scan the QR code');
+      _toast(context, 'Please enter the key or scan the QR code');
       return;
     }
     final appState = context.read<AppState>();
@@ -5168,10 +7149,11 @@ class _QrScanSectionState extends State<_QrScanSection> {
       final outcome = await appState.scanQrCode(code);
       if (!mounted) return;
       setState(() => _busy = false);
-      _toast(context, outcome.message);
       if (outcome.success) {
         _codeController.clear();
         widget.onSuccess();
+      } else {
+        _toast(context, outcome.message);
       }
     } on AuthFailure catch (e) {
       if (!mounted) return;
@@ -5185,7 +7167,7 @@ class _QrScanSectionState extends State<_QrScanSection> {
   }
 
   void _scanWithCamera() {
-    showModalBottomSheet(
+    showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -5210,50 +7192,63 @@ class _QrScanSectionState extends State<_QrScanSection> {
                 message: widget.instruction,
                 icon: Icons.qr_code_scanner_rounded,
               ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _codeController,
-                decoration: InputDecoration(
-                  hintText: 'Enter QR code here...',
-                  prefixIcon:
-                      const Icon(Icons.qr_code_rounded, color: AppTheme.red),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                  enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide:
-                          BorderSide(color: AppTheme.red.withOpacity(0.3))),
-                  focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide:
-                          const BorderSide(color: AppTheme.red, width: 2)),
-                ),
-                style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1),
-              ),
               const SizedBox(height: 14),
-              Row(children: [
-                Expanded(
-                    child: OutlineBtn(
-                        label: 'Scan with Camera',
-                        onPressed: _busy ? null : _scanWithCamera)),
-                const SizedBox(width: 10),
-                Expanded(
-                    child: GradientButton(
-                        label: _busy ? 'Verifying…' : 'Verify Code',
-                        onPressed: _busy
-                            ? null
-                            : () => _submit(_codeController.text))),
-              ]),
+              // Option 1 — Scan QR: live camera with a gallery fallback.
+              GradientButton(
+                label: _busy ? 'Verifying…' : 'Scan QR',
+                onPressed: _busy ? null : _scanWithCamera,
+              ),
+              const SizedBox(height: 10),
+              // Option 2 — Input Key: the same token the QR encodes, for
+              // when the camera cannot read the code.
+              OutlineBtn(
+                label: _showKeyInput ? 'Hide Key Input' : 'Input Key',
+                onPressed: _busy
+                    ? null
+                    : () => setState(() => _showKeyInput = !_showKeyInput),
+              ),
+              if (_showKeyInput) ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _codeController,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: InputDecoration(
+                    hintText: 'Enter the key shown under the QR code…',
+                    prefixIcon:
+                        const Icon(Icons.key_rounded, color: AppTheme.red),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide:
+                            BorderSide(color: AppTheme.red.withOpacity(0.3))),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide:
+                            const BorderSide(color: AppTheme.red, width: 2)),
+                  ),
+                  style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1),
+                  onSubmitted:
+                      _busy ? null : (_) => _submit(_codeController.text),
+                ),
+                const SizedBox(height: 10),
+                GradientButton(
+                  label: _busy ? 'Verifying…' : 'Verify Key',
+                  onPressed: _busy ? null : () => _submit(_codeController.text),
+                ),
+              ],
             ])));
   }
 }
 
-/// Camera scanner bottom sheet. Pops itself and delivers the first raw code
-/// it detects exactly once (extra frames are ignored while the caller
-/// submits the scan).
+/// Camera scanner bottom sheet. The camera is live on top; a gallery button
+/// below lets the user upload a photo of the QR instead. Either way the first
+/// raw code detected is delivered exactly once (extra frames are ignored
+/// while the caller submits the scan).
 class _QrScannerSheet extends StatefulWidget {
   final void Function(String code) onDetect;
   const _QrScannerSheet({required this.onDetect});
@@ -5264,7 +7259,9 @@ class _QrScannerSheet extends StatefulWidget {
 
 class _QrScannerSheetState extends State<_QrScannerSheet> {
   final MobileScannerController _controller = MobileScannerController();
+  final ImagePicker _picker = ImagePicker();
   bool _handled = false;
+  bool _picking = false;
 
   @override
   void dispose() {
@@ -5281,11 +7278,44 @@ class _QrScannerSheetState extends State<_QrScannerSheet> {
     widget.onDetect(code);
   }
 
+  /// Decodes a QR from a photo picked from the gallery — the fallback for
+  /// when the live camera cannot read the code.
+  Future<void> _pickFromGallery() async {
+    if (_handled || _picking) return;
+    setState(() => _picking = true);
+    try {
+      final XFile? picked =
+          await _picker.pickImage(source: ImageSource.gallery);
+      if (picked == null) {
+        if (mounted) setState(() => _picking = false);
+        return;
+      }
+      final capture = await _controller.analyzeImage(picked.path);
+      if (!mounted) return;
+      setState(() => _picking = false);
+      final code = capture?.barcodes
+          .map((b) => b.rawValue)
+          .whereType<String>()
+          .firstOrNull;
+      if (code == null || code.isEmpty) {
+        _toast(context, 'No QR code found in that image. Please try another.');
+        return;
+      }
+      if (_handled) return;
+      _handled = true;
+      widget.onDetect(code);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _picking = false);
+      _toast(context, 'Could not read that image. Please try a clearer photo.');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: SizedBox(
-        height: MediaQuery.of(context).size.height * 0.65,
+        height: MediaQuery.of(context).size.height * 0.72,
         child: Column(children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 12, 8, 8),
@@ -5305,7 +7335,7 @@ class _QrScannerSheetState extends State<_QrScannerSheet> {
           ),
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(16),
                 child: MobileScanner(
@@ -5321,7 +7351,7 @@ class _QrScannerSheetState extends State<_QrScannerSheet> {
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 24),
                           child: Text(
-                            'Camera unavailable. Enter the code manually instead.',
+                            'Camera unavailable. Upload a photo of the QR from the gallery, or use Input Key instead.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                                 fontSize: 12,
@@ -5335,6 +7365,21 @@ class _QrScannerSheetState extends State<_QrScannerSheet> {
                 ),
               ),
             ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Column(children: [
+              OutlineBtn(
+                label: _picking ? 'Reading image…' : 'Upload QR from Gallery',
+                onPressed: _picking ? null : _pickFromGallery,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Point the camera at the office QR code, or upload a photo of it.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
+              ),
+            ]),
           ),
         ]),
       ),
@@ -5382,7 +7427,7 @@ class _FoundReportStepperView extends StatelessWidget {
                   .animate()
                   .fadeIn(delay: 200.ms),
               const SizedBox(height: 8),
-              const Text('Your report is saved with status: Awaiting Handover',
+              const Text('Your report is saved with status: Awaiting',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                           fontSize: 13, color: AppTheme.textSecondary))

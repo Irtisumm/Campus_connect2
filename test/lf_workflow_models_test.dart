@@ -18,7 +18,7 @@ void main() {
       expect(ItemStatus.fromWire('In Inventory (typo)'), ItemStatus.active);
     });
 
-    test('lists all seven lifecycle values', () {
+    test('lists all eight lifecycle values', () {
       expect(ItemStatus.values.map((s) => s.wireValue), [
         'Active',
         'Awaiting Handover',
@@ -26,6 +26,7 @@ void main() {
         'In Inventory',
         'Resolved',
         'Returned',
+        'Requested Close',
         'Closed',
       ]);
     });
@@ -79,6 +80,32 @@ void main() {
       expect(map['status'], 'Returned');
       expect(map['matchedLostReportId'], 'lost1');
     });
+
+    test('handoverTxnId is empty by default and round-trips', () {
+      final without = InventoryItem(
+        id: 'inv1',
+        foundReportId: 'r1',
+        finderUid: 'uidA',
+        finderStudentId: 'S001',
+        title: 'Phone',
+        category: 'Phone',
+        description: 'desc',
+      );
+      expect(without.toCreateMap()['handoverTxnId'], '');
+
+      final withTxn = InventoryItem(
+        id: 'inv1',
+        foundReportId: 'r1',
+        finderUid: 'uidA',
+        finderStudentId: 'S001',
+        title: 'Phone',
+        category: 'Phone',
+        description: 'desc',
+        handoverTxnId: 'qr1',
+      );
+      final restored = InventoryItem.fromMap('inv1', withTxn.toCreateMap());
+      expect(restored.handoverTxnId, 'qr1');
+    });
   });
 
   group('LfMatch', () {
@@ -105,7 +132,7 @@ void main() {
 
     test('status wire values', () {
       expect(MatchStatus.values.map((s) => s.wireValue),
-          ['Proposed', 'Approved', 'Completed']);
+          ['Proposed', 'Approved', 'Completed', 'Rejected']);
     });
   });
 
@@ -164,6 +191,18 @@ void main() {
           .toScanMap();
       expect(map.keys.toSet(), {'status', 'scannedAt'});
       expect(map['status'], 'Scanned');
+    });
+
+    test('complete-handover map confirms the code as the student', () {
+      final map = QrTransaction.issue(
+              kind: QrKind.handover,
+              intendedStudentUid: 'uidA',
+              intendedStudentId: 'S001')
+          .toCompleteHandoverMap('uidA');
+      expect(map.keys.toSet(),
+          {'status', 'scannedAt', 'confirmedAt', 'confirmedByUid', 'updatedAt'});
+      expect(map['status'], 'Confirmed');
+      expect(map['confirmedByUid'], 'uidA');
     });
 
     test('kind wire values', () {

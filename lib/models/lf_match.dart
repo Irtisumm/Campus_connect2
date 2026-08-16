@@ -6,11 +6,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 /// `Proposed` is a draft the admin has not approved yet; `Approved` is the
 /// confirmed possible-match shown to the lost report's owner; `Completed` is
 /// set by the return transaction once the item is physically back with its
-/// owner.
+/// owner; `Rejected` is set when the admin dismisses a proposed match (the
+/// linked inventory item is released back to `In Inventory`).
 enum MatchStatus {
   proposed('Proposed'),
   approved('Approved'),
-  completed('Completed');
+  completed('Completed'),
+  rejected('Rejected');
 
   const MatchStatus(this.wireValue);
   final String wireValue;

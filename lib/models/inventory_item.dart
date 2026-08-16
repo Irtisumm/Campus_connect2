@@ -2,8 +2,12 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 /// Lifecycle of a handed-over found item, stored in
 /// `inventory/{id}.status`.
+///
+/// `Reserved` is set while an admin has linked the item to a lost report via
+/// a match; it is released back to `In Inventory` if the match is rejected.
 enum InventoryStatus {
   inInventory('In Inventory'),
+  reserved('Reserved'),
   returned('Returned');
 
   const InventoryStatus(this.wireValue);
@@ -38,6 +42,12 @@ class InventoryItem {
   /// Campus Student ID of the finder (e.g. `S001`), denormalised for display.
   final String finderStudentId;
 
+  /// The `qrTransactions/{id}` handover code whose scan created this record.
+  /// Set only on the student scan-completion path; empty on the legacy
+  /// admin-confirmation path. Lets the rules verify the record is linked to a
+  /// confirmed handover code.
+  final String handoverTxnId;
+
   final String title;
   final String category;
   final String description;
@@ -61,6 +71,7 @@ class InventoryItem {
     required this.foundReportId,
     required this.finderUid,
     required this.finderStudentId,
+    this.handoverTxnId = '',
     required this.title,
     required this.category,
     required this.description,
@@ -85,6 +96,7 @@ class InventoryItem {
     return InventoryItem(
       id: id ?? this.id,
       foundReportId: foundReportId,
+      handoverTxnId: handoverTxnId,
       finderUid: finderUid,
       finderStudentId: finderStudentId,
       title: title,
@@ -105,6 +117,7 @@ class InventoryItem {
   Map<String, dynamic> toCreateMap() {
     return {
       'foundReportId': foundReportId,
+      'handoverTxnId': handoverTxnId,
       'finderUid': finderUid,
       'finderStudentId': finderStudentId,
       'title': title,
@@ -134,6 +147,7 @@ class InventoryItem {
     return InventoryItem(
       id: id,
       foundReportId: data['foundReportId']?.toString() ?? '',
+      handoverTxnId: data['handoverTxnId']?.toString() ?? '',
       finderUid: data['finderUid']?.toString() ?? '',
       finderStudentId: data['finderStudentId']?.toString() ?? '',
       title: data['title']?.toString() ?? '',

@@ -189,6 +189,22 @@ class QrTransaction {
     };
   }
 
+  /// The write a student performs when their handover scan completes the
+  /// physical handover (Workflow 2). Unlike [toScanMap] (the return flow,
+  /// where the code stops at `Scanned` and an admin confirms), a handover code
+  /// jumps straight from `Issued` to `Confirmed` in the same transaction that
+  /// closes the report and creates the inventory record. `confirmedByUid` is
+  /// therefore the student's own UID here, not an admin's.
+  Map<String, dynamic> toCompleteHandoverMap(String studentUid) {
+    return {
+      'status': QrStatus.confirmed.wireValue,
+      'scannedAt': FieldValue.serverTimestamp(),
+      'confirmedAt': FieldValue.serverTimestamp(),
+      'confirmedByUid': studentUid,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+  }
+
   /// The write an admin performs to cancel an unused code.
   static Map<String, dynamic> cancelMap() {
     return {

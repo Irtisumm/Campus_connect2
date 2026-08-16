@@ -102,6 +102,31 @@ class LostFoundService {
     }
   }
 
+  /// Changes a report's status and records why it was closed, in one write.
+  ///
+  /// Only the two fixed admin closure reasons are valid here
+  /// (`STUDENT_REQUEST_APPROVED` / `ADMIN_RESOLVED`); the caller (AppState)
+  /// passes a server-fixed constant, never client input. The Firestore rules
+  /// independently reject any other `closeReason` value.
+  Future<void> updateStatusWithReason(
+      String id, ItemStatus newStatus, String reason) async {
+    _assertAvailable();
+
+    if (id.isEmpty) {
+      throw const AuthFailure('This report cannot be updated.');
+    }
+
+    try {
+      await _items.doc(id).update({
+        'status': newStatus.wireValue,
+        'closeReason': reason,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
   /// Soft-deletes a report by setting `isDeleted: true`.
   ///
   /// The document remains in Firestore (for admin history and any future
