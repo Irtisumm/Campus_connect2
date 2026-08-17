@@ -305,8 +305,11 @@ service cloud.firestore {
     match /inventory/{inventoryId} {
 
       // The finder sees their own handed-over items; admins see everything.
+      // Any signed-in user may read inventory items with status 'In Inventory'
+      // (needed for AI matching pre-checks on the student's client).
       allow get, list: if isAdmin()
-        || (signedIn() && request.auth.uid == resource.data.finderUid);
+        || (signedIn() && request.auth.uid == resource.data.finderUid)
+        || (signedIn() && resource.data.status == 'In Inventory');
 
       // Only admins create inventory records, and a record is born
       // 'In Inventory'. Exactly-one-per-handover is enforced by the
@@ -360,21 +363,49 @@ service cloud.firestore {
 
       // Only admins create or approve matches; a match is born 'Proposed'
       // (awaiting approval) or directly 'Approved'.
-      allow create: if isAdmin()
-        && request.resource.data.status in ['Proposed', 'Approved']
-        && request.resource.data.lostReportId is string
-        && request.resource.data.inventoryItemId is string
-        && request.resource.data.lostOwnerUid is string
-        && request.resource.data.lostOwnerStudentId is string;
+      // AI-created matches include source:'ai' plus optional score/evidence
+      // fields; manual matches omit them. notes is optional.
+      //
+      // The lost-report owner may create AI-proposed matches for their
+      // own report (Flow A — new Lost Report matched against existing
+      // Inventory items).
+      //
+      // The finder (inventory item owner) may also create AI-proposed
+      // matches for the item they handed in (Flow B — new Inventory item
+      // matched against existing Lost Reports).
+      allow create: if (isAdmin()
+          && request.resource.data.status in ['Proposed', 'Approved']
+          && request.resource.data.lostReportId is string
+          && request.resource.data.inventoryItemId is string
+          && request.resource.data.lostOwnerUid is string
+          && request.resource.data.lostOwnerStudentId is string
+          && (request.resource.data.source == null
+              || request.resource.data.source in ['manual', 'ai']))
+        || (signedIn()
+          && request.auth.uid == request.resource.data.lostOwnerUid
+          && request.resource.data.source == 'ai'
+          && request.resource.data.status == 'Proposed'
+          && request.resource.data.lostReportId is string
+          && request.resource.data.inventoryItemId is string
+          && request.resource.data.lostOwnerUid is string)
+        || (signedIn()
+          && request.auth.uid == request.resource.data.finderUid
+          && request.resource.data.source == 'ai'
+          && request.resource.data.status == 'Proposed'
+          && request.resource.data.lostReportId is string
+          && request.resource.data.inventoryItemId is string
+          && request.resource.data.lostOwnerUid is string);
 
-      // Admin-only edits through the lifecycle; the two linked records and
-      // the owner are immutable.
+      // Admin-only edits through the lifecycle; the two linked records,
+      // the owner, source, and AI score fields are immutable.
       allow update: if isAdmin()
         && request.resource.data.lostReportId == resource.data.lostReportId
         && request.resource.data.inventoryItemId == resource.data.inventoryItemId
         && request.resource.data.lostOwnerUid == resource.data.lostOwnerUid
         && request.resource.data.lostOwnerStudentId == resource.data.lostOwnerStudentId
-        && request.resource.data.status in ['Proposed', 'Approved', 'Completed', 'Rejected'];
+        && request.resource.data.status in ['Proposed', 'Approved', 'Completed', 'Rejected']
+        && (request.resource.data.source == null
+            || request.resource.data.source == resource.data.source);
 
       // Matches are audit records, never deleted.
       allow delete: if false;

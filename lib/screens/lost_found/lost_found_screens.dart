@@ -83,9 +83,8 @@ class _LostFoundHubScreenState extends State<LostFoundHubScreen> {
         // "Found Reports" counts only found reports that are still Active —
         // once a found report is handed over (In Inventory), returned,
         // resolved, or closed it no longer counts as an active found report.
-        final activeFound = found
-            .where((r) => r.status == ItemStatus.active)
-            .length;
+        final activeFound =
+            found.where((r) => r.status == ItemStatus.active).length;
         final active = all
             .where((r) =>
                 r.status == ItemStatus.active ||
@@ -442,39 +441,40 @@ class _LostFoundIdentityRow extends StatelessWidget {
                       return Stack(
                         clipBehavior: Clip.none,
                         children: [
-                      _IdentityIconButton(
-                        size: controlSize,
-                        iconSize: iconSize,
-                        icon: Icons.notifications_none_rounded,
-                        onPressed: () =>
-                            context.push('/lost-found/notifications'),
-                      ),
-                      if (unreadCount > 0)
-                        Positioned(
-                          top: -3,
-                          right: -3,
-                          child: IgnorePointer(
-                            child: Container(
-                              padding: const EdgeInsets.all(3),
-                              constraints: const BoxConstraints(
-                                  minWidth: 17, minHeight: 17),
-                              decoration: BoxDecoration(
-                                color: Luxe.accent,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                    color: Colors.white.withValues(alpha: .9),
-                                    width: 1.5),
-                              ),
-                              child: Text('$unreadCount',
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                      fontSize: 9,
-                                      height: 1.15,
-                                      fontWeight: FontWeight.w800,
-                                      color: Color(0xFF7A4B00))),
-                            ),
+                          _IdentityIconButton(
+                            size: controlSize,
+                            iconSize: iconSize,
+                            icon: Icons.notifications_none_rounded,
+                            onPressed: () =>
+                                context.push('/lost-found/notifications'),
                           ),
-                        ),
+                          if (unreadCount > 0)
+                            Positioned(
+                              top: -3,
+                              right: -3,
+                              child: IgnorePointer(
+                                child: Container(
+                                  padding: const EdgeInsets.all(3),
+                                  constraints: const BoxConstraints(
+                                      minWidth: 17, minHeight: 17),
+                                  decoration: BoxDecoration(
+                                    color: Luxe.accent,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                        color:
+                                            Colors.white.withValues(alpha: .9),
+                                        width: 1.5),
+                                  ),
+                                  child: Text('$unreadCount',
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                          fontSize: 9,
+                                          height: 1.15,
+                                          fontWeight: FontWeight.w800,
+                                          color: Color(0xFF7A4B00))),
+                                ),
+                              ),
+                            ),
                         ],
                       );
                     },
@@ -2618,12 +2618,10 @@ class _MyLostReportsScreenState extends State<MyLostReportsScreen> {
             }
 
             final possible = reports
-                .where((r) =>
-                    !r.isLostClosed && (unresolved[r.id] ?? 0) > 0)
+                .where((r) => !r.isLostClosed && (unresolved[r.id] ?? 0) > 0)
                 .toList();
             final active = reports
-                .where((r) =>
-                    !r.isLostClosed && (unresolved[r.id] ?? 0) == 0)
+                .where((r) => !r.isLostClosed && (unresolved[r.id] ?? 0) == 0)
                 .toList();
             final closed = reports.where((r) => r.isLostClosed).toList();
 
@@ -2640,8 +2638,7 @@ class _MyLostReportsScreenState extends State<MyLostReportsScreen> {
                     icon: const Icon(Icons.add, color: Colors.white, size: 16),
                     label: const Text('Report',
                         style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700))),
+                            color: Colors.white, fontWeight: FontWeight.w700))),
               ]),
               body: isLoading && reports.isEmpty
                   ? const Center(
@@ -2678,12 +2675,13 @@ class _MyLostReportsScreenState extends State<MyLostReportsScreen> {
                                             : _selected == 2
                                                 ? 'Closed'
                                                 : r.status ==
-                                                        ItemStatus.requestedClose
+                                                        ItemStatus
+                                                            .requestedClose
                                                     ? 'Closure Requested'
                                                     : 'Active',
                                         matchCount: unresolved[r.id] ?? 0,
-                                        onTap: () => context.push(
-                                            '/lost-found/lost/${r.id}'),
+                                        onTap: () => context
+                                            .push('/lost-found/lost/${r.id}'),
                                       )
                                           .animate()
                                           .fadeIn(delay: (i * 50).ms)
@@ -2702,14 +2700,11 @@ class _MyLostReportsScreenState extends State<MyLostReportsScreen> {
   Widget _lostEmptyState(int section) {
     return switch (section) {
       0 => const EmptyState(
-          title: 'No possible matches yet.',
-          icon: Icons.link_rounded),
+          title: 'No possible matches yet.', icon: Icons.link_rounded),
       2 => const EmptyState(
-          title: 'No closed lost reports yet.',
-          icon: Icons.archive_rounded),
+          title: 'No closed lost reports yet.', icon: Icons.archive_rounded),
       _ => const EmptyState(
-          title: 'No active lost reports.',
-          icon: Icons.search_off_rounded),
+          title: 'No active lost reports.', icon: Icons.search_off_rounded),
     };
   }
 }
@@ -2909,8 +2904,8 @@ class _LostReportCard extends StatelessWidget {
   Widget _placeholder() {
     return Container(
       color: const Color(0xFFF0F2F5),
-      child: const Icon(Icons.search_rounded,
-          color: AppTheme.textMuted, size: 26),
+      child:
+          const Icon(Icons.search_rounded, color: AppTheme.textMuted, size: 26),
     );
   }
 }
@@ -3006,7 +3001,8 @@ class _MyFoundReportsScreenState extends State<MyFoundReportsScreen> {
                                     : Icons.inventory_2_rounded,
                               )
                             : ListView.builder(
-                                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                                padding:
+                                    const EdgeInsets.fromLTRB(16, 8, 16, 16),
                                 itemCount: visible.length,
                                 itemBuilder: (ctx, i) {
                                   final r = visible[i];
@@ -3109,16 +3105,13 @@ class _FoundReminder extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.info_outline_rounded,
-              size: 16, color: AppTheme.red),
+          const Icon(Icons.info_outline_rounded, size: 16, color: AppTheme.red),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               'Please hand this item to the Lost & Found Office (Block A, Level 1).',
               style: const TextStyle(
-                  fontSize: 12,
-                  color: AppTheme.textSecondary,
-                  height: 1.5),
+                  fontSize: 12, color: AppTheme.textSecondary, height: 1.5),
             ),
           ),
         ],
@@ -3412,6 +3405,12 @@ class _LostDetailScreenState extends State<LostDetailScreen> {
                     ),
                   ),
                   const SizedBox(height: 10),
+                  // AI Potential Matches — show proposed AI suggestions with scores.
+                  if (r.status == ItemStatus.active ||
+                      r.status == ItemStatus.matchedPending) ...[
+                    _buildAiSuggestions(matches),
+                  ],
+                  const SizedBox(height: 10),
                   // Return QR scan section — shown while a return code for
                   // this report is Issued.
                   if (qrIssued) ...[
@@ -3492,6 +3491,89 @@ class _LostDetailScreenState extends State<LostDetailScreen> {
 
   /// The one-shot "Collected" success dialog, shown when the match first
   /// becomes Completed (the item is physically back with the student).
+  /// Builds a "Potential Matches" section showing proposed AI matches
+  /// with their scores, reason, and match % badge.
+  Widget _buildAiSuggestions(List<LfMatch> matches) {
+    final aiMatches = matches
+        .where((m) =>
+            m.isAiMatch &&
+            m.status == MatchStatus.proposed &&
+            (m.overallScore ?? 0) >= 50)
+        .toList();
+    if (aiMatches.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SectionLabel('Potential Matches'),
+        const SizedBox(height: 8),
+        ...aiMatches.map((m) => _buildAiMatchCard(m)),
+      ],
+    );
+  }
+
+  Widget _buildAiMatchCard(LfMatch m) {
+    final score = m.overallScore ?? 0;
+    final scoreColor = score >= 80
+        ? AppTheme.success
+        : score >= 50
+            ? AppTheme.warning
+            : AppTheme.textMuted;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: AppTheme.bgCard,
+        borderRadius: BorderRadius.circular(12),
+        elevation: 0.5,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: scoreColor.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text('$score% Match',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: scoreColor)),
+                  ),
+                  const SizedBox(width: 8),
+                  const StatusBadge('AI Suggested'),
+                  const Spacer(),
+                  const Icon(Icons.auto_awesome_rounded,
+                      size: 16, color: AppTheme.textMuted),
+                ],
+              ),
+              if (m.reason != null && m.reason!.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(m.reason!,
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textSecondary,
+                        height: 1.4)),
+              ],
+              const SizedBox(height: 4),
+              Text('Visit the Inventory Office (Block A, Level 1) to verify.',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: AppTheme.red.withOpacity(0.7),
+                      fontStyle: FontStyle.italic)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   void _showCollectedDialog(BuildContext context) {
     showDialog<void>(
       context: context,
@@ -3508,6 +3590,7 @@ class _LostDetailScreenState extends State<LostDetailScreen> {
     );
   }
 }
+
 class FoundDetailScreen extends StatefulWidget {
   final String id;
   const FoundDetailScreen({super.key, required this.id});
@@ -4120,14 +4203,33 @@ class _AdminLFDashboardScreenState extends State<AdminLFDashboardScreen> {
                   final pending = matches
                       .where((m) => m.status == MatchStatus.proposed)
                       .length;
-                  return HubButton(
-                          icon: Icons.compare_arrows_rounded,
-                          label: 'Review Matches',
-                          subtitle: '$pending pending approval',
-                          onTap: () =>
-                              context.push('/admin/lost-found/match-list'))
-                      .animate()
-                      .fadeIn(delay: 350.ms);
+                  final aiPending = matches
+                      .where((m) =>
+                          m.isAiMatch &&
+                          m.status == MatchStatus.proposed &&
+                          (m.overallScore ?? 0) >= 50)
+                      .length;
+                  return Column(children: [
+                    HubButton(
+                        icon: Icons.auto_awesome_rounded,
+                        label: 'AI Suggested Matches',
+                        subtitle: aiPending > 0
+                            ? '$aiPending AI-proposed match${aiPending == 1 ? '' : 'es'}'
+                            : 'No AI suggestions',
+                        isAmber: aiPending > 0,
+                        onTap: () => context.push(
+                            '/admin/lost-found/match-list')).animate().fadeIn(
+                        delay: 340.ms),
+                    const SizedBox(height: 8),
+                    HubButton(
+                            icon: Icons.compare_arrows_rounded,
+                            label: 'Review Matches',
+                            subtitle: '$pending pending approval',
+                            onTap: () =>
+                                context.push('/admin/lost-found/match-list'))
+                        .animate()
+                        .fadeIn(delay: 350.ms),
+                  ]);
                 },
               ),
               // ── User Analytics Section ──
@@ -4346,9 +4448,8 @@ class _ConfirmCountdownDialogState extends State<_ConfirmCountdownDialog> {
           child: const Text('Cancel'),
         ),
         TextButton(
-          onPressed: _remaining == 0
-              ? () => Navigator.of(context).pop(true)
-              : null,
+          onPressed:
+              _remaining == 0 ? () => Navigator.of(context).pop(true) : null,
           child: Text(
             _remaining == 0
                 ? widget.confirmLabel
@@ -4364,8 +4465,7 @@ class _ConfirmCountdownDialogState extends State<_ConfirmCountdownDialog> {
 /// one approved match, meaning its owner has been told about the possible
 /// match.
 bool _lostReportNotified(Item r, List<LfMatch> matches) => matches
-    .any((m) =>
-        m.lostReportId == r.id && m.status == MatchStatus.approved);
+    .any((m) => m.lostReportId == r.id && m.status == MatchStatus.approved);
 
 /// Admin-facing status label. `Requested Close` is shown to admins as
 /// `Req for Close` (the student sees `Closure Requested` instead).
@@ -4830,8 +4930,7 @@ class _AdminLostDetailScreenState extends State<AdminLostDetailScreen> {
           // Closure request approval — the report is in Requested Close.
           if (r.status == ItemStatus.requestedClose)
             GradientButton(
-                label: 'Close',
-                onPressed: () => _confirmApproveClose(context)),
+                label: 'Close', onPressed: () => _confirmApproveClose(context)),
           // Mark as Resolved — guarded by a mandatory 3-second countdown.
           if (r.status == ItemStatus.active ||
               r.status == ItemStatus.matchedPending)
@@ -4851,8 +4950,7 @@ class _AdminLostDetailScreenState extends State<AdminLostDetailScreen> {
         icon: Icons.compare_arrows_rounded,
       ),
       GradientButton(
-          label: 'Find Match',
-          onPressed: () => _pickInventoryItem(context, r)),
+          label: 'Find Match', onPressed: () => _pickInventoryItem(context, r)),
     ]);
   }
 
@@ -4988,13 +5086,13 @@ class _AdminFoundDetailScreenState extends State<AdminFoundDetailScreen> {
                           subtitle: 'This report may have been removed.',
                           icon: Icons.search_off_rounded,
                         )
-                  : r.isDeleted
-                      ? const EmptyState(
-                          title: 'Report Deleted',
-                          subtitle: 'This report is no longer available.',
-                          icon: Icons.delete_outline_rounded,
-                        )
-                      : _adminFoundDetailBody(context, r),
+                      : r.isDeleted
+                          ? const EmptyState(
+                              title: 'Report Deleted',
+                              subtitle: 'This report is no longer available.',
+                              icon: Icons.delete_outline_rounded,
+                            )
+                          : _adminFoundDetailBody(context, r),
         );
       },
     );
@@ -5055,8 +5153,7 @@ class _AdminFoundDetailScreenState extends State<AdminFoundDetailScreen> {
                         const Divider(height: 18),
                         _ReporterNameInfoRow(report: r),
                         InfoRow(
-                            label: 'Student ID',
-                            value: r.reportedByStudentId),
+                            label: 'Student ID', value: r.reportedByStudentId),
                         InfoRow(label: 'Category', value: r.category),
                         InfoRow(label: 'Where Found', value: whereFound),
                         InfoRow(label: 'When Found', value: fmtDate(whenFound)),
@@ -5416,8 +5513,7 @@ Future<void> _showQRDialog(
                     child: Text(
                       'QR preview unavailable — use the key below.',
                       textAlign: TextAlign.center,
-                      style:
-                          TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                      style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
                     ),
                   ),
                 ),
@@ -5818,62 +5914,279 @@ class AdminMatchListScreen extends StatefulWidget {
 }
 
 class _AdminMatchListScreenState extends State<AdminMatchListScreen> {
-  late final Stream<List<LfMatch>> _matches;
+  late final Stream<List<LfMatch>> _aiMatches;
+  late final Stream<List<Item>> _reports;
+  late final Stream<List<InventoryItem>> _inventory;
 
   @override
   void initState() {
     super.initState();
-    _matches = context.read<AppState>().watchAllMatches();
+    final appState = context.read<AppState>();
+    _aiMatches = appState.watchAiProposedMatches();
+    _reports = appState.watchAdminAllReports();
+    _inventory = appState.watchAllInventoryItems();
   }
+
+  // ── Build ----------------------------------------------------------
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: _gradientAppBar('Review Matches', context),
+      body: StreamBuilder<List<Item>>(
+        stream: _reports,
+        builder: (ctx, reportsSnap) {
+          final reports = reportsSnap.data ?? const <Item>[];
+          final reportMap = <String, Item>{for (final r in reports) r.id: r};
+
+          return StreamBuilder<List<InventoryItem>>(
+            stream: _inventory,
+            builder: (ctx, invSnap) {
+              final inventory = invSnap.data ?? const <InventoryItem>[];
+              final invMap = <String, InventoryItem>{
+                for (final i in inventory) i.id: i
+              };
+
+              return Column(children: [
+                const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: AdminBar()),
+                // ── AI Suggested Matches ──────────────────────────
+                Expanded(
+                  child: _AiSection(
+                    stream: _aiMatches,
+                    reportMap: reportMap,
+                    invMap: invMap,
+                  ),
+                ),
+              ]);
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ── AI Suggested Matches section (inline) ────────────────────────────
+
+class _AiSection extends StatelessWidget {
+  final Stream<List<LfMatch>> stream;
+  final Map<String, Item> reportMap;
+  final Map<String, InventoryItem> invMap;
+
+  const _AiSection({
+    required this.stream,
+    required this.reportMap,
+    required this.invMap,
+  });
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<LfMatch>>(
-      stream: _matches,
-      builder: (context, snapshot) {
-        final data = snapshot.data ?? const <LfMatch>[];
-        final isLoading = snapshot.connectionState == ConnectionState.waiting;
-        final error = snapshot.error;
-        return Scaffold(
-          appBar: _gradientAppBar('Review Matches', context),
-          body: Column(children: [
-            const Padding(
-                padding: EdgeInsets.fromLTRB(16, 8, 16, 0), child: AdminBar()),
-            Expanded(
-                child: isLoading && data.isEmpty
-                    ? const Center(
-                        child: CircularProgressIndicator(color: AppTheme.red))
-                    : error != null
-                        ? EmptyState(
-                            title: 'Could Not Load Matches',
-                            subtitle: error is AuthFailure
-                                ? error.message
-                                : 'Something went wrong. Please try again.',
-                            icon: Icons.cloud_off_rounded,
-                          )
-                        : data.isEmpty
-                            ? const EmptyState(
-                                title: 'No Matches',
-                                icon: Icons.compare_arrows_rounded)
-                            : ListView.builder(
-                                padding: const EdgeInsets.all(16),
-                                itemCount: data.length,
-                                itemBuilder: (ctx, i) {
-                                  final m = data[i];
-                                  return CardRow(
-                                    title:
-                                        'Lost ${m.lostReportId} ↔ Item ${m.inventoryItemId}',
-                                    subtitle: 'Owner ${m.lostOwnerStudentId}',
-                                    status: m.status.wireValue,
-                                    onTap: () => context.push(
-                                        '/admin/lost-found/match/${m.id}'),
-                                  ).animate().fadeIn(delay: (i * 60).ms);
-                                })),
-          ]),
+      stream: stream,
+      builder: (context, snap) {
+        if (snap.hasError) {
+          debugPrint('[AI MATCH] _AiSection stream error: ${snap.error}');
+          return const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(children: [
+              Icon(Icons.auto_awesome_rounded,
+                  size: 18, color: AppTheme.textSecondary),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Could not load AI matches.',
+                  style:
+                      TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                ),
+              ),
+            ]),
+          );
+        }
+        final data = (snap.data ?? const <LfMatch>[])
+            .where((m) =>
+                m.isAiMatch &&
+                m.status == MatchStatus.proposed &&
+                (m.overallScore ?? 0) >= 50)
+            .toList();
+        if (data.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(children: [
+              Icon(Icons.auto_awesome_rounded,
+                  size: 18, color: AppTheme.textSecondary),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'No AI matches yet',
+                  style:
+                      TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                ),
+              ),
+            ]),
+          );
+        }
+        return ListView.builder(
+          padding: const EdgeInsets.fromLTRB(0, 8, 0, 16),
+          itemCount: data.length + 1, // +1 for divider
+          itemBuilder: (ctx, i) {
+            if (i == 0) return const Divider(indent: 16, endIndent: 16);
+            final m = data[i - 1];
+            return _MatchRow(
+              match: m,
+              lostTitle: reportMap[m.lostReportId]?.title ?? m.lostReportId,
+              foundTitle: invMap[m.inventoryItemId]?.title ?? m.inventoryItemId,
+              category: reportMap[m.lostReportId]?.category,
+              location: reportMap[m.lostReportId]?.whereLost,
+              ownerLabel: _ownerLabel(reportMap[m.lostReportId]?.reportedByName,
+                  m.lostOwnerStudentId),
+            );
+          },
         );
       },
     );
   }
+}
+
+// ── Single match row card ────────────────────────────────────────────
+
+class _MatchRow extends StatelessWidget {
+  final LfMatch match;
+  final String lostTitle;
+  final String foundTitle;
+  final String? category;
+  final String? location;
+  final String ownerLabel;
+
+  const _MatchRow({
+    required this.match,
+    required this.lostTitle,
+    required this.foundTitle,
+    this.category,
+    this.location,
+    required this.ownerLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isAi = match.isAiMatch;
+    final score = match.overallScore ?? 0;
+    final scoreColor = score >= 80
+        ? AppTheme.success
+        : score >= 50
+            ? AppTheme.warning
+            : AppTheme.textMuted;
+
+    // Build the category · location subtitle line.
+    final detailParts = <String>[];
+    if (category != null && category!.isNotEmpty) detailParts.add(category!);
+    if (location != null && location!.isNotEmpty) detailParts.add(location!);
+    final detailLine = detailParts.join(' · ');
+
+    return Card(
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: InkWell(
+        onTap: () => context.push('/admin/lost-found/match/${match.id}'),
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Left accent bar — stretches to the full row height.
+                Container(
+                  width: 3,
+                  decoration: BoxDecoration(
+                    gradient: isAi
+                        ? const LinearGradient(colors: [
+                            AppTheme.gold,
+                            AppTheme.goldDark,
+                          ])
+                        : AppTheme.primaryGradient,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Main content.
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Row 1 — lost item title (bold).
+                      Text(lostTitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textPrimary)),
+                      const SizedBox(height: 3),
+                      // Row 2 — category · location (muted).
+                      if (detailLine.isNotEmpty)
+                        Text(detailLine,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 11, color: AppTheme.textMuted)),
+                      // Row 3 — owner.
+                      Text('Owner: $ownerLabel',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 11, color: AppTheme.textMuted)),
+                      const SizedBox(height: 2),
+                      // Row 4 — matched found item.
+                      Text('↔ $foundTitle',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 11,
+                              color: AppTheme.textSecondary,
+                              fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Right side — score + status.
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (isAi)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: scoreColor.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text('$score%',
+                            style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: scoreColor)),
+                      ),
+                    const SizedBox(height: 5),
+                    StatusBadge(match.status.wireValue),
+                  ],
+                ),
+                const SizedBox(width: 4),
+                const Icon(Icons.chevron_right_rounded,
+                    color: AppTheme.textMuted, size: 18),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Returns [name] if non-empty, otherwise falls back to [studentId].
+String _ownerLabel(String? name, String studentId) {
+  if (name != null && name.isNotEmpty) return name;
+  return studentId;
 }
 
 class AdminMatchDetailScreen extends StatefulWidget {
@@ -5884,46 +6197,67 @@ class AdminMatchDetailScreen extends StatefulWidget {
 }
 
 class _AdminMatchDetailScreenState extends State<AdminMatchDetailScreen> {
-  late final Stream<LfMatch?> _match;
-
-  @override
-  void initState() {
-    super.initState();
-    _match = context.read<AppState>().watchMatch(widget.id);
-  }
-
   @override
   Widget build(BuildContext context) {
+    final appState = context.read<AppState>();
     return StreamBuilder<LfMatch?>(
-      stream: _match,
-      builder: (context, snapshot) {
-        final isLoading = snapshot.connectionState == ConnectionState.waiting;
-        final error = snapshot.error;
-        final m = snapshot.data;
+      stream: appState.watchMatch(widget.id),
+      builder: (context, matchSnap) {
+        final isLoading = matchSnap.connectionState == ConnectionState.waiting;
+        final error = matchSnap.error;
+        final m = matchSnap.data;
+
+        Widget body;
+        if (isLoading && m == null) {
+          body = const Center(
+              child: CircularProgressIndicator(color: AppTheme.red));
+        } else if (error != null) {
+          body = EmptyState(
+            title: 'Could Not Load Match',
+            subtitle: error is AuthFailure
+                ? error.message
+                : 'Something went wrong. Please try again.',
+            icon: Icons.cloud_off_rounded,
+          );
+        } else if (m == null) {
+          body = const EmptyState(
+              title: 'Match Not Found', icon: Icons.search_off_rounded);
+        } else {
+          body = StreamBuilder<Item?>(
+            stream: appState.watchReport(m.lostReportId),
+            builder: (context, reportSnap) {
+              return StreamBuilder<InventoryItem?>(
+                stream: appState.watchInventoryItem(m.inventoryItemId),
+                builder: (context, invSnap) {
+                  return _matchDetailBody(
+                    context,
+                    m,
+                    report: reportSnap.data,
+                    inventory: invSnap.data,
+                  );
+                },
+              );
+            },
+          );
+        }
+
         return Scaffold(
           appBar: _gradientAppBar('Match Review', context),
-          body: isLoading && m == null
-              ? const Center(
-                  child: CircularProgressIndicator(color: AppTheme.red))
-              : error != null
-                  ? EmptyState(
-                      title: 'Could Not Load Match',
-                      subtitle: error is AuthFailure
-                          ? error.message
-                          : 'Something went wrong. Please try again.',
-                      icon: Icons.cloud_off_rounded,
-                    )
-                  : m == null
-                      ? const EmptyState(
-                          title: 'Match Not Found',
-                          icon: Icons.search_off_rounded)
-                      : _matchDetailBody(context, m),
+          body: body,
         );
       },
     );
   }
 
-  Widget _matchDetailBody(BuildContext context, LfMatch m) {
+  // ── Card hierarchy ────────────────────────────────────────────────
+
+  Widget _matchDetailBody(
+    BuildContext context,
+    LfMatch m, {
+    required Item? report,
+    required InventoryItem? inventory,
+  }) {
+    final isAi = m.isAiMatch;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -5931,40 +6265,438 @@ class _AdminMatchDetailScreenState extends State<AdminMatchDetailScreen> {
         children: [
           const AdminBar(),
           const SizedBox(height: 8),
-          Card(
-              child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(children: [
-                    Row(children: [
-                      Expanded(
-                          child: Text(
-                              'Lost ${m.lostReportId} ↔ Item ${m.inventoryItemId}',
-                              style: const TextStyle(
-                                  fontSize: 15, fontWeight: FontWeight.w800))),
-                      StatusBadge(m.status.wireValue),
-                    ]),
-                    const Divider(height: 18),
-                    InfoRow(label: 'Lost Report', value: m.lostReportId),
-                    InfoRow(label: 'Inventory Item', value: m.inventoryItemId),
-                    InfoRow(label: 'Owner', value: m.lostOwnerStudentId),
-                    if (m.notes.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                              color: AppTheme.creamLight,
-                              borderRadius: BorderRadius.circular(10)),
-                          child: Text(m.notes,
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  color: AppTheme.textSecondary,
-                                  height: 1.55))),
-                    ],
-                  ]))),
+          _buildMatchOverview(context, m, report, inventory),
+          const SizedBox(height: 10),
+          _buildLostItemCard(report, m),
+          const SizedBox(height: 10),
+          _buildFoundItemCard(inventory),
+          if (isAi) ...[
+            const SizedBox(height: 10),
+            _buildMatchAnalysisCard(m),
+          ],
+          if (isAi &&
+              ((m.reason != null && m.reason!.isNotEmpty) ||
+                  (m.evidence != null &&
+                      (m.evidence!.matchingFeatures.isNotEmpty ||
+                          m.evidence!.conflictingFeatures.isNotEmpty)))) ...[
+            const SizedBox(height: 10),
+            _buildWhyThisMatchCard(m),
+          ],
           const SizedBox(height: 10),
           _MatchActions(match: m),
         ],
+      ),
+    );
+  }
+
+  // ── 1. Match Overview ─────────────────────────────────────────────
+
+  Widget _buildMatchOverview(
+    BuildContext context,
+    LfMatch m,
+    Item? report,
+    InventoryItem? inventory,
+  ) {
+    final isAi = m.isAiMatch;
+    final lostTitle = report?.title ?? 'Item information unavailable';
+    final foundTitle = inventory?.title ?? 'Item information unavailable';
+    final score = m.overallScore ?? 0;
+    final scoreColor = score >= 80
+        ? AppTheme.success
+        : score >= 50
+            ? AppTheme.warning
+            : AppTheme.textMuted;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header row — resolved titles + status badge.
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(lostTitle,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 4),
+                      Row(children: [
+                        const Icon(Icons.swap_horiz_rounded,
+                            size: 16, color: AppTheme.textMuted),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(foundTitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  fontSize: 13, color: AppTheme.textSecondary)),
+                        ),
+                      ]),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (isAi)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: scoreColor.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text('$score%',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: scoreColor)),
+                      ),
+                    const SizedBox(height: 5),
+                    StatusBadge(m.status.wireValue),
+                  ],
+                ),
+              ],
+            ),
+            const Divider(height: 18),
+            // Meta rows.
+            if (isAi)
+              InfoRow(
+                  label: 'Source',
+                  value:
+                      'AI Suggested · ${m.confidence != null ? "${m.confidence}% confidence" : "automated"}'),
+            if (!isAi) const InfoRow(label: 'Source', value: 'Manual'),
+            if (m.createdAt != null)
+              InfoRow(label: 'Matched', value: _dateLabel(m.createdAt!)),
+            if (report != null && report.whenLost != null)
+              InfoRow(label: 'Date Lost', value: report.whenLostLabel),
+            if (inventory != null && inventory.handedOverAt != null)
+              InfoRow(
+                  label: 'Handed Over',
+                  value: _dateLabel(inventory.handedOverAt!)),
+            if (m.notes.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                    color: AppTheme.creamLight,
+                    borderRadius: BorderRadius.circular(10)),
+                child: Text(m.notes,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        color: AppTheme.textSecondary,
+                        height: 1.55)),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── 2. Lost Item ──────────────────────────────────────────────────
+
+  Widget _buildLostItemCard(Item? report, LfMatch m) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Icon(Icons.search_rounded,
+                  size: 18, color: AppTheme.textSecondary),
+              const SizedBox(width: 8),
+              const Text('Lost Item',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            ]),
+            const Divider(height: 18),
+            if (report == null)
+              const _UnavailableNotice()
+            else ...[
+              _maybeInfoRow('Title', report.title),
+              _maybeInfoRow('Category', report.category),
+              if (report.whereLost.isNotEmpty)
+                _maybeInfoRow('Location', report.whereLost),
+              InfoRow(
+                  label: 'Owner',
+                  value:
+                      _ownerLabel(report.reportedByName, m.lostOwnerStudentId)),
+              if (report.whenLost != null)
+                InfoRow(label: 'Date Lost', value: report.whenLostLabel),
+              const SizedBox(height: 8),
+              if (report.imageUrls.isNotEmpty)
+                _PhotoStrip(urls: report.imageUrls)
+              else
+                const _NoImageNotice(),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── 3. Found Item ─────────────────────────────────────────────────
+
+  Widget _buildFoundItemCard(InventoryItem? inventory) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Icon(Icons.inventory_2_rounded,
+                  size: 18, color: AppTheme.textSecondary),
+              const SizedBox(width: 8),
+              const Text('Found Item',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            ]),
+            const Divider(height: 18),
+            if (inventory == null)
+              const _UnavailableNotice()
+            else ...[
+              _maybeInfoRow('Title', inventory.title),
+              _maybeInfoRow('Category', inventory.category),
+              if (inventory.finderStudentId.isNotEmpty)
+                InfoRow(
+                    label: 'Handed Over By', value: inventory.finderStudentId),
+              if (inventory.handedOverAt != null)
+                InfoRow(
+                    label: 'Date Handed Over',
+                    value: _dateLabel(inventory.handedOverAt!)),
+              const SizedBox(height: 8),
+              if (inventory.imageUrls.isNotEmpty)
+                _PhotoStrip(urls: inventory.imageUrls)
+              else
+                const _NoImageNotice(),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── 4. Match Analysis (AI only) ───────────────────────────────────
+
+  Widget _buildMatchAnalysisCard(LfMatch m) {
+    final score = m.overallScore ?? 0;
+    final scoreColor = score >= 80
+        ? AppTheme.success
+        : score >= 50
+            ? AppTheme.warning
+            : AppTheme.textMuted;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Icon(Icons.insights_rounded,
+                  size: 18, color: AppTheme.goldDark),
+              const SizedBox(width: 8),
+              const Text('Match Analysis',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            ]),
+            const Divider(height: 18),
+            // Overall score row.
+            Row(children: [
+              const Text('Overall Score',
+                  style:
+                      TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+              const Spacer(),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: scoreColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text('$score%',
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: scoreColor)),
+              ),
+            ]),
+            const SizedBox(height: 12),
+            // Per-factor breakdown.
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                if (m.titleScore != null) _miniChip('Title', m.titleScore!),
+                if (m.descriptionScore != null)
+                  _miniChip('Description', m.descriptionScore!),
+                if (m.visualScore != null) _miniChip('Visual', m.visualScore!),
+                if (m.categoryScore != null)
+                  _miniChip('Category', m.categoryScore!),
+                if (m.locationScore != null)
+                  _miniChip('Location', m.locationScore!),
+                if (m.timeScore != null) _miniChip('Time', m.timeScore!),
+                if (m.confidence != null)
+                  _miniChip('Confidence', m.confidence!),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── 5. Why This Match (AI only) ───────────────────────────────────
+
+  Widget _buildWhyThisMatchCard(LfMatch m) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              const Icon(Icons.psychology_outlined,
+                  size: 18, color: AppTheme.goldDark),
+              const SizedBox(width: 8),
+              const Text('Why This Match',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+            ]),
+            const Divider(height: 18),
+            if (m.reason != null && m.reason!.isNotEmpty) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.lightbulb_outline_rounded,
+                      size: 14, color: AppTheme.textMuted),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(m.reason!,
+                        style: const TextStyle(
+                            fontSize: 13,
+                            color: AppTheme.textSecondary,
+                            fontStyle: FontStyle.italic,
+                            height: 1.5)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (m.evidence != null) ...[
+              if (m.evidence!.matchingFeatures.isNotEmpty) ...[
+                const Text('Matching Features',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textMuted)),
+                const SizedBox(height: 4),
+                ...m.evidence!.matchingFeatures.map((f) => Padding(
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: Row(children: [
+                        const Icon(Icons.check_circle_outline_rounded,
+                            size: 14, color: AppTheme.success),
+                        const SizedBox(width: 6),
+                        Expanded(
+                            child: Text(f,
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    color: AppTheme.textSecondary))),
+                      ]),
+                    )),
+              ],
+              if (m.evidence!.conflictingFeatures.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                const Text('Conflicting Features',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textMuted)),
+                const SizedBox(height: 4),
+                ...m.evidence!.conflictingFeatures.map((f) => Padding(
+                      padding: const EdgeInsets.only(bottom: 2),
+                      child: Row(children: [
+                        const Icon(Icons.warning_amber_rounded,
+                            size: 14, color: AppTheme.warning),
+                        const SizedBox(width: 6),
+                        Expanded(
+                            child: Text(f,
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    color: AppTheme.textSecondary))),
+                      ]),
+                    )),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────
+
+  static InfoRow _maybeInfoRow(String label, String value) {
+    if (value.isEmpty) return const InfoRow(label: '', value: '');
+    return InfoRow(label: label, value: value);
+  }
+
+  static String _dateLabel(DateTime dt) {
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    return '${dt.year}-$m-$d  $h:$min';
+  }
+}
+
+// ── Unavailable / No-image fallbacks ────────────────────────────────
+
+class _UnavailableNotice extends StatelessWidget {
+  const _UnavailableNotice();
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      decoration: BoxDecoration(
+        color: AppTheme.creamLight,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.info_outline_rounded, size: 16, color: AppTheme.textMuted),
+          SizedBox(width: 8),
+          Text('Item information unavailable',
+              style: TextStyle(fontSize: 13, color: AppTheme.textMuted)),
+        ],
+      ),
+    );
+  }
+}
+
+class _NoImageNotice extends StatelessWidget {
+  const _NoImageNotice();
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      height: 80,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F2F5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Center(
+        child: Text('No image available',
+            style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
       ),
     );
   }
@@ -5973,6 +6705,16 @@ class _AdminMatchDetailScreenState extends State<AdminMatchDetailScreen> {
 /// A card wrapping one match plus its admin actions, shared by the inventory
 /// detail and match detail screens.
 Widget _matchCard(BuildContext context, LfMatch m) {
+  final isAi = m.isAiMatch;
+  final score = m.overallScore ?? 0;
+  final scoreColor = isAi
+      ? (score >= 80
+          ? AppTheme.success
+          : score >= 50
+              ? AppTheme.warning
+              : AppTheme.textMuted)
+      : AppTheme.textMuted;
+
   return Card(
     child: Padding(
       padding: const EdgeInsets.all(16),
@@ -5984,10 +6726,60 @@ Widget _matchCard(BuildContext context, LfMatch m) {
                 child: Text('Lost ${m.lostReportId}',
                     style: const TextStyle(
                         fontSize: 14, fontWeight: FontWeight.w800))),
+            if (isAi) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: scoreColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text('$score%',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: scoreColor)),
+              ),
+              const SizedBox(width: 6),
+              const Icon(Icons.auto_awesome_rounded,
+                  size: 14, color: AppTheme.textMuted),
+              const SizedBox(width: 6),
+            ],
             StatusBadge(m.status.wireValue),
           ]),
-          const SizedBox(height: 6),
-          InfoRow(label: 'Owner', value: m.lostOwnerStudentId),
+          if (isAi && m.reason != null && m.reason!.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.psychology_outlined,
+                  size: 14, color: AppTheme.textMuted),
+              const SizedBox(width: 6),
+              Expanded(
+                  child: Text(m.reason!,
+                      style: const TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textSecondary,
+                          fontStyle: FontStyle.italic,
+                          height: 1.4))),
+            ]),
+          ],
+          if (isAi) ...[
+            const SizedBox(height: 4),
+            Row(children: [
+              if (m.visualScore != null) _miniChip('Visual', m.visualScore!),
+              if (m.titleScore != null) _miniChip('Title', m.titleScore!),
+              if (m.descriptionScore != null)
+                _miniChip('Desc', m.descriptionScore!),
+              if (m.categoryScore != null)
+                _miniChip('Category', m.categoryScore!),
+              if (m.locationScore != null)
+                _miniChip('Location', m.locationScore!),
+              if (m.timeScore != null) _miniChip('Time', m.timeScore!),
+              if (m.confidence != null) _miniChip('Confidence', m.confidence!),
+            ]),
+          ],
+          if (!isAi) ...[
+            const SizedBox(height: 6),
+            InfoRow(label: 'Owner', value: m.lostOwnerStudentId),
+          ],
           if (m.notes.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(m.notes,
@@ -5998,6 +6790,28 @@ Widget _matchCard(BuildContext context, LfMatch m) {
           _MatchActions(match: m),
         ],
       ),
+    ),
+  );
+}
+
+Widget _miniChip(String label, int score) {
+  final color = score >= 80
+      ? AppTheme.success
+      : score >= 50
+          ? AppTheme.warning
+          : AppTheme.textMuted;
+  return Padding(
+    padding: const EdgeInsets.only(right: 6),
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.25)),
+      ),
+      child: Text('$label $score',
+          style: TextStyle(
+              fontSize: 10, fontWeight: FontWeight.w600, color: color)),
     ),
   );
 }
@@ -6117,6 +6931,21 @@ class _MatchActionsState extends State<_MatchActions> {
     final m = widget.match;
     return Column(children: [
       if (m.status == MatchStatus.proposed) ...[
+        if (m.isAiMatch) ...[
+          const Padding(
+            padding: EdgeInsets.only(bottom: 10),
+            child: Row(children: [
+              Icon(Icons.auto_awesome_rounded,
+                  size: 14, color: AppTheme.textMuted),
+              SizedBox(width: 6),
+              Text('AI Suggested Match',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: AppTheme.textSecondary,
+                      fontStyle: FontStyle.italic)),
+            ]),
+          ),
+        ],
         GradientButton(
             label: 'Approve Match & Notify Student',
             onPressed: _busy ? null : _approve),
@@ -6386,8 +7215,8 @@ class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
                 hintText: 'Search by title or category',
                 prefixIcon: const Icon(Icons.search_rounded),
                 isDense: true,
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12)),
+                border:
+                    OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               ),
             ),
           ),
@@ -6397,8 +7226,7 @@ class _InventoryPickerSheetState extends State<_InventoryPickerSheet> {
               builder: (context, snapshot) {
                 final data = snapshot.data ?? const <InventoryItem>[];
                 final available = data
-                    .where(
-                        (item) => item.status == InventoryStatus.inInventory)
+                    .where((item) => item.status == InventoryStatus.inInventory)
                     .where((item) =>
                         _query.isEmpty ||
                         item.title.toLowerCase().contains(_query) ||

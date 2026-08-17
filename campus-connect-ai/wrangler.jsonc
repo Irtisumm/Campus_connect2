@@ -1,0 +1,15 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "campus-connect-ai",
+	"main": "src/index.js",
+	"compatibility_date": "2026-08-17",
+	"ai": {
+		"binding": "AI",
+		"remote": true
+	},
+	"dev": {
+		"ip": "127.0.0.1",
+		"port": 8787,
+		"local_protocol": "http"
+	}
+}

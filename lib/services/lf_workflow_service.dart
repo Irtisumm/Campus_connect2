@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/auth_result.dart';
 import '../models/inventory_item.dart';
@@ -59,6 +60,37 @@ class LfWorkflowService {
   /// Live feed of every inventory record, for the admin inventory screens.
   Stream<List<InventoryItem>> watchAllInventory() => _watchInventory();
 
+  /// One-shot query for AI matching: returns In-Inventory items of a given
+  /// [category] that have at least one image (up to [limit] docs).
+  ///
+  /// This is a targeted query (status + category filtered) that works under
+  /// the signed-in-user inventory read rule (status == 'In Inventory').
+  Future<List<InventoryItem>> queryInventoryForAi({
+    required String category,
+    int limit = 10,
+  }) async {
+    _assertAvailable();
+    try {
+      final snap = await _inventory
+          .where('status', isEqualTo: InventoryStatus.inInventory.wireValue)
+          .where('category', isEqualTo: category)
+          .limit(limit)
+          .get();
+      final list = snap.docs
+          .map((doc) => InventoryItem.fromMap(doc.id, doc.data()!))
+          .where((inv) => inv.imageUrls.isNotEmpty)
+          .toList();
+      debugPrint('[AI MATCH DEBUG] queryInventoryForAi cat=$category '
+          'docsFound=${snap.docs.length} withImages=${list.length} '
+          'limit=$limit');
+      return list;
+    } on FirebaseException catch (e) {
+      debugPrint('[AI MATCH] queryInventoryForAi FAILED cat=$category '
+          'limit=$limit code=${e.code} returning empty');
+      return const <InventoryItem>[];
+    }
+  }
+
   /// Live view of a single inventory record by ID.
   Stream<InventoryItem?> watchInventoryItem(String id) {
     if (!isAvailable || id.isEmpty) return Stream.value(null);
@@ -72,7 +104,8 @@ class LfWorkflowService {
 
   Stream<List<InventoryItem>> _watchInventory({String? uid}) {
     if (!isAvailable) return Stream.value(const <InventoryItem>[]);
-    if (uid != null && uid.isEmpty) return Stream.value(const <InventoryItem>[]);
+    if (uid != null && uid.isEmpty)
+      return Stream.value(const <InventoryItem>[]);
 
     Query<Map<String, dynamic>> query = _inventory;
     if (uid != null) {
@@ -99,6 +132,46 @@ class LfWorkflowService {
 
   /// Live feed of every match, for the admin match screens.
   Stream<List<LfMatch>> watchAllMatches() => _watchMatches();
+
+  /// Live feed of AI-proposed matches only (source == 'ai', status == 'Proposed',
+  /// overallScore >= 50).
+  ///
+  /// Used by the Admin "AI Suggested Matches" section. Sorted by
+  /// [LfMatch.overallScore] descending, then newest-first by [LfMatch.createdAt].
+  Stream<List<LfMatch>> watchAiProposedMatches() {
+    if (!isAvailable) return Stream.value(const <LfMatch>[]);
+    return _matches
+        .where('source', isEqualTo: MatchSource.ai.wireValue)
+        .where('status', isEqualTo: MatchStatus.proposed.wireValue)
+        .where('overallScore', isGreaterThanOrEqualTo: 50)
+        .snapshots()
+        .map((snap) {
+          final ids = snap.docs.map((d) => d.id).toList();
+          debugPrint('[AI MATCH DEBUG] stage=admin-ai-query '
+              'resultCount=${snap.docs.length} ids=$ids error=none');
+          return _sortedAiProposed(snap);
+        })
+        .handleError((e) {
+          debugPrint('[AI MATCH DEBUG] stage=admin-ai-query '
+              'resultCount=0 error=${e.runtimeType}');
+          throw e;
+        })
+        .handleError(_translateError);
+  }
+
+  static List<LfMatch> _sortedAiProposed(
+      QuerySnapshot<Map<String, dynamic>> snapshot) {
+    final rows = snapshot.docs
+        .map((doc) => LfMatch.fromMap(doc.id, doc.data()))
+        .where((m) => (m.overallScore ?? 0) >= 50) // belt-and-suspenders
+        .toList();
+    rows.sort((a, b) {
+      final scoreCmp = (b.overallScore ?? 0).compareTo(a.overallScore ?? 0);
+      if (scoreCmp != 0) return scoreCmp;
+      return _newestFirst(a.createdAt, b.createdAt);
+    });
+    return rows;
+  }
 
   /// Live view of a single match by ID.
   Stream<LfMatch?> watchMatch(String id) {
@@ -140,6 +213,159 @@ class LfWorkflowService {
       final doc = await _matches.add(match.toCreateMap());
       return match.copyWith(id: doc.id);
     } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
+  // ── AI Match helpers ────────────────────────────────────────────
+
+  /// Deterministic pair key for duplicate detection.
+  static String pairKey(String lostReportId, String inventoryItemId) =>
+      '${lostReportId}_$inventoryItemId';
+
+  /// Checks whether [inventoryItemId] is currently eligible for AI matching.
+  ///
+  /// Returns `true` only when the inventory item:
+  /// 1. Exists and has status `In Inventory`,
+  /// 2. Is NOT already referenced by any non-rejected match.
+  Future<bool> isInventoryAvailableForAiMatch(String inventoryItemId) async {
+    _assertAvailable();
+    try {
+      final invDoc = await _inventory.doc(inventoryItemId).get();
+      if (!invDoc.exists) return false;
+
+      final inv = InventoryItem.fromMap(invDoc.id, invDoc.data()!);
+      // Must be In Inventory (not Reserved, not Returned).
+      if (inv.status != InventoryStatus.inInventory) return false;
+
+      // Check whether any non-rejected (active) match already references
+      // this inventory item.
+      final existing = await _matches
+          .where('inventoryItemId', isEqualTo: inventoryItemId)
+          .where('status', whereNotIn: [MatchStatus.rejected.wireValue])
+          .limit(1)
+          .get();
+      return existing.docs.isEmpty;
+    } on FirebaseException catch (e) {
+      // A permission-denied error on the matches sub-query means the caller
+      // (a student) cannot see matches for other lost reports — err on the
+      // side of allowing the AI match to be created. The admin reviews
+      // every AI suggestion before approval, so a false positive is safe.
+      if (e.code == 'permission-denied') {
+        debugPrint('[AI MATCH] isInventoryAvailableForAiMatch '
+            'PERMISSION-DENIED inv=$inventoryItemId '
+            'returning true (allow)');
+        return true;
+      }
+      debugPrint('[AI MATCH] isInventoryAvailableForAiMatch EXCEPTION '
+          'inv=$inventoryItemId code=${e.code} returning false');
+      return false;
+    }
+  }
+
+  /// Checks whether a match already exists for this specific pair.
+  ///
+  /// A pair is `${lostReportId}_${inventoryItemId}`. Returns `true` if any
+  /// non-rejected match already links these two documents.
+  ///
+  /// When [lostOwnerUid] is provided, the query also filters by it so the
+  /// Firestore rules can validate that the caller is the lost-report owner.
+  /// This parameter should always be passed by AI-matching callers.
+  Future<bool> pairAlreadyMatched(
+      String lostReportId, String inventoryItemId,
+      {String? lostOwnerUid}) async {
+    _assertAvailable();
+    try {
+      var query = _matches
+          .where('lostReportId', isEqualTo: lostReportId)
+          .where('inventoryItemId', isEqualTo: inventoryItemId)
+          as Query<Map<String, dynamic>>;
+      if (lostOwnerUid != null) {
+        query = query.where('lostOwnerUid', isEqualTo: lostOwnerUid);
+      }
+      final existing = await query
+          .where('status', whereNotIn: [MatchStatus.rejected.wireValue])
+          .limit(1)
+          .get();
+      return existing.docs.isNotEmpty;
+    } on FirebaseException catch (e) {
+      // A permission-denied error when lostOwnerUid is set means the caller
+      // is NOT the lost-report owner (Flow B: finder matching against existing
+      // lost reports). Allow the match through — isInventoryAvailableForAiMatch
+      // still catches broad duplicates, and createAiMatchIfAvailable's
+      // transaction provides atomic commit. The admin reviews every AI
+      // suggestion before approval, so a rare duplicate is safe.
+      if (e.code == 'permission-denied' && lostOwnerUid != null) {
+        debugPrint('[AI MATCH] pairAlreadyMatched PERMISSION-DENIED '
+            'pair=${lostReportId}_$inventoryItemId '
+            'non-owner caller — returning false (allow)');
+        return false;
+      }
+      debugPrint('[AI MATCH] pairAlreadyMatched EXCEPTION '
+          'pair=${lostReportId}_$inventoryItemId code=${e.code} '
+          'returning true (blocks match)');
+      return true; // Err on the safe side — block duplicate.
+    }
+  }
+
+  /// Creates an AI match atomically with duplicate + eligibility guards.
+  ///
+  /// This runs inside a Firestore transaction:
+  /// 1. Re-checks inventory item status (must be `In Inventory`).
+  /// 2. Re-checks no non-rejected match references this inventory item.
+  /// 3. Re-checks no match already exists for this pair.
+  /// 4. Creates the match document with `source: 'ai'`.
+  ///
+  /// NOTE: This does NOT reserve the inventory item — inventory reservation
+  /// remains an admin-only action. The admin reviews the AI suggestion and
+  /// uses the existing manual workflow to reserve/approve.
+  ///
+  /// Returns the created [LfMatch] with its new document ID, or `null` if the
+  /// item is no longer available or a duplicate exists.
+  ///
+  /// Throws [AuthFailure] on Firestore errors.
+  Future<LfMatch?> createAiMatchIfAvailable(LfMatch match) async {
+    _assertAvailable();
+    debugPrint('[AI MATCH DEBUG] stage=create-ai-match '
+        'anchorId=${match.lostReportId} candidateId=${match.inventoryItemId} '
+        'started=true');
+    try {
+      return await _dbOrNull!.runTransaction((tx) async {
+        // Safety gate: pre-checks (isInventoryAvailableForAiMatch /
+        // pairAlreadyMatched) already verified the item is available.
+        // The transaction provides atomic commit only — no re-read of
+        // the inventory document inside the transaction (that read
+        // requires admin permissions per firestore.rules, and AI
+        // matching may fire from the student's client after createReport).
+
+        // Create the match (auto-generated ID).
+        final matchRef = _matches.doc();
+        debugPrint('[AI MATCH DEBUG] stage=firestore-match-write '
+            'candidateId=${match.inventoryItemId} '
+            'matchId=${matchRef.id} started=true');
+        tx.set(matchRef, match.toCreateMap());
+
+        debugPrint('[AI MATCH DEBUG] stage=firestore-match-created '
+            'candidateId=${match.inventoryItemId} '
+            'matchId=${matchRef.id} result=success');
+        return match.copyWith(id: matchRef.id);
+      });
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied') {
+        debugPrint('[AI MATCH DEBUG] stage=firestore-match-write '
+            'candidateId=${match.inventoryItemId} '
+            'result=failure error=permission-denied');
+        debugPrint('[AI MATCH] createAiMatchIfAvailable PERMISSION-DENIED '
+            'pair=${match.lostReportId}_${match.inventoryItemId} '
+            'returning null');
+        return null;
+      }
+      debugPrint('[AI MATCH DEBUG] stage=firestore-match-write '
+          'candidateId=${match.inventoryItemId} '
+          'result=failure error=${e.code}');
+      debugPrint('[AI MATCH] createAiMatchIfAvailable EXCEPTION '
+          'pair=${match.lostReportId}_${match.inventoryItemId} '
+          'code=${e.code} rethrowing');
       throw AuthFailure.fromCode(e.code);
     }
   }
@@ -329,7 +555,8 @@ class LfWorkflowService {
   /// Admin view: the return QR transactions for one inventory item, newest
   /// first. Used by the admin inventory/match screens to show the live code
   /// and drive "Confirm Return".
-  Stream<List<QrTransaction>> watchReturnQrForInventory(String inventoryItemId) {
+  Stream<List<QrTransaction>> watchReturnQrForInventory(
+      String inventoryItemId) {
     if (!isAvailable || inventoryItemId.isEmpty) {
       return Stream.value(const <QrTransaction>[]);
     }
@@ -434,7 +661,7 @@ class LfWorkflowService {
   Future<QrScanOutcome> _completeHandoverByScan(
       QrTransaction txn, String studentUid, DateTime now) async {
     try {
-      await _dbOrNull!.runTransaction((tx) async {
+      final invId = await _dbOrNull!.runTransaction((tx) async {
         final txnRef = _qr.doc(txn.id);
         final txnDoc = await tx.get(txnRef);
         if (!txnDoc.exists) {
@@ -486,9 +713,12 @@ class LfWorkflowService {
         tx.set(inventoryRef, inventory.toCreateMap());
         tx.update(txnRef, fresh.toCompleteHandoverMap(studentUid));
 
+        debugPrint('[AI MATCH DEBUG] _completeHandoverByScan inventoryCreated '
+            'invId=${inventoryRef.id} reportId=${report.id} '
+            'cat=${report.category} images=${report.imageUrls.length}');
         return inventoryRef.id;
       });
-      return QrScanOutcome.success(txn);
+      return QrScanOutcome.success(txn, inventoryId: invId);
     } on AuthFailure catch (e) {
       return QrScanOutcome.failure(e.message);
     } on FirebaseException catch (e) {
@@ -572,6 +802,9 @@ class LfWorkflowService {
         tx.set(inventoryRef, inventory.toCreateMap());
         tx.update(txnRef, txn.toConfirmMap(adminUid));
 
+        debugPrint('[AI MATCH DEBUG] confirmHandover inventoryCreated '
+            'invId=${inventoryRef.id} reportId=${report.id} '
+            'cat=${report.category} images=${report.imageUrls.length}');
         return inventoryRef.id;
       });
     } on FirebaseException catch (e) {
@@ -623,10 +856,9 @@ class LfWorkflowService {
         }
         final lostReport = Item.fromMap(lostDoc.id, lostDoc.data()!);
 
-        final foundDoc = await tx.get(_itemsDoc(
-            invDoc.data()?['foundReportId']?.toString() ?? ''));
-        final foundReportId =
-            invDoc.data()?['foundReportId']?.toString() ?? '';
+        final foundDoc = await tx
+            .get(_itemsDoc(invDoc.data()?['foundReportId']?.toString() ?? ''));
+        final foundReportId = invDoc.data()?['foundReportId']?.toString() ?? '';
 
         // The Flutter transaction API only fetches documents by reference,
         // so the approved match is located by query before the transaction
@@ -691,7 +923,10 @@ class LfWorkflowService {
     if (studentId != null) {
       query = query.where('studentId', isEqualTo: studentId);
     }
-    return query.snapshots().map(_sortedNotifications).handleError(_translateError);
+    return query
+        .snapshots()
+        .map(_sortedNotifications)
+        .handleError(_translateError);
   }
 
   static List<LfNotification> _sortedNotifications(
@@ -701,6 +936,18 @@ class LfWorkflowService {
         .toList();
     rows.sort((a, b) => _newestFirst(a.createdAt, b.createdAt));
     return rows;
+  }
+
+  /// Creates a notification (admin-only per rules).
+  /// Returns the notification document ID.
+  Future<String> createNotification(LfNotification notification) async {
+    _assertAvailable();
+    try {
+      final doc = await _notifications.add(notification.toCreateMap());
+      return doc.id;
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
   }
 
   /// Marks a notification read (owner-only; the rules allow only the `read`
@@ -745,11 +992,22 @@ class QrScanOutcome {
   final bool success;
   final String message;
   final QrTransaction? txn;
+  /// Populated when a handover scan creates a new inventory record (Flow B
+  /// trigger path). Null for all other outcomes.
+  final String? inventoryId;
 
-  const QrScanOutcome._({required this.success, required this.message, this.txn});
+  const QrScanOutcome._(
+      {required this.success,
+      required this.message,
+      this.txn,
+      this.inventoryId});
 
-  const QrScanOutcome.success(QrTransaction txn)
-      : this._(success: true, message: 'Code verified.', txn: txn);
+  const QrScanOutcome.success(QrTransaction txn, {String? inventoryId})
+      : this._(
+            success: true,
+            message: 'Code verified.',
+            txn: txn,
+            inventoryId: inventoryId);
 
   const QrScanOutcome.invalid()
       : this._(

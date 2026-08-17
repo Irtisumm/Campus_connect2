@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../models/app_notification.dart';
 import '../models/auth_result.dart';
@@ -52,7 +54,7 @@ export '../models/event_role.dart' show EventRole;
 export '../models/inventory_item.dart' show InventoryItem, InventoryStatus;
 export '../models/issue.dart' show Issue, IssueHistory;
 export '../models/item.dart' show Item, ItemStatus, ItemType;
-export '../models/lf_match.dart' show LfMatch, MatchStatus;
+export '../models/lf_match.dart' show LfMatch, MatchStatus, MatchSource;
 export '../models/lf_notification.dart' show LfNotification;
 export '../models/locker.dart' show Locker;
 export '../models/locker_booking.dart' show LockerBooking, LockerBookingResult;
@@ -593,7 +595,30 @@ class AppState extends ChangeNotifier {
       final urls = await uploadReportImages(images);
       report = report.copyWith(imageUrls: urls);
     }
-    return _lostFound.createItem(report);
+    final created = await _lostFound.createItem(report);
+
+    // Trigger AI matching for new lost reports (fire-and-forget).
+    // Found reports do NOT trigger AI here — Flow B requires the separate
+    // handover process (generate QR → scan → inventory item created).
+    debugPrint('[AI MATCH DEBUG] createReport finished id=${created.id} '
+        'type=${created.type.wireValue} isLost=${created.isLost} '
+        'cat=${created.category} images=${created.imageUrls.length} '
+        'workerBase=$_aiWorkerBase');
+    if (created.isLost) {
+      runAiMatchingForLostReport(created).then((count) {
+        debugPrint(
+            '[AI MATCH] LOST→INVENTORY anchor=${created.id} matched=$count '
+            'cat=${created.category} images=${created.imageUrls.length}');
+      }).catchError((e) {
+        debugPrint(
+            '[AI MATCH] LOST→INVENTORY anchor=${created.id} FAILED: $e');
+      });
+    } else {
+      debugPrint('[AI MATCH DEBUG] createReport type=found — Flow B requires '
+          'handover (QR scan or admin confirm) to create inventory + trigger AI');
+    }
+
+    return created;
   }
 
   /// Closes a report that is still in the student's hands (admin-only for
@@ -702,6 +727,11 @@ class AppState extends ChangeNotifier {
   /// Live feed of every match, for the admin match screens.
   Stream<List<LfMatch>> watchAllMatches() => _lfWorkflow.watchAllMatches();
 
+  /// Live feed of AI-proposed matches only, for the Admin "AI Suggested
+  /// Matches" section.  Sorted by score descending, then newest first.
+  Stream<List<LfMatch>> watchAiProposedMatches() =>
+      _lfWorkflow.watchAiProposedMatches();
+
   /// Live view of a single match by ID.
   Stream<LfMatch?> watchMatch(String id) => _lfWorkflow.watchMatch(id);
 
@@ -712,7 +742,8 @@ class AppState extends ChangeNotifier {
 
   /// Admin view: the return QR transactions for one inventory item, newest
   /// first (the live code + Issued/Scanned/Confirmed state).
-  Stream<List<QrTransaction>> watchReturnQrForInventory(String inventoryItemId) =>
+  Stream<List<QrTransaction>> watchReturnQrForInventory(
+          String inventoryItemId) =>
       _lfWorkflow.watchReturnQrForInventory(inventoryItemId);
 
   /// Student view: the signed-in student's own QR transactions of one kind.
@@ -772,8 +803,44 @@ class AppState extends ChangeNotifier {
   /// A student scanning a code. Returns a [QrScanOutcome] whose message is
   /// display-ready for every case: invalid, expired, already used, cancelled,
   /// wrong account, or success.
-  Future<QrScanOutcome> scanQrCode(String token) =>
-      _lfWorkflow.scanQr(token: token, studentUid: firebaseUid ?? '');
+  ///
+  /// When a handover scan creates a new inventory record, AI matching (Flow B)
+  /// is triggered fire-and-forget without blocking the scan result.
+  Future<QrScanOutcome> scanQrCode(String token) async {
+    debugPrint('[AI MATCH DEBUG] scanQrCode called token=$token');
+    final outcome =
+        await _lfWorkflow.scanQr(token: token, studentUid: firebaseUid ?? '');
+    debugPrint('[AI MATCH DEBUG] scanQrCode result: success=${outcome.success} '
+        'invId=${outcome.inventoryId}');
+    if (outcome.success && outcome.inventoryId != null) {
+      _lfWorkflow
+          .watchInventoryItem(outcome.inventoryId!)
+          .first
+          .timeout(const Duration(seconds: 30))
+          .then((invItem) {
+        debugPrint('[AI MATCH DEBUG] scanQrCode watchInventoryItem fired '
+            'invId=${outcome.inventoryId} invItemIsNull=${invItem == null} '
+            'status=${invItem?.status}');
+        if (invItem == null) {
+          debugPrint(
+              '[AI MATCH] INVENTORY→LOST inv=${outcome.inventoryId} NO ITEM EMITTED (abort)');
+          return;
+        }
+        runAiMatchingForInventoryItem(invItem).then((count) {
+          debugPrint(
+              '[AI MATCH] INVENTORY→LOST anchor=${outcome.inventoryId} matched=$count '
+              'cat=${invItem.category} images=${invItem.imageUrls.length}');
+        }).catchError((e) {
+          debugPrint(
+              '[AI MATCH] INVENTORY→LOST anchor=${outcome.inventoryId} FAILED: $e');
+        });
+      }).catchError((e) {
+        debugPrint(
+            '[AI MATCH] INVENTORY→LOST inv=${outcome.inventoryId} WATCH/TIMEOUT FAILED: $e');
+      });
+    }
+    return outcome;
+  }
 
   /// Cancels an unused QR code (admin-only).
   Future<void> cancelQrCode(String txnId) => _lfWorkflow.cancelQr(txnId);
@@ -781,8 +848,44 @@ class AppState extends ChangeNotifier {
   /// Workflow 2 — admin confirms the physical handover. One transaction:
   /// report → In Inventory, one inventory record, QR → Confirmed. Returns
   /// the inventory record ID.
-  Future<String> confirmHandover(String txnId) =>
-      _lfWorkflow.confirmHandover(txnId: txnId, adminUid: firebaseUid ?? '');
+  ///
+  /// After handover, triggers AI matching (Flow B) for the new inventory item.
+  Future<String> confirmHandover(String txnId) async {
+    final invId = await _lfWorkflow.confirmHandover(
+        txnId: txnId, adminUid: firebaseUid ?? '');
+    debugPrint('[AI MATCH DEBUG] confirmHandover txnId=$txnId invId=$invId');
+
+    // Trigger AI matching for the new inventory item (fire-and-forget).
+    if (invId.isNotEmpty) {
+      _lfWorkflow
+          .watchInventoryItem(invId)
+          .first
+          .timeout(const Duration(seconds: 30))
+          .then((invItem) {
+        debugPrint('[AI MATCH DEBUG] confirmHandover watchInventoryItem fired '
+            'invId=$invId invItemIsNull=${invItem == null} '
+            'status=${invItem?.status}');
+        if (invItem == null) {
+          debugPrint(
+              '[AI MATCH] INVENTORY→LOST inv=$invId NO ITEM EMITTED (abort)');
+          return;
+        }
+        runAiMatchingForInventoryItem(invItem).then((count) {
+          debugPrint(
+              '[AI MATCH] INVENTORY→LOST anchor=$invId matched=$count '
+              'cat=${invItem.category} images=${invItem.imageUrls.length}');
+        }).catchError((e) {
+          debugPrint(
+              '[AI MATCH] INVENTORY→LOST anchor=$invId FAILED: $e');
+        });
+      }).catchError((e) {
+        debugPrint(
+            '[AI MATCH] INVENTORY→LOST inv=$invId WATCH/TIMEOUT FAILED: $e');
+      });
+    }
+
+    return invId;
+  }
 
   /// Workflow 3 — admin confirms the physical return. One transaction:
   /// inventory → Returned, found report → Returned, lost report → Resolved,
@@ -792,8 +895,7 @@ class AppState extends ChangeNotifier {
 
   /// Creates a match (admin-only). Pass [MatchStatus.proposed] for a draft
   /// or [MatchStatus.approved] to create it already approved.
-  Future<LfMatch> createMatch(LfMatch match) =>
-      _lfWorkflow.createMatch(match);
+  Future<LfMatch> createMatch(LfMatch match) => _lfWorkflow.createMatch(match);
 
   /// Approves a match and delivers the owner's notification atomically.
   Future<String> approveMatchWithNotification(String matchId) =>
@@ -813,6 +915,406 @@ class AppState extends ChangeNotifier {
 
   /// Rejects a match and releases its inventory item atomically.
   Future<void> rejectMatch(String matchId) => _lfWorkflow.rejectMatch(matchId);
+
+  // ── AI Matching orchestration ──────────────────────────────────
+
+  /// Base URL of the campus-connect-ai Cloudflare Worker.
+  ///
+  /// Override at build time for physical-device development:
+  ///   flutter run --dart-define=AI_WORKER_URL=http://192.168.1.239:8787
+  ///
+  /// Defaults to localhost (works with emulator or local browser).
+  /// Change the default for a deployed production Worker.
+  static const String _aiWorkerBase = String.fromEnvironment(
+    'AI_WORKER_URL',
+    defaultValue: 'http://127.0.0.1:8787',
+  );
+
+  /// Maximum number of candidates to send to the Worker in one batch.
+  static const int _aiMaxCandidates = 5;
+
+  /// Runs AI matching for a newly created **Lost Report** (Flow A).
+  ///
+  /// 1. Queries eligible Found Inventory items (same category).
+  /// 2. Sends the lost report + candidates to the Worker batch endpoint.
+  /// 3. Creates `LfMatch` records (source: 'ai') for every result ≥ 50%.
+  /// 4. Creates notifications for the lost owner.
+  ///
+  /// Returns the number of AI matches created.
+  Future<int> runAiMatchingForLostReport(Item lostReport) async {
+    debugPrint('[AI MATCH DEBUG] runAiMatchingForLostReport ENTERED '
+        'anchor=${lostReport.id} cat=${lostReport.category} '
+        'images=${lostReport.imageUrls.length} '
+        'dbAvailable=${_lfWorkflow.isAvailable} '
+        'isLost=${lostReport.isLost} '
+        'status=${lostReport.status.wireValue} '
+        'closed=${_isLostClosed(lostReport)} '
+        'workerBase=$_aiWorkerBase');
+    if (!_lfWorkflow.isAvailable) {
+      debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
+          'SKIP: db unavailable');
+      return 0;
+    }
+    if (!lostReport.isLost) {
+      debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
+          'SKIP: not a lost report');
+      return 0;
+    }
+    if (_isLostClosed(lostReport)) {
+      debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
+          'SKIP: status=${lostReport.status.wireValue}');
+      return 0;
+    }
+
+    // Anchor must have at least one image for visual comparison.
+    if (lostReport.imageUrls.isEmpty) {
+      debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
+          'SKIP: no anchor image');
+      return 0;
+    }
+
+    // 1. Find eligible inventory candidates (same category, In Inventory,
+    //    must have at least one image). Uses a targeted status+category
+    //    query so the student's client can read under the 'In Inventory' rule.
+    final candidates = await _lfWorkflow.queryInventoryForAi(
+      category: lostReport.category,
+      limit: _aiMaxCandidates * 2,
+    );
+
+    if (candidates.isEmpty) {
+      debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
+          'NO candidates cat=${lostReport.category}');
+      return 0;
+    }
+
+    // 2. Build the batch request.
+    final anchorItem = _itemToWorkerPayload(lostReport);
+    final candidatePayloads =
+        candidates.map((inv) => _inventoryToWorkerPayload(inv)).toList();
+
+    final batchResults =
+        await _callBatchEndpoint(anchorItem, candidatePayloads);
+    if (batchResults == null) {
+      debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
+          'BATCH FAILED (endpoint returned null)');
+      return 0;
+    }
+
+    // 3. Create match records for results ≥ 50%.
+    int created = 0;
+    for (final r in batchResults) {
+      final candidateId = r['candidateId'] as String? ?? '';
+      final resultIndex = batchResults.indexOf(r);
+      final hasError = r['error'] != null;
+      debugPrint('[AI MATCH DEBUG] stage=candidate-result '
+          'candidateId=$candidateId resultIndex=$resultIndex '
+          'resultPresent=true hasError=$hasError');
+      if (hasError) {
+        debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
+            'cand=${r['candidateId']} worker_error SKIP');
+        continue;
+      }
+      final overallScore = (r['overallScore'] as num?)?.toInt() ?? 0;
+      final workerIsMatch = r['isMatch'] as bool?;
+      final scoreAtLeast50 = overallScore >= 50;
+      debugPrint('[AI MATCH DEBUG] stage=score candidateId=$candidateId '
+          'overallScore=$overallScore rawIsMatch=$workerIsMatch');
+      debugPrint('[AI MATCH DEBUG] stage=threshold candidateId=$candidateId '
+          'scoreAtLeast50=$scoreAtLeast50 threshold=50');
+      if (!scoreAtLeast50) {
+        debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
+            'cand=${r['candidateId']} score=$overallScore BELOW 50 (skip)');
+        continue;
+      }
+
+      final invItem = candidates
+          .cast<InventoryItem?>()
+          .firstWhere((c) => c?.id == candidateId, orElse: () => null);
+      if (invItem == null) {
+        debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
+            'cand=$candidateId NOT FOUND in candidate set (skip)');
+        continue;
+      }
+
+      // Duplicate check.
+      debugPrint('[AI MATCH DEBUG] stage=pair-duplicate-check '
+          'candidateId=$candidateId started=true');
+      if (await _lfWorkflow.pairAlreadyMatched(
+          lostReport.id, invItem.id,
+          lostOwnerUid: lostReport.reportedByUid)) {
+        debugPrint('[AI MATCH DEBUG] stage=pair-duplicate-check '
+            'candidateId=$candidateId alreadyMatched=true error=none');
+        debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
+            'cand=$candidateId SKIP: pairAlreadyMatched=true');
+        continue;
+      }
+      debugPrint('[AI MATCH DEBUG] stage=pair-duplicate-check '
+          'candidateId=$candidateId alreadyMatched=false error=none');
+
+      // Eligibility check.
+      debugPrint('[AI MATCH DEBUG] stage=inventory-availability '
+          'candidateId=$candidateId started=true');
+      if (!await _lfWorkflow.isInventoryAvailableForAiMatch(invItem.id)) {
+        debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
+            'cand=$candidateId SKIP: inventory unavailable');
+        continue;
+      }
+      debugPrint('[AI MATCH DEBUG] stage=inventory-availability '
+          'candidateId=$candidateId available=true error=none');
+
+      final match = LfMatch(
+        lostReportId: lostReport.id,
+        inventoryItemId: invItem.id,
+        lostOwnerUid: lostReport.reportedByUid,
+        lostOwnerStudentId: lostReport.reportedByStudentId,
+        finderUid: invItem.finderUid,
+        status: MatchStatus.proposed,
+        source: MatchSource.ai,
+        overallScore: overallScore,
+        visualScore: (r['visualScore'] as num?)?.toInt(),
+        titleScore: (r['titleScore'] as num?)?.toInt(),
+        descriptionScore: (r['descriptionScore'] as num?)?.toInt(),
+        categoryScore: (r['categoryScore'] as num?)?.toInt(),
+        locationScore: (r['locationScore'] as num?)?.toInt(),
+        timeScore: (r['timeScore'] as num?)?.toInt(),
+        confidence: (r['confidence'] as num?)?.toInt(),
+        reason: r['reason']?.toString(),
+      );
+
+      final createdMatch = await _lfWorkflow.createAiMatchIfAvailable(match);
+      if (createdMatch != null) {
+        created++;
+        debugPrint('[AI MATCH] LOST→INVENTORY MATCH CREATED '
+            'anchor=${lostReport.id} cand=$candidateId '
+            'score=$overallScore id=${createdMatch.id}');
+        // Create notification for the lost owner (fire-and-forget).
+        _createAiMatchNotification(createdMatch).catchError((_) => 0);
+      } else {
+        debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
+            'cand=$candidateId CREATE_REJECTED (null)');
+      }
+    }
+
+    return created;
+  }
+
+  /// Runs AI matching for a newly created **Found Inventory item** (Flow B).
+  ///
+  /// 1. Queries active/unresolved Lost Reports (same category).
+  /// 2. Sends each lost report as anchor + this inventory item as candidate.
+  /// 3. Creates `LfMatch` records for results ≥ 50%.
+  Future<int> runAiMatchingForInventoryItem(InventoryItem invItem) async {
+    debugPrint('[AI MATCH DEBUG] runAiMatchingForInventoryItem ENTERED '
+        'invId=${invItem.id} status=${invItem.status} '
+        'cat=${invItem.category} images=${invItem.imageUrls.length}');
+    if (!_lfWorkflow.isAvailable) {
+      debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
+          'SKIP: db unavailable');
+      return 0;
+    }
+    if (invItem.status != InventoryStatus.inInventory) {
+      debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
+          'SKIP: status=${invItem.status}');
+      return 0;
+    }
+
+    // Anchor must have at least one image for visual comparison.
+    if (invItem.imageUrls.isEmpty) {
+      debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
+          'SKIP: no anchor image');
+      return 0;
+    }
+
+    // 1. Find eligible lost reports (same category, not closed, must have
+    //    at least one image).
+    final lostReports = await _lostFound.watchAllLostItems().first;
+    final candidates = lostReports
+        .where((r) =>
+            !_isLostClosed(r) &&
+            r.category == invItem.category &&
+            r.imageUrls.isNotEmpty)
+        .take(_aiMaxCandidates * 2)
+        .toList();
+
+    if (candidates.isEmpty) {
+      debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
+          'NO candidates cat=${invItem.category}');
+      return 0;
+    }
+
+    // 2. For each lost report, compare against this inventory item.
+    int created = 0;
+    for (final lostReport in candidates) {
+      // Duplicate check.
+      if (await _lfWorkflow.pairAlreadyMatched(
+          lostReport.id, invItem.id,
+          lostOwnerUid: lostReport.reportedByUid)) {
+        debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
+            'cand=${lostReport.id} SKIP: pairAlreadyMatched=true');
+        continue;
+      }
+
+      // Eligibility check.
+      if (!await _lfWorkflow.isInventoryAvailableForAiMatch(invItem.id)) {
+        debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
+            'ABORT: inventory item became unavailable');
+        break; // item became unavailable — stop
+      }
+
+      final anchorItem = _itemToWorkerPayload(lostReport);
+      final candidatePayloads = [_inventoryToWorkerPayload(invItem)];
+
+      final batchResults =
+          await _callBatchEndpoint(anchorItem, candidatePayloads);
+      if (batchResults == null || batchResults.isEmpty) {
+        debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
+            'cand=${lostReport.id} BATCH FAILED/EMPTY (skip)');
+        continue;
+      }
+
+      final r = batchResults.first;
+      if (r['error'] != null) {
+        debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
+            'cand=${lostReport.id} worker_error SKIP');
+        continue;
+      }
+      final overallScore = (r['overallScore'] as num?)?.toInt() ?? 0;
+      if (overallScore < 50) {
+        debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
+            'cand=${lostReport.id} score=$overallScore BELOW 50 (skip)');
+        continue;
+      }
+
+      final match = LfMatch(
+        lostReportId: lostReport.id,
+        inventoryItemId: invItem.id,
+        lostOwnerUid: lostReport.reportedByUid,
+        lostOwnerStudentId: lostReport.reportedByStudentId,
+        finderUid: invItem.finderUid,
+        status: MatchStatus.proposed,
+        source: MatchSource.ai,
+        overallScore: overallScore,
+        visualScore: (r['visualScore'] as num?)?.toInt(),
+        titleScore: (r['titleScore'] as num?)?.toInt(),
+        descriptionScore: (r['descriptionScore'] as num?)?.toInt(),
+        categoryScore: (r['categoryScore'] as num?)?.toInt(),
+        locationScore: (r['locationScore'] as num?)?.toInt(),
+        timeScore: (r['timeScore'] as num?)?.toInt(),
+        confidence: (r['confidence'] as num?)?.toInt(),
+        reason: r['reason']?.toString(),
+      );
+
+      final createdMatch = await _lfWorkflow.createAiMatchIfAvailable(match);
+      if (createdMatch != null) {
+        created++;
+        debugPrint('[AI MATCH] INVENTORY→LOST MATCH CREATED '
+            'anchor=${invItem.id} cand=${lostReport.id} '
+            'score=$overallScore id=${createdMatch.id}');
+        _createAiMatchNotification(createdMatch).catchError((_) => 0);
+      } else {
+        debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
+            'cand=${lostReport.id} CREATE_REJECTED (null)');
+      }
+    }
+
+    debugPrint('[AI MATCH DEBUG] runAiMatchingForInventoryItem EXITED '
+        'invId=${invItem.id} created=$created');
+    return created;
+  }
+
+  // ── Private AI helpers ──────────────────────────────────────────
+
+  Map<String, dynamic> _itemToWorkerPayload(Item item) => {
+        'title': item.title,
+        'description': item.description,
+        'category': item.category,
+        'location': item.whereLost,
+        'dateTime': item.whenLost?.toIso8601String() ?? '',
+        'imageUrls': item.imageUrls,
+      };
+
+  Map<String, dynamic> _inventoryToWorkerPayload(InventoryItem inv) => {
+        'id': inv.id,
+        'title': inv.title,
+        'description': inv.description,
+        'category': inv.category,
+        'location': '', // Inventory items don't have a location field
+        'dateTime': inv.createdAt?.toIso8601String() ?? '',
+        'imageUrls': inv.imageUrls,
+      };
+
+  /// Calls POST /ai/batch-match on the Worker. Returns the results list
+  /// or null on failure.
+  Future<List<Map<String, dynamic>>?> _callBatchEndpoint(
+      Map<String, dynamic> anchorItem,
+      List<Map<String, dynamic>> candidateItems) async {
+    try {
+      final uri = Uri.parse('$_aiWorkerBase/ai/batch-match');
+      final host = uri.authority; // host:port only — no path, no secrets
+      debugPrint('[AI MATCH DEBUG] Worker URL = $_aiWorkerBase  '
+          'host=$host  candidates=${candidateItems.length}');
+      final response = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'anchorItem': anchorItem,
+              'candidateItems': candidateItems,
+              'maxCandidates': _aiMaxCandidates,
+            }),
+          )
+          .timeout(const Duration(seconds: 120));
+
+      if (response.statusCode != 200) {
+        debugPrint('[AI MATCH] batch-match HTTP ${response.statusCode} '
+            'on $host (returning null)');
+        return null;
+      }
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final resultList = body['results'] as List<dynamic>?;
+      debugPrint('[AI MATCH DEBUG] stage=worker-response-received '
+          'httpStatus=200 resultCount=${resultList?.length ?? 0} '
+          'parseResult=success');
+      if (body['success'] != true) {
+        debugPrint('[AI MATCH] batch-match success=false on $host');
+        return null;
+      }
+      return resultList?.cast<Map<String, dynamic>>();
+    } catch (e) {
+      final host = Uri.tryParse(_aiWorkerBase)?.authority ?? 'unknown';
+      debugPrint('[AI MATCH] batch-match EXCEPTION on $host: '
+          '${e.runtimeType} — ${e.toString().split('\n').first}');
+      return null;
+    }
+  }
+
+  /// Creates an lfNotification for the lost owner when an AI match is found.
+  Future<void> _createAiMatchNotification(LfMatch match) async {
+    try {
+      final notification = LfNotification(
+        studentId: match.lostOwnerStudentId,
+        title: 'Possible Match Found',
+        body: 'An AI-powered match was found for your lost item. '
+            'Review it under My Lost Reports → Possible Matches.',
+        type: 'match',
+        relatedReportId: match.lostReportId,
+      );
+      await _lfWorkflow.createNotification(notification);
+      debugPrint('[AI MATCH] NOTIFICATION CREATED '
+          'match=${match.lostReportId}_${match.inventoryItemId} '
+          'owner=${match.lostOwnerStudentId}');
+    } catch (e) {
+      debugPrint('[AI MATCH] NOTIFICATION FAILED '
+          'match=${match.lostReportId}_${match.inventoryItemId} '
+          'owner=${match.lostOwnerStudentId}: $e');
+    }
+  }
+
+  bool _isLostClosed(Item item) {
+    return item.status == ItemStatus.resolved ||
+        item.status == ItemStatus.returned ||
+        item.status == ItemStatus.closed;
+  }
 
   /// Live feed of the signed-in student's own issues, newest first.
   ///
