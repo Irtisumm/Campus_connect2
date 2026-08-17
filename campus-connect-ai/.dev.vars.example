@@ -1,0 +1,3 @@
+OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key
+CF_ACCOUNT_ID=your-cloudflare-account-id
+CF_API_TOKEN=your-cloudflare-api-token

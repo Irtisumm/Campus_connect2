@@ -37,12 +37,115 @@ class LostFoundService {
     _assertAvailable();
 
     if (item.reportedByUid.isEmpty) {
-      throw const AuthFailure('Please sign in again before submitting a report.');
+      throw const AuthFailure(
+          'Please sign in again before submitting a report.');
     }
 
     try {
       final doc = await _items.add(item.toCreateMap());
       return item.copyWith(id: doc.id);
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
+  /// Updates an existing report's editable fields.
+  ///
+  /// Writes [item.toUpdateMap()] — only `title`, `category`, `description`,
+  /// `whereLost`, `imageUrls`, `status`, `isDeleted`, and `updatedAt`. The
+  /// caller must ensure `item.id` is the Firestore document ID of a report
+  /// the caller owns (or is an admin).
+  ///
+  /// The Firestore rules independently enforce that `type`,
+  /// `reportedByUid`, and `reportedByStudentId` are unchanged, and that the
+  /// status transition is permitted for the caller's role.
+  ///
+  /// Throws [AuthFailure] with a user-safe message on failure.
+  Future<Item> updateItem(Item item) async {
+    _assertAvailable();
+
+    if (item.id.isEmpty) {
+      throw const AuthFailure('This report cannot be updated.');
+    }
+
+    try {
+      await _items.doc(item.id).update(item.toUpdateMap());
+      return item;
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
+  /// Changes a report's status.
+  ///
+  /// The client must enforce the transition policy before calling this:
+  /// a student may only close an active report (Active → Closed); an admin
+  /// may set any valid status. The refined Firestore rule enforces the same
+  /// restriction independently — a student attempting Resolved or Matched -
+  /// Pending is denied at the database level.
+  ///
+  /// Throws [AuthFailure] with a user-safe message on failure.
+  Future<void> updateStatus(String id, ItemStatus newStatus) async {
+    _assertAvailable();
+
+    if (id.isEmpty) {
+      throw const AuthFailure('This report cannot be updated.');
+    }
+
+    try {
+      await _items.doc(id).update({
+        'status': newStatus.wireValue,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
+  /// Changes a report's status and records why it was closed, in one write.
+  ///
+  /// Only the two fixed admin closure reasons are valid here
+  /// (`STUDENT_REQUEST_APPROVED` / `ADMIN_RESOLVED`); the caller (AppState)
+  /// passes a server-fixed constant, never client input. The Firestore rules
+  /// independently reject any other `closeReason` value.
+  Future<void> updateStatusWithReason(
+      String id, ItemStatus newStatus, String reason) async {
+    _assertAvailable();
+
+    if (id.isEmpty) {
+      throw const AuthFailure('This report cannot be updated.');
+    }
+
+    try {
+      await _items.doc(id).update({
+        'status': newStatus.wireValue,
+        'closeReason': reason,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
+  /// Soft-deletes a report by setting `isDeleted: true`.
+  ///
+  /// The document remains in Firestore (for admin history and any future
+  /// match recovery) but is excluded from all `watch*` feeds, which filter
+  /// by `isDeleted == false`.
+  ///
+  /// Throws [AuthFailure] with a user-safe message on failure.
+  Future<void> softDelete(String id) async {
+    _assertAvailable();
+
+    if (id.isEmpty) {
+      throw const AuthFailure('This report cannot be removed.');
+    }
+
+    try {
+      await _items.doc(id).update({
+        'isDeleted': true,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     } on FirebaseException catch (e) {
       throw AuthFailure.fromCode(e.code);
     }
@@ -126,7 +229,8 @@ class LostFoundService {
         .snapshots()
         .map((doc) => doc.exists ? Item.fromMap(doc.id, doc.data()!) : null)
         .handleError(
-          (Object error) => throw AuthFailure.fromCode((error as FirebaseException).code),
+          (Object error) =>
+              throw AuthFailure.fromCode((error as FirebaseException).code),
           test: (Object? error) => error is FirebaseException,
         );
   }
@@ -169,7 +273,8 @@ class LostFoundService {
         // this a raw FirebaseException would surface in `snapshot.error` and
         // land in the widget tree.
         .handleError(
-          (Object error) => throw AuthFailure.fromCode((error as FirebaseException).code),
+          (Object error) =>
+              throw AuthFailure.fromCode((error as FirebaseException).code),
           test: (Object? error) => error is FirebaseException,
         );
   }
@@ -181,9 +286,8 @@ class LostFoundService {
   /// to the top of the list.
   static List<Item> _sortedNewestFirst(
       QuerySnapshot<Map<String, dynamic>> snapshot) {
-    final items = snapshot.docs
-        .map((doc) => Item.fromMap(doc.id, doc.data()))
-        .toList();
+    final items =
+        snapshot.docs.map((doc) => Item.fromMap(doc.id, doc.data())).toList();
     items.sort((a, b) {
       final aDate = a.createdAt;
       final bDate = b.createdAt;
@@ -197,7 +301,8 @@ class LostFoundService {
 
   void _assertAvailable() {
     if (!isAvailable) {
-      throw const AuthFailure('The database is unavailable. Please restart the app.');
+      throw const AuthFailure(
+          'The database is unavailable. Please restart the app.');
     }
   }
 }

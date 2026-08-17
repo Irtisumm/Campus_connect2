@@ -2,14 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../widgets/common.dart';
-import '../../data/mock_data.dart';
+import '../../widgets/delete_countdown_dialog.dart';
+import '../../data/mock_data.dart' hide Candidate;
 import '../../theme/app_theme.dart';
 import '../../services/app_state.dart';
-import '../../services/data_service.dart';
+import 'widgets/event_widgets.dart';
+export 'events_hub_screen.dart';
+export 'election_info_screen.dart';
+export 'create_event_screen.dart';
 
 void _toast(BuildContext ctx, String msg) => ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
   content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -21,201 +24,78 @@ AppBar _appBar(String t, BuildContext ctx) => AppBar(
   flexibleSpace: Container(decoration: const BoxDecoration(gradient: AppTheme.headerGradient)),
   leading: IconButton(icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white), onPressed: () => ctx.pop()));
 
-const _catColors = {
-  'Academic': [Color(0x1AC41E3A), Color(0xFFC41E3A)],
-  'Sport':    [Color(0x1AE8475F), Color(0xFFE8475F)],
-  'Club':     [Color(0x1AF8D49B), Color(0xFFE8B96A)],
-  'General':  [Color(0x1AC41E3A), Color(0xFFC41E3A)],
-};
-
-// ── Screen 22: Events Hub ────────────────────────────────────────
-class EventsHubScreen extends StatelessWidget {
-  const EventsHubScreen({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return Consumer2<DataService, AppState>(
-      builder: (context, dataService, appState, child) {
-        final events = dataService.allEvents;
-        final mySubmissions = dataService.getEventsForHost(appState.userId ?? '');
-        return Scaffold(
-          body: SafeArea(child: Column(children: [
-            Padding(padding: const EdgeInsets.fromLTRB(16,12,16,0), child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              const Text('Upcoming Events', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
-              Flexible(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(children: [
-                    GestureDetector(onTap: () => context.push('/events/create'), child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7), decoration: BoxDecoration(gradient: AppTheme.primaryGradient, borderRadius: BorderRadius.circular(999)),
-                        child: const Text('➕ Create', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)))),
-                    const SizedBox(width: 8),
-                    GestureDetector(onTap: () => context.push('/events/my-events'), child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7), decoration: BoxDecoration(color: AppTheme.red.withOpacity(0.1), borderRadius: BorderRadius.circular(999), border: Border.all(color: AppTheme.red.withOpacity(0.3))),
-                        child: Text('My Events${mySubmissions.isNotEmpty ? ' (${mySubmissions.length})' : ''}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.red)))),
-                    const SizedBox(width: 8),
-                    GestureDetector(onTap: () => context.push('/events/elections'), child: Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7), decoration: BoxDecoration(gradient: AppTheme.primaryGradient, borderRadius: BorderRadius.circular(999)),
-                        child: const Text('🗳 Elections', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)))),
-                  ]),
-                ),
-              ),
-            ])),
-
-            // ── My Submissions strip ──────────────────────────────
-            if (mySubmissions.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('My Submissions',
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w800,
-                            color: AppTheme.textPrimary)),
-                    GestureDetector(
-                      onTap: () => context.push('/events/my-events'),
-                      child: const Text('See all →',
-                          style: TextStyle(
-                              fontSize: 11,
-                              color: AppTheme.red,
-                              fontWeight: FontWeight.w700)),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 88,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  itemCount: mySubmissions.length,
-                  itemBuilder: (ctx, i) {
-                    final ev = mySubmissions[i];
-                    final statusColor = switch (ev.status) {
-                      'Published'      => const Color(0xFF4CAF50),
-                      'Rejected'       => const Color(0xFFD65E5E),
-                      'Needs Revision' => const Color(0xFFB8860B),
-                      'Under Review'   => const Color(0xFF2196F3),
-                      _                => AppTheme.textMuted,
-                    };
-                    return GestureDetector(
-                      onTap: () => ev.status == 'Published'
-                          ? context.push('/events/manage/${ev.id}')
-                          : context.push('/events/my-events/${ev.id}'),
-                      child: Container(
-                        width: 180,
-                        margin: const EdgeInsets.only(right: 10),
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: AppTheme.bgCard,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                              color: statusColor.withValues(alpha: 0.4)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(ev.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800)),
-                            Text(fmtDate(ev.date),
-                                style: const TextStyle(
-                                    fontSize: 10,
-                                    color: AppTheme.textMuted)),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: statusColor.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(ev.status,
-                                  style: TextStyle(
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w800,
-                                      color: statusColor)),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 4),
-              const Divider(height: 16, indent: 16, endIndent: 16),
-            ],
-
-            Expanded(child: events.isEmpty
-              ? const Center(child: EmptyState(title: 'No Events Yet', subtitle: 'No upcoming events available.', icon: Icons.event_rounded))
-              : ListView.builder(padding: const EdgeInsets.all(16), itemCount: events.length, itemBuilder: (ctx, i) {
-                final ev = events[i];
-                final colors = _catColors[ev.category] ?? _catColors['General']!;
-                return GestureDetector(
-                  onTap: () => context.push('/events/detail/${ev.id}'),
-                  child: Container(margin: const EdgeInsets.only(bottom: 12), decoration: BoxDecoration(color: AppTheme.bgCard, borderRadius: BorderRadius.circular(18), border: Border.all(color: AppTheme.red.withOpacity(0.10)), boxShadow: [BoxShadow(color: AppTheme.red.withOpacity(0.08), blurRadius: 10, offset: const Offset(0,3))]),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Container(height: 80, decoration: BoxDecoration(color: colors[0], borderRadius: const BorderRadius.vertical(top: Radius.circular(18))),
-                        child: Stack(children: [
-                          Center(child: Icon(Icons.event_rounded, size: 42, color: (colors[1]).withOpacity(0.4))),
-                          Positioned(top: 10, right: 10, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: colors[0], borderRadius: BorderRadius.circular(999), border: Border.all(color: colors[1])),
-                              child: Text(ev.category, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: colors[1])))),
-                          if (ev.status == 'Completed')
-                            Positioned(top: 10, left: 10, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: const Color(0xFF4E6272).withOpacity(0.15), borderRadius: BorderRadius.circular(999), border: Border.all(color: const Color(0xFF4E6272))),
-                                child: const Text('COMPLETED', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Color(0xFF4E6272))))),
-                        ])),
-                      Padding(padding: const EdgeInsets.all(14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(ev.title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
-                        const SizedBox(height: 8),
-                        Wrap(spacing: 12, children: [
-                          _Meta(Icons.calendar_today_rounded, fmtDate(ev.date)),
-                          _Meta(Icons.access_time_rounded, ev.time),
-                          _Meta(Icons.location_on_rounded, ev.location),
-                        ]),
-                      ])),
-                    ])),
-                ).animate().fadeIn(delay: (i*70).ms).slideY(begin: 0.15);
-              })),
-          ])),
-        );
-      },
-    );
-  }
-}
-
 // ── Screen 23: Event Detail ──────────────────────────────────────
 class EventDetailScreen extends StatelessWidget {
   final String id;
   const EventDetailScreen({super.key, required this.id});
   @override
   Widget build(BuildContext context) {
-    return Consumer2<DataService, AppState>(
-      builder: (context, dataService, appState, child) {
-        final ev = dataService.allEvents.firstWhere((x) => x.id == id, orElse: () => const Event(
-          id: '', title: 'Event Not Found', date: '', time: '', location: '',
-          category: '', organizer: '', description: '', status: ''
-        ));
-        final colors = _catColors[ev.category] ?? _catColors['General']!;
-        // Check if already joined
-        final userId = appState.userId ?? 'S001';
-        final userJoined = ev.attendeeIds.contains(userId);
-
-        // Get QR code if joined — look up the actual approved joining record
-        String? qrCode;
-        if (userJoined) {
-          final joinRecord = dataService.getJoiningRecord(ev.id, userId);
-          qrCode = joinRecord?.qrTicketCode ?? 'QR-${ev.id}-$userId';
+    return Consumer<AppState>(
+      builder: (context, appState, child) {
+        final userId = appState.userId;
+        if (userId == null || userId.isEmpty) {
+          return Scaffold(
+            appBar: _appBar('Event Details', context),
+            body: const EmptyState(
+              icon: Icons.lock_outline_rounded,
+              title: 'Sign in required',
+              subtitle: 'Please sign in to view event details.',
+            ),
+          );
         }
+        return StreamBuilder<Event?>(
+          stream: appState.watchEvent(id),
+          builder: (context, eventSnap) {
+            if (eventSnap.hasError) {
+              return Scaffold(
+                appBar: _appBar('Event Details', context),
+                body: const EmptyState(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load event',
+                  subtitle: 'Please check your connection and try again.',
+                ),
+              );
+            }
+            final ev = eventSnap.data ?? const Event(
+              id: '', title: 'Event Not Found', date: '', time: '', location: '',
+              category: '', organizer: '', description: '', status: ''
+            );
+            final userJoined = ev.attendeeIds.contains(userId);
 
-        return Scaffold(
+            return StreamBuilder<List<EventJoining>>(
+              stream: appState.watchMyJoinings(),
+              builder: (context, joiningsSnap) {
+                if (joiningsSnap.hasError) {
+                  return Scaffold(
+                    appBar: _appBar(ev.title, context),
+                    body: const EmptyState(
+                      icon: Icons.cloud_off_rounded,
+                      title: 'Unable to load event',
+                      subtitle: 'Please check your connection and try again.',
+                    ),
+                  );
+                }
+                final myJoining = (joiningsSnap.data ?? const <EventJoining>[])
+                    .where((j) => j.eventId == ev.id && j.status == 'Approved')
+                    .firstOrNull;
+                String? qrCode;
+                if (userJoined) {
+                  qrCode = myJoining?.qrTicketCode ?? 'QR-${ev.id}-$userId';
+                }
+
+                return Scaffold(
           appBar: _appBar(ev.title, context),
           body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(children: [
-            Container(height: 130, decoration: BoxDecoration(color: colors[0], borderRadius: BorderRadius.circular(18), border: Border.all(color: (colors[1]).withOpacity(0.25))),
-              child: Center(child: Icon(Icons.event_rounded, size: 64, color: (colors[1]).withOpacity(0.4)))),
+            SizedBox(
+              height: 180,
+              width: double.infinity,
+              child: EventCover(
+                category: ev.category,
+                coverImageUrl: ev.coverImageUrl,
+                radius: BorderRadius.circular(18),
+                iconSize: 64,
+              ),
+            ),
             const SizedBox(height: 14),
             Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(children: [
               InfoRow(label: 'Date', value: fmtDate(ev.date)),
@@ -238,7 +118,25 @@ class EventDetailScreen extends StatelessWidget {
               Text(ev.description, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary, height: 1.7)),
               if (ev.attendeeIds.isNotEmpty) ...[
                 const Divider(height: 20),
-                Text('Attendees: ${ev.attendeeIds.length}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textMuted)),
+                Text(
+                  ev.maxParticipants > 0
+                      ? 'Attendees: ${ev.attendeeIds.length} / ${ev.maxParticipants}'
+                      : 'Attendees: ${ev.attendeeIds.length}',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textMuted)),
+                if (ev.maxParticipants > 0) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    ev.isFull
+                        ? 'Event Full'
+                        : '${ev.availableSlots} slot${ev.availableSlots == 1 ? '' : 's'} available',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: ev.isFull ? AppTheme.danger : AppTheme.textMuted)),
+                ],
               ],
             ]))),
             // ── Creator management shortcut ─────────────────────────
@@ -274,10 +172,37 @@ class EventDetailScreen extends StatelessWidget {
             GradientButton(label: '📅 Add to Calendar', onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Added to calendar ✓')))),
             const SizedBox(height: 10),
             if (!userJoined)
-              GradientButton(
-                label: ev.isPaid ? '💳 Purchase Ticket' : (ev.isPrivate ? '📝 Request to Join' : '✅ Join Event'),
-                onPressed: () => _showJoinDialog(context, dataService, ev, userId),
-              )
+              if (ev.isFull)
+                Container(
+                    padding:
+                        const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                    decoration: BoxDecoration(
+                        color: AppTheme.danger.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: AppTheme.danger.withOpacity(0.3))),
+                    child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.do_not_disturb_rounded,
+                              color: AppTheme.danger, size: 18),
+                          SizedBox(width: 8),
+                          Text('Registration Closed — Event Full',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.danger,
+                                  fontSize: 12))
+                        ]))
+              else
+                GradientButton(
+                  label: ev.isPaid
+                      ? '💳 Purchase Ticket'
+                      : (ev.isPrivate
+                          ? '📝 Request to Join'
+                          : '✅ Join Event'),
+                  onPressed: () =>
+                      _showJoinDialog(context, appState, ev, userId),
+                )
             else ...[
               Container(padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16), decoration: BoxDecoration(color: const Color(0xFF4CAF50).withOpacity(0.1), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFF4CAF50).withOpacity(0.3))),
                 child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.check_circle_rounded, color: Color(0xFF4CAF50), size: 18), SizedBox(width: 8), Text('You have joined this event', style: TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF4CAF50), fontSize: 12))])),
@@ -289,6 +214,10 @@ class EventDetailScreen extends StatelessWidget {
             const SizedBox(height: 10),
             OutlineBtn(label: '🔔 Remind Me', onPressed: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Reminder set!')))),
           ])),
+                );
+              },
+            );
+          },
         );
       },
     );
@@ -351,7 +280,7 @@ class EventDetailScreen extends StatelessWidget {
     );
   }
 
-  void _showJoinDialog(BuildContext context, DataService dataService, Event event, String userId) {
+  void _showJoinDialog(BuildContext context, AppState appState, Event event, String userId) {
     final nameCtrl = TextEditingController();
     final courseCtrl = TextEditingController();
     final clubCtrl = TextEditingController();
@@ -406,28 +335,38 @@ class EventDetailScreen extends StatelessWidget {
           TextButton(onPressed: () => Navigator.pop(dialogCtx), child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.red),
-            onPressed: () {
+            onPressed: () async {
               if (!key.currentState!.validate()) return;
-
+              Navigator.pop(dialogCtx);
+              // Capacity guard: refuse if the event is already full.
+              if (event.isFull) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('Registration Closed — Event Full')));
+                return;
+              }
+              // Check for an existing registration before attempting to join.
+              final existing = await appState.joiningFor(event.id);
+              if (existing != null) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('You have already registered for this event.')));
+                return;
+              }
+              final joining = await appState.joinEvent(
+                event,
+                name: nameCtrl.text.trim(),
+                courseName: courseCtrl.text.trim(),
+                clubId: clubCtrl.text.isNotEmpty ? clubCtrl.text.trim() : null,
+              );
+              if (joining == null) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to join event. Please try again.')));
+                return;
+              }
               if (event.isPaid) {
-                // For paid events, create joining with pending payment
-                final joining = dataService.requestJoinEvent(event.id, userId, nameCtrl.text.trim(), courseCtrl.text.trim(), clubId: clubCtrl.text.isNotEmpty ? clubCtrl.text.trim() : null);
-                Navigator.pop(dialogCtx);
-                // Show payment dialog
-                _showPaymentDialog(context, dataService, event, joining);
+                _showPaymentDialog(context, appState, event, joining);
               } else if (event.isPrivate) {
-                // For private events, submit for approval
-                dataService.requestJoinEvent(event.id, userId, nameCtrl.text.trim(), courseCtrl.text.trim(), clubId: clubCtrl.text.isNotEmpty ? clubCtrl.text.trim() : null);
-                Navigator.pop(dialogCtx);
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Request submitted. Waiting for approval...')));
               } else {
-                // For open free events, quick join
-                if (dataService.quickJoinEvent(event.id, userId, nameCtrl.text.trim(), courseCtrl.text.trim())) {
-                  Navigator.pop(dialogCtx);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Successfully joined! Your QR ticket is ready.')));
-                  // Refresh the view
-                  (context as Element).reassemble();
-                }
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Successfully joined! Your QR ticket is ready.')));
               }
             },
             child: const Text('Continue', style: TextStyle(color: Colors.white)),
@@ -437,7 +376,7 @@ class EventDetailScreen extends StatelessWidget {
     );
   }
 
-  void _showPaymentDialog(BuildContext context, DataService dataService, Event event, EventJoining joining) {
+  void _showPaymentDialog(BuildContext context, AppState appState, Event event, EventJoining joining) {
     final amountCtrl = TextEditingController(text: event.price.toStringAsFixed(2));
     final cardNumberCtrl = TextEditingController();
     final expiryCtrl = TextEditingController();
@@ -518,11 +457,17 @@ class EventDetailScreen extends StatelessWidget {
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4CAF50)),
               onPressed: isPaymentProcessing ? null : () {
                 setState(() => isPaymentProcessing = true);
-                // Simulate payment processing
-                Future.delayed(const Duration(seconds: 2), () {
-                  dataService.completePaymentAndJoin(joining.id, event.price);
-                  Navigator.pop(dialogCtx);
-                  _showQRCodeDialog(context, dataService, joining, event);
+                // Simulate payment processing, then persist the result.
+                Future.delayed(const Duration(seconds: 2), () async {
+                  final ok = await appState.completeJoiningPayment(joining.id);
+                  if (!dialogCtx.mounted) return;
+                  if (ok) {
+                    Navigator.pop(dialogCtx);
+                    _showQRCodeDialog(context, joining, event);
+                  } else {
+                    setState(() => isPaymentProcessing = false);
+                    _toast(context, '❌ Payment failed. Please try again.');
+                  }
                 });
               },
               child: isPaymentProcessing
@@ -535,10 +480,8 @@ class EventDetailScreen extends StatelessWidget {
     );
   }
 
-  void _showQRCodeDialog(BuildContext context, DataService dataService, EventJoining joining, Event event) {
-    // Fetch the updated joining record so we get the qrTicketCode set after payment
-    final updated = dataService.getJoiningById(joining.id) ?? joining;
-    final qrCode = updated.qrTicketCode ?? 'QR-${joining.eventId}-${joining.studentId}';
+  void _showQRCodeDialog(BuildContext context, EventJoining joining, Event event) {
+    final qrCode = joining.qrTicketCode ?? 'QR-${joining.eventId}-${joining.studentId}';
     final scaffold = ScaffoldMessenger.of(context);
     showDialog(
       context: context,
@@ -556,11 +499,18 @@ class EventDetailScreen extends StatelessWidget {
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8),
                     border: Border.all(color: AppTheme.textMuted.withOpacity(0.2))),
-                  child: QrImageView(
-                    data: qrCode,
-                    version: QrVersions.auto,
-                    size: 200,
-                    gapless: false,
+                  // Fixed SizedBox: QrImageView uses an internal LayoutBuilder,
+                  // which throws when AlertDialog measures content via an
+                  // intrinsic-width pass. A tight box answers with its own size.
+                  child: SizedBox(
+                    width: 200,
+                    height: 200,
+                    child: QrImageView(
+                      data: qrCode,
+                      version: QrVersions.auto,
+                      size: 200,
+                      gapless: false,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -604,8 +554,9 @@ class EventDetailScreen extends StatelessWidget {
 }
 
 // ── Screen 24: Elections Info ────────────────────────────────────
-class ElectionsInfoScreen extends StatelessWidget {
-  const ElectionsInfoScreen({super.key});
+@Deprecated('Use the redesigned ElectionsInfoScreen from election_info_screen.dart.')
+class LegacyElectionsInfoScreen extends StatelessWidget {
+  const LegacyElectionsInfoScreen({super.key});
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -651,7 +602,7 @@ class AdminEventsListScreen extends StatefulWidget {
 class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
   bool _showPending = true;
 
-  void _showSendNoticeDialog(BuildContext context, DataService dataService, Event ev) {
+  void _showSendNoticeDialog(BuildContext context, AppState appState, Event ev) {
     final noticeCtrl = TextEditingController();
     showDialog(
       context: context,
@@ -680,9 +631,9 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
           TextButton(onPressed: () => Navigator.of(dialogCtx).pop(), child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.red),
-            onPressed: () {
+            onPressed: () async {
               if (noticeCtrl.text.trim().isNotEmpty) {
-                dataService.sendEventNotice(ev.id, noticeCtrl.text.trim());
+                await appState.addEventMessage(ev.id, noticeCtrl.text.trim());
                 Navigator.of(dialogCtx).pop();
                 _toast(context, 'Notice sent to host');
               }
@@ -694,7 +645,7 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
     );
   }
 
-  void _showDeleteConfirmation(BuildContext context, DataService dataService, Event ev) {
+  void _showDeleteConfirmation(BuildContext context, AppState appState, Event ev) {
     showDialog(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -705,8 +656,8 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
           TextButton(onPressed: () => Navigator.of(dialogCtx).pop(), child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () {
-              dataService.deleteEvent(ev.id);
+            onPressed: () async {
+              await appState.deleteEvent(ev.id);
               Navigator.of(dialogCtx).pop();
               _toast(context, 'Event deleted');
             },
@@ -717,13 +668,83 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
     );
   }
 
+  void _showRejectReasonDialog(BuildContext context, AppState appState, Event ev) {
+    final reasonCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Reject Event', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Event: ${ev.title}', style: const TextStyle(fontSize: 13, color: AppTheme.textMuted)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: reasonCtrl,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Rejection reason',
+                hintText: 'Enter the reason for rejection...',
+                alignLabelWithHint: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogCtx).pop(), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () async {
+              final reason = reasonCtrl.text.trim();
+              if (reason.isEmpty) return;
+              await appState.rejectEvent(ev.id, reason);
+              if (!dialogCtx.mounted) return;
+              Navigator.of(dialogCtx).pop();
+              _toast(context, 'Event rejected');
+            },
+            child: const Text('Reject', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final pendingList = dataService.pendingEvents;
-        final publishedList = dataService.allEvents;
-        final data = _showPending ? pendingList : publishedList;
+    return Consumer<AppState>(
+      builder: (context, appState, child) {
+        return StreamBuilder<List<Event>>(
+          stream: appState.watchPendingEvents(),
+          builder: (context, pendingSnap) {
+            if (pendingSnap.hasError) {
+              return Scaffold(
+                appBar: _appBar('Events Management', context),
+                body: EmptyState(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load events',
+                  subtitle: 'Please check your connection and try again.',
+                ),
+              );
+            }
+            return StreamBuilder<List<Event>>(
+              stream: appState.watchAllEvents(),
+              builder: (context, allSnap) {
+                if (allSnap.hasError) {
+                  return Scaffold(
+                    appBar: _appBar('Events Management', context),
+                    body: EmptyState(
+                      icon: Icons.cloud_off_rounded,
+                      title: 'Unable to load events',
+                      subtitle: 'Please check your connection and try again.',
+                    ),
+                  );
+                }
+                final pendingList = pendingSnap.data ?? const <Event>[];
+                final publishedList = allSnap.data ?? const <Event>[];
+                final data = _showPending ? pendingList : publishedList;
 
         return Scaffold(
           appBar: _appBar('Events Management', context),
@@ -733,6 +754,16 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
             label: const Text('Create', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700))),
           body: Column(children: [
             const Padding(padding: EdgeInsets.fromLTRB(16,8,16,0), child: AdminBar()),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: HubButton(
+                icon: Icons.how_to_vote_rounded,
+                label: 'Election Management',
+                subtitle: 'Manage elections and candidates',
+                iconColor: AppTheme.red,
+                onTap: () => context.push('/admin/events/elections'),
+              ),
+            ),
             Padding(
               padding: const EdgeInsets.all(16),
               child: Row(children: [
@@ -793,12 +824,11 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
                           const SizedBox(height: 8),
                           Row(children: [
                             Expanded(child: OutlineBtn(label: 'Reject', onPressed: () {
-                              dataService.rejectEvent(ev.id, reason: 'Rejected by admin');
-                              _toast(ctx, 'Event rejected');
+                              _showRejectReasonDialog(ctx, appState, ev);
                             })),
                             const SizedBox(width: 8),
-                            Expanded(child: GradientButton(label: 'Approve', onPressed: () {
-                              dataService.approveEvent(ev.id);
+                            Expanded(child: GradientButton(label: 'Approve', onPressed: () async {
+                              await appState.approveEvent(ev.id);
                               _toast(ctx, 'Event approved!');
                             })),
                           ]),
@@ -851,8 +881,8 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
                                   icon: Icons.check_circle_outline_rounded,
                                   label: 'Complete',
                                   color: const Color(0xFF2E7D32),
-                                  onTap: () {
-                                    dataService.markEventCompleted(ev.id);
+                                  onTap: () async {
+                                    await appState.markEventCompleted(ev.id);
                                     _toast(ctx, 'Event marked as completed');
                                   },
                                 ),
@@ -860,7 +890,7 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
                                 icon: Icons.mail_outline_rounded,
                                 label: 'Notice',
                                 color: AppTheme.red,
-                                onTap: () => _showSendNoticeDialog(ctx, dataService, ev),
+                                onTap: () => _showSendNoticeDialog(ctx, appState, ev),
                               ),
                               _ActionChip(
                                 icon: Icons.edit_outlined,
@@ -872,7 +902,7 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
                                 icon: Icons.delete_outline_rounded,
                                 label: 'Delete',
                                 color: AppTheme.danger,
-                                onTap: () => _showDeleteConfirmation(ctx, dataService, ev),
+                                onTap: () => _showDeleteConfirmation(ctx, appState, ev),
                               ),
                             ],
                           ),
@@ -883,6 +913,10 @@ class _AdminEventsListScreenState extends State<AdminEventsListScreen> {
                 }
               })),
           ]),
+        );
+              },
+            );
+          },
         );
       },
     );
@@ -906,6 +940,7 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
   late TextEditingController _locCtrl;
   late TextEditingController _orgCtrl;
   late TextEditingController _noticeCtrl;
+  late TextEditingController _maxParticipantsCtrl;
   String _category = 'Academic';
   bool _loaded = false;
 
@@ -919,6 +954,7 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
     _locCtrl = TextEditingController();
     _orgCtrl = TextEditingController();
     _noticeCtrl = TextEditingController();
+    _maxParticipantsCtrl = TextEditingController();
   }
 
   @override
@@ -930,10 +966,11 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
     _locCtrl.dispose();
     _orgCtrl.dispose();
     _noticeCtrl.dispose();
+    _maxParticipantsCtrl.dispose();
     super.dispose();
   }
 
-  void _confirmDelete(BuildContext context, DataService dataService, Event ev) {
+  void _confirmDelete(BuildContext context, AppState appState, Event ev) {
     showDialog(
       context: context,
       builder: (dialogCtx) => AlertDialog(
@@ -944,8 +981,8 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
           TextButton(onPressed: () => Navigator.of(dialogCtx).pop(), child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () {
-              dataService.deleteEvent(ev.id);
+            onPressed: () async {
+              await appState.deleteEvent(ev.id);
               Navigator.of(dialogCtx).pop();
               _toast(context, 'Event deleted');
               context.pop(); // Go back to list
@@ -959,14 +996,28 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final ev = widget.id != null
-          ? dataService.allEvents.firstWhere((x) => x.id == widget.id, orElse: () => const Event(
-              id: '', title: '', date: '', time: '', location: '',
-              category: '', organizer: '', description: '', status: ''
-            ))
-          : null;
+    return Consumer<AppState>(
+      builder: (context, appState, child) {
+        return StreamBuilder<List<Event>>(
+          stream: appState.watchAllEvents(),
+          builder: (context, allEventsSnap) {
+            if (allEventsSnap.hasError) {
+              return Scaffold(
+                appBar: _appBar('Event Editor', context),
+                body: EmptyState(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load events',
+                  subtitle: 'Please check your connection and try again.',
+                ),
+              );
+            }
+            final allEvents = allEventsSnap.data ?? const <Event>[];
+            final ev = widget.id != null
+              ? allEvents.firstWhere((x) => x.id == widget.id, orElse: () => const Event(
+                  id: '', title: '', date: '', time: '', location: '',
+                  category: '', organizer: '', description: '', status: ''
+                ))
+              : null;
 
         // Load event data into controllers only once
         if (ev != null && !_loaded && ev.id.isNotEmpty) {
@@ -977,6 +1028,7 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
           _locCtrl.text = ev.location;
           _orgCtrl.text = ev.organizer;
           _category = ev.category;
+          _maxParticipantsCtrl.text = ev.maxParticipants > 0 ? ev.maxParticipants.toString() : '';
           _loaded = true;
         }
 
@@ -1029,6 +1081,12 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
             TextFormField(controller: _locCtrl, decoration: const InputDecoration(labelText: 'Location')),
             const SizedBox(height: 12),
             TextFormField(controller: _orgCtrl, decoration: const InputDecoration(labelText: 'Organizer')),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _maxParticipantsCtrl,
+              decoration: const InputDecoration(labelText: 'Max Participants', hintText: '0 = unlimited'),
+              keyboardType: TextInputType.number,
+            ),
             const SizedBox(height: 18),
 
             // ── Primary Actions ─────────────────────────────────
@@ -1036,10 +1094,21 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
               // Publish / Update Status button
               GradientButton(
                 label: ev.status == 'Published' ? 'Update Event' : 'Publish Event',
-                onPressed: () {
+                onPressed: () async {
                   if (_titleCtrl.text.isNotEmpty) {
-                    dataService.updateEventStatus(ev.id, 'Published');
-                    _toast(context, 'Event published');
+                    final updated = ev.copyWith(
+                      title: _titleCtrl.text,
+                      description: _descCtrl.text,
+                      date: _dateCtrl.text,
+                      time: _timeCtrl.text,
+                      location: _locCtrl.text,
+                      organizer: _orgCtrl.text,
+                      category: _category,
+                      status: ev.status == 'Published' ? ev.status : 'Published',
+                      maxParticipants: int.tryParse(_maxParticipantsCtrl.text.trim()) ?? 0,
+                    );
+                    await appState.updateEvent(updated);
+                    _toast(context, 'Event updated');
                   } else {
                     _toast(context, 'Title is required');
                   }
@@ -1052,8 +1121,8 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
                 OutlineBtn(
                   label: 'Mark as Completed',
                   color: const Color(0xFF2E7D32),
-                  onPressed: () {
-                    dataService.markEventCompleted(ev.id);
+                  onPressed: () async {
+                    await appState.markEventCompleted(ev.id);
                     _toast(context, 'Event marked as completed');
                   },
                 ),
@@ -1075,9 +1144,9 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
               OutlineBtn(
                 label: 'Send Notice',
                 color: AppTheme.red,
-                onPressed: () {
+                onPressed: () async {
                   if (_noticeCtrl.text.trim().isNotEmpty) {
-                    dataService.sendEventNotice(ev.id, _noticeCtrl.text.trim());
+                    await appState.addEventMessage(ev.id, _noticeCtrl.text.trim());
                     _toast(context, 'Notice sent to event host');
                     _noticeCtrl.clear();
                   } else {
@@ -1091,17 +1160,16 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
               OutlineBtn(
                 label: 'Delete Event',
                 color: AppTheme.danger,
-                onPressed: () => _confirmDelete(context, dataService, ev),
+                onPressed: () => _confirmDelete(context, appState, ev),
               ),
             ] else ...[
               // Creating a new event
               GradientButton(
                 label: 'Publish',
-                onPressed: () {
+                onPressed: () async {
                   if (_titleCtrl.text.isNotEmpty) {
-                    final appState = context.read<AppState>();
                     final newEvent = Event(
-                      id: 'EV-${DateTime.now().millisecondsSinceEpoch}',
+                      id: '',
                       title: _titleCtrl.text,
                       category: _category,
                       date: _dateCtrl.text,
@@ -1112,8 +1180,10 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
                       status: 'Published',
                       hostStudentId: appState.userId,
                     );
-                    dataService.createEvent(newEvent);
-                    dataService.approveEvent(newEvent.id);
+                    final created = await appState.createEvent(newEvent);
+                    if (created != null) {
+                      await appState.approveEvent(created.id);
+                    }
                     _toast(context, 'Event published');
                     context.pop();
                   } else {
@@ -1126,263 +1196,9 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
             ],
           ])),
         );
+          },
+        );
       },
-    );
-  }
-}
-
-// ── Screen 26: Create Event (Student) ─────────────────────────────
-class CreateEventScreen extends StatefulWidget {
-  const CreateEventScreen({super.key});
-  @override State<CreateEventScreen> createState() => _CreateEventState();
-}
-
-class _CreateEventState extends State<CreateEventScreen> {
-  final _key = GlobalKey<FormState>();
-  final _titleC = TextEditingController();
-  final _descC = TextEditingController();
-  final _dateC = TextEditingController();
-  final _timeC = TextEditingController();
-  final _locC = TextEditingController();
-  final _orgC = TextEditingController();
-  final _priceC = TextEditingController();
-  String? _catVal;
-  String? _eventTypeVal;
-  bool _clubIdRequired = false;
-  bool _done = false;
-  DateTime? _selectedDate;
-  PlatformFile? _approvalPdf;
-
-  static const _cats = ['Academic', 'Sport', 'Club', 'General'];
-  static const _eventTypes = ['Open', 'Club', 'Club+Payment', 'Paid'];
-
-  @override
-  void dispose() {
-    _titleC.dispose();
-    _descC.dispose();
-    _dateC.dispose();
-    _timeC.dispose();
-    _locC.dispose();
-    _orgC.dispose();
-    _priceC.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pickEventDate() async {
-    final now = DateTime.now();
-    final minDate = DateTime(now.year, now.month, now.day).add(const Duration(days: 10));
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate ?? minDate,
-      firstDate: minDate,
-      lastDate: now.add(const Duration(days: 365)),
-    );
-    if (picked == null) return;
-    setState(() {
-      _selectedDate = picked;
-      _dateC.text =
-          '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
-    });
-  }
-
-  Future<void> _pickApprovalPdf() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: const ['pdf'],
-      allowMultiple: false,
-    );
-    if (result == null || result.files.isEmpty) return;
-    setState(() {
-      _approvalPdf = result.files.first;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_done) {
-      return Scaffold(
-        body: SafeArea(child: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Container(width: 80, height: 80, decoration: const BoxDecoration(color: Color(0x1AC41E3A), shape: BoxShape.circle),
-            child: const Icon(Icons.check_circle_outline_rounded, size: 48, color: AppTheme.red)),
-          const SizedBox(height: 16),
-          const Text('Event Submitted!', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          const Text('Your event is pending admin approval.\nWe\'ll notify you when it\'s approved.', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: AppTheme.textMuted)),
-          const SizedBox(height: 24),
-          ElevatedButton(onPressed: () => context.go('/events'), child: const Text('Back to Events')),
-        ]))),
-      );
-    }
-
-    return Scaffold(
-      appBar: _appBar('Create Event', context),
-      body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Form(key: _key, child: Column(children: [
-        const NoticeBox(message: 'Your event will be reviewed and approved by admin before publishing.', icon: Icons.info_outline_rounded),
-        NoticeBox(
-          message:
-              'Events must be submitted at least 10 days before the event date to allow admin review.',
-          borderColor: AppTheme.goldDark,
-          bgColor: AppTheme.gold.withOpacity(0.12),
-          textColor: const Color(0xFF7A5B00),
-          icon: Icons.calendar_today_rounded,
-        ),
-        const SectionLabel('Event Details'),
-        TextFormField(controller: _titleC, decoration: const InputDecoration(labelText: 'Event Title', hintText: 'e.g. Tech Talks 2024'), validator: (v) => v!.isEmpty ? 'Required' : null),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String>(initialValue: _catVal, decoration: const InputDecoration(labelText: 'Category'), items: _cats.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(), onChanged: (v) => setState(() => _catVal = v), validator: (v) => v == null ? 'Required' : null),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<String>(
-          initialValue: _eventTypeVal,
-          decoration: const InputDecoration(labelText: 'Event Type'),
-          items: _eventTypes.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-          onChanged: (v) => setState(() => _eventTypeVal = v),
-          validator: (v) => v == null ? 'Required' : null,
-        ),
-        const SizedBox(height: 12),
-        if (_eventTypeVal == 'Club' || _eventTypeVal == 'Club+Payment') ...[
-          CheckboxListTile(
-            title: const Text('Require Club ID for joining'),
-            value: _clubIdRequired,
-            onChanged: (v) => setState(() => _clubIdRequired = v ?? false),
-            contentPadding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-          ),
-          const SizedBox(height: 12),
-        ],
-        if (_eventTypeVal == 'Club+Payment' || _eventTypeVal == 'Paid') ...[
-          TextFormField(
-            controller: _priceC,
-            decoration: const InputDecoration(labelText: 'Entry Fee (RM)', hintText: '0.00'),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            validator: (v) => (v!.isEmpty || double.tryParse(v) == null) ? 'Enter valid amount' : null,
-          ),
-          const SizedBox(height: 12),
-        ],
-        GestureDetector(
-          onTap: _pickEventDate,
-          child: AbsorbPointer(
-            child: TextFormField(
-              controller: _dateC,
-              decoration: const InputDecoration(
-                labelText: 'Date',
-                hintText: 'Select event date',
-                suffixIcon: Icon(Icons.calendar_month_rounded),
-              ),
-              validator: (v) => v!.isEmpty ? 'Required' : null,
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextFormField(controller: _timeC, decoration: const InputDecoration(labelText: 'Time', hintText: 'HH:MM'), validator: (v) => v!.isEmpty ? 'Required' : null),
-        const SizedBox(height: 12),
-        TextFormField(controller: _locC, decoration: const InputDecoration(labelText: 'Location', hintText: 'e.g. Auditorium A'), validator: (v) => v!.isEmpty ? 'Required' : null),
-        const SizedBox(height: 12),
-        TextFormField(controller: _orgC, decoration: const InputDecoration(labelText: 'Organizer', hintText: 'Your club/department'), validator: (v) => v!.isEmpty ? 'Required' : null),
-        const SizedBox(height: 12),
-        TextFormField(controller: _descC, maxLines: 3, decoration: const InputDecoration(labelText: 'Description', hintText: 'Event details...', alignLabelWithHint: true), validator: (v) => v!.isEmpty ? 'Required' : null),
-        const SizedBox(height: 12),
-        const SectionLabel('Approval Letter (PDF)'),
-        NoticeBox(
-          message:
-              'Upload an official approval letter (PDF) from faculty/management. This is mandatory.',
-          borderColor: AppTheme.danger,
-          bgColor: AppTheme.danger.withOpacity(0.06),
-          textColor: const Color(0xFF8B2020),
-          icon: Icons.description_rounded,
-        ),
-        const SizedBox(height: 8),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: AppTheme.bgCard,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppTheme.red.withOpacity(0.2)),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.picture_as_pdf_rounded, color: AppTheme.red),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  _approvalPdf?.name ?? 'No PDF selected',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: _approvalPdf == null ? AppTheme.textMuted : AppTheme.textPrimary,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: _pickApprovalPdf,
-                child: const Text('Choose PDF'),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 20),
-        GradientButton(label: 'Submit for Approval', onPressed: () {
-          if (_key.currentState!.validate() && _catVal != null) {
-            final eventDate = DateTime.tryParse(_dateC.text);
-            if (eventDate == null) {
-              _toast(context, 'Please select a valid date');
-              return;
-            }
-            final now = DateTime.now();
-            final today = DateTime(now.year, now.month, now.day);
-            final eventDay = DateTime(eventDate.year, eventDate.month, eventDate.day);
-            final daysUntilEvent = eventDay.difference(today).inDays;
-            if (daysUntilEvent < 10) {
-              _toast(context, 'Events must be submitted at least 10 days in advance');
-              return;
-            }
-            if (_approvalPdf == null) {
-              _toast(context, 'Approval letter PDF is required');
-              return;
-            }
-
-            final dataService = context.read<DataService>();
-            final appState = context.read<AppState>();
-
-            // Determine event type configuration
-            final isClub = _eventTypeVal == 'Club' || _eventTypeVal == 'Club+Payment';
-            final isPaid = _eventTypeVal == 'Club+Payment' || _eventTypeVal == 'Paid';
-            final price = isPaid ? double.tryParse(_priceC.text) ?? 0.0 : 0.0;
-
-            final newEvent = Event(
-              id: 'EV-${DateTime.now().millisecondsSinceEpoch}',
-              title: _titleC.text,
-              category: _catVal!,
-              date: _dateC.text,
-              time: _timeC.text,
-              location: _locC.text,
-              organizer: _orgC.text,
-              description: _descC.text,
-              status: 'Pending',
-              hostStudentId: appState.userId,
-              approvalLetterPath: _approvalPdf!.path,
-              approvalLetterName: _approvalPdf!.name,
-              hasApprovalLetter: true,
-              submittedDate: DateTime.now().toString().split(' ')[0],
-              eventType: _eventTypeVal!,
-              isPrivate: isClub,
-              clubIdRequired: isClub && _clubIdRequired,
-              isPaid: isPaid,
-              price: price,
-            );
-            if (appState.userId == null || appState.userId!.isEmpty) {
-              _toast(context, 'You must be logged in to create an event');
-              return;
-            }
-            dataService.createEvent(newEvent);
-            setState(() => _done = true);
-          } else {
-            _toast(context, 'Please fill all fields');
-          }
-        }),
-        const SizedBox(height: 10),
-        OutlineBtn(label: 'Cancel', onPressed: () => context.pop()),
-      ]))),
     );
   }
 }
@@ -1392,44 +1208,313 @@ class AdminElectionsMgmtScreen extends StatelessWidget {
   const AdminElectionsMgmtScreen({super.key});
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: _appBar('Elections Admin', context),
-      body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const AdminBar(), const SizedBox(height: 10),
-        const SectionLabel('Editable Content Blocks'),
-        Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(children: [
-          TextFormField(initialValue: 'The Student Council Elections are held annually…', maxLines: 3, decoration: const InputDecoration(labelText: 'About', alignLabelWithHint: true)),
-          const SizedBox(height: 12),
-          TextFormField(initialValue: '25 Mar – Registration closes\n1 Apr – Polling Day', maxLines: 3, decoration: const InputDecoration(labelText: 'Timeline', alignLabelWithHint: true)),
-          const SizedBox(height: 12),
-          TextFormField(initialValue: 'President, Vice President, Secretary General, Treasurer', decoration: const InputDecoration(labelText: 'Open Positions')),
-        ]))),
-        GradientButton(label: 'Save Content', onPressed: () => _toast(context, 'Content saved')),
-        const SectionLabel('Candidates'),
-        ...MockData.candidates.map((c) => Card(child: ListTile(
-          leading: Container(width: 40, height: 40, decoration: const BoxDecoration(gradient: AppTheme.primaryGradient, shape: BoxShape.circle), child: Center(child: Text(c.name[0], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)))),
-          title: Text(c.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-          subtitle: Text('${c.programme} · ${c.position}'),
-          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-            IconButton(icon: const Icon(Icons.edit_rounded, size: 18, color: AppTheme.red), onPressed: () => _toast(context, 'Edit ${c.name}')),
-            IconButton(icon: const Icon(Icons.close_rounded, size: 18, color: AppTheme.danger), onPressed: () => _toast(context, 'Candidate removed')),
-          ]),
-        ))),
-      ])),
+    return Consumer<AppState>(
+      builder: (context, appState, _) {
+        return StreamBuilder<List<Candidate>>(
+          stream: appState.watchAllCandidates(),
+          builder: (context, snap) {
+            if (snap.hasError) {
+              return Scaffold(
+                appBar: _appBar('Elections Admin', context),
+                body: EmptyState(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load candidates',
+                  subtitle: 'Please check your connection and try again.',
+                ),
+              );
+            }
+            final candidates = snap.data ?? const <Candidate>[];
+            return Scaffold(
+              appBar: _appBar('Elections Admin', context),
+              floatingActionButton: FloatingActionButton.extended(
+                onPressed: () => _showCandidateEditor(context, appState),
+                backgroundColor: AppTheme.red,
+                icon: const Icon(Icons.add, color: Colors.white),
+                label: const Text('Add Candidate',
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w700)),
+              ),
+              body: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const AdminBar(),
+                    const SizedBox(height: 10),
+                    StreamBuilder<List<ElectionMeta>>(
+                      stream: appState.watchAllElectionMeta(),
+                      builder: (context, metaSnap) {
+                        final activeMetas = (metaSnap.data ?? const <ElectionMeta>[])
+                            .where((m) => !m.isArchived)
+                            .toList();
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SectionLabel('Elections'),
+                            if (metaSnap.connectionState == ConnectionState.waiting && activeMetas.isEmpty)
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 24),
+                                child: Center(child: CircularProgressIndicator()),
+                              )
+                            else if (activeMetas.isEmpty)
+                              const EmptyState(
+                                icon: Icons.how_to_vote_rounded,
+                                title: 'No elections yet',
+                                subtitle: 'Elections are created via the seed tool.',
+                              )
+                            else
+                              ...activeMetas.map((meta) => Card(
+                                    child: ListTile(
+                                      leading: Container(
+                                        width: 40,
+                                        height: 40,
+                                        decoration: const BoxDecoration(
+                                            gradient: AppTheme.primaryGradient,
+                                            shape: BoxShape.circle),
+                                        child: Center(
+                                            child: Text(
+                                                meta.title.isNotEmpty ? meta.title[0] : '?',
+                                                style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.w800))),
+                                      ),
+                                      title: Text(meta.title,
+                                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                                      subtitle: Text('${meta.status} · ${meta.pollingDate}'),
+                                      trailing: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton(
+                                                icon: const Icon(Icons.visibility_outlined,
+                                                    size: 18, color: AppTheme.red),
+                                                tooltip: 'View',
+                                                onPressed: () => context.push(
+                                                    '/admin/events/elections/detail/${meta.id}')),
+                                            IconButton(
+                                                icon: const Icon(Icons.edit_rounded,
+                                                    size: 18, color: AppTheme.red),
+                                                tooltip: 'Edit',
+                                                onPressed: () => context.push(
+                                                    '/admin/events/elections/editor/${meta.id}')),
+                                            IconButton(
+                                                icon: const Icon(Icons.archive_outlined,
+                                                    size: 18, color: AppTheme.danger),
+                                                tooltip: 'Archive',
+                                                onPressed: () async {
+                                                  final confirmed = await showArchiveCountdownDialog(
+                                                    context,
+                                                    itemName: meta.title,
+                                                    warning: 'This election will be moved to the Admin Archive. It will no longer appear as an active election.',
+                                                  );
+                                                  if (confirmed != true || !context.mounted) return;
+                                                  final ok = await appState.archiveElectionMeta(
+                                                      meta.id, previousStatus: meta.status);
+                                                  if (!context.mounted) return;
+                                                  _toast(context, ok ? 'Election archived' : 'Archive failed');
+                                                }),
+                                          ]),
+                                    ),
+                                  )),
+                            const SizedBox(height: 10),
+                            HubButton(
+                              icon: Icons.inventory_2_rounded,
+                              label: 'Archived Elections',
+                              subtitle: 'View and restore archived elections',
+                              iconColor: AppTheme.red,
+                              onTap: () => context.push('/admin/events/elections/archive'),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    const SectionLabel('Candidates'),
+                    if (snap.connectionState == ConnectionState.waiting &&
+                        candidates.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Center(child: CircularProgressIndicator()),
+                      )
+                    else if (candidates.isEmpty)
+                      EmptyState(
+                        icon: Icons.how_to_vote_rounded,
+                        title: 'No candidates yet',
+                        subtitle:
+                            'Tap "Add Candidate" to create the first one.',
+                      )
+                    else
+                      ...candidates.map((c) => Card(
+                            child: ListTile(
+                              leading: Container(
+                                width: 40,
+                                height: 40,
+                                decoration: const BoxDecoration(
+                                    gradient: AppTheme.primaryGradient,
+                                    shape: BoxShape.circle),
+                                child: Center(
+                                    child: Text(c.name[0],
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w800))),
+                              ),
+                              title: Text(c.name,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700)),
+                              subtitle: Text(
+                                  '${c.programme} · ${c.position}${c.status == 'Published' ? '' : ' · ${c.status}'}'),
+                              trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                        icon: Icon(
+                                            c.status == 'Published'
+                                                ? Icons.visibility_off_outlined
+                                                : Icons.visibility_outlined,
+                                            size: 18,
+                                            color: AppTheme.red),
+                                        tooltip: c.status == 'Published'
+                                            ? 'Unpublish'
+                                            : 'Publish',
+                                        onPressed: () async {
+                                          final wasPublished =
+                                              c.status == 'Published';
+                                          final ok = wasPublished
+                                              ? await appState
+                                                  .unpublishCandidate(c.id)
+                                              : await appState
+                                                  .publishCandidate(c.id);
+                                          if (!context.mounted) return;
+                                          _toast(
+                                              context,
+                                              ok
+                                                  ? (wasPublished
+                                                      ? 'Candidate unpublished'
+                                                      : 'Candidate published')
+                                                  : 'Action failed');
+                                        }),
+                                    IconButton(
+                                        icon: const Icon(Icons.edit_rounded,
+                                            size: 18, color: AppTheme.red),
+                                        onPressed: () => _showCandidateEditor(
+                                            context, appState,
+                                            candidate: c),
+                                    ),
+                                    IconButton(
+                                        icon: const Icon(Icons.close_rounded,
+                                            size: 18, color: AppTheme.danger),
+                                        onPressed: () async {
+                                          final ok = await appState
+                                              .deleteCandidate(c.id);
+                                          if (!context.mounted) return;
+                                          _toast(
+                                              context,
+                                              ok
+                                                  ? 'Candidate removed'
+                                                  : 'Remove failed');
+                                        }),
+                                  ]),
+                            ),
+                          )),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }
 
-// ── Shared ────────────────────────────────────────────────────────
-class _Meta extends StatelessWidget {
-  final IconData icon; final String text;
-  const _Meta(this.icon, this.text);
-  @override
-  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
-    Icon(icon, size: 12, color: AppTheme.textMuted), const SizedBox(width: 4),
-    Text(text, style: const TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.w600))]);
+/// Dialog-based create/update form for a [Candidate]. Mirrors the lightweight
+/// admin editor pattern used elsewhere in this module — keeps the elections
+/// admin self-contained without introducing a new routed screen.
+Future<void> _showCandidateEditor(
+  BuildContext context,
+  AppState appState, {
+  Candidate? candidate,
+}) async {
+  final isEdit = candidate != null;
+  final nameCtrl = TextEditingController(text: candidate?.name ?? '');
+  final programmeCtrl =
+      TextEditingController(text: candidate?.programme ?? '');
+  final positionCtrl =
+      TextEditingController(text: candidate?.position ?? '');
+  final manifestoCtrl =
+      TextEditingController(text: candidate?.manifesto ?? '');
+
+  final result = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(isEdit ? 'Edit Candidate' : 'New Candidate'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Name')),
+            const SizedBox(height: 12),
+            TextField(
+                controller: programmeCtrl,
+                decoration: const InputDecoration(labelText: 'Programme')),
+            const SizedBox(height: 12),
+            TextField(
+                controller: positionCtrl,
+                decoration: const InputDecoration(labelText: 'Position')),
+            const SizedBox(height: 12),
+            TextField(
+                controller: manifestoCtrl,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                    labelText: 'Manifesto', alignLabelWithHint: true)),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel')),
+        FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save')),
+      ],
+    ),
+  );
+
+  if (result != true) return;
+  final name = nameCtrl.text.trim();
+  if (name.isEmpty) {
+    _toast(context, 'Name is required');
+    return;
+  }
+  final programme = programmeCtrl.text.trim();
+  final position = positionCtrl.text.trim();
+  final manifesto = manifestoCtrl.text.trim();
+  bool ok;
+  if (isEdit) {
+    ok = await appState.updateCandidate(candidate.copyWith(
+      name: name,
+      programme: programme,
+      position: position,
+      manifesto: manifesto,
+    ));
+  } else {
+    ok = await appState.createCandidate(Candidate(
+      id: '',
+      name: name,
+      programme: programme,
+      position: position,
+      manifesto: manifesto,
+      status: 'Pending',
+    ));
+  }
+  if (!context.mounted) return;
+  _toast(context,
+      ok ? (isEdit ? 'Candidate updated' : 'Candidate created') : 'Save failed');
 }
 
+// ── Shared ────────────────────────────────────────────────────────
 class _TL extends StatelessWidget {
   final String date, text;
   const _TL(this.date, this.text);

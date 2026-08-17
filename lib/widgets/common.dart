@@ -9,6 +9,8 @@ class StatusBadge extends StatelessWidget {
 
   static const _map = {
     'Active':                 [Color(0xFF8B1428), Color(0x20C41E3A)],
+    'Awaiting':               [Color(0xFF8B1428), Color(0x20C41E3A)],
+    'Possible Match':         [Color(0xFF8A5F0A), Color(0x28F8D49B)],
     'Matched - Pending':      [Color(0xFF8B1428), Color(0x20C41E3A)],
     'Closed':                 [Color(0xFF4E6272), Color(0x20607080)],
     'In Progress':            [Color(0xFF8B1428), Color(0x20C41E3A)],

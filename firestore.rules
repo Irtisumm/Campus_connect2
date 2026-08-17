@@ -113,8 +113,12 @@ service cloud.firestore {
       // beginning of its lifecycle and cannot be born already resolved or
       // already deleted. If a later feature needs to create a report in
       // another state, relax that one line to the same enum list used below.
+      // A report is born 'Active' for both lost and found. A found report
+      // stays 'Active' until the admin confirms the physical handover and
+      // moves it to 'In Inventory'.
       allow create: if isSelf(request.resource.data.reportedByUid)
         && request.resource.data.reportedByStudentId is string
+        && request.resource.data.reportedByName is string
         && request.resource.data.type in ['lost', 'found']
         && request.resource.data.status == 'Active'
         && request.resource.data.isDeleted == false;
@@ -123,33 +127,319 @@ service cloud.firestore {
       // owner off the STORED document, so it is the existing owner who is
       // checked — not whatever the incoming payload claims (requirement 5).
       //
-      // reportedByUid and reportedByStudentId are then held equal to their
-      // stored values, so a report can never be reassigned to someone else
-      // (requirement 6). `type` is immutable for the same reason it is fixed in
-      // the Item model: flipping lost <-> found would invalidate any match
-      // already made against the report.
+      // reportedByUid, reportedByStudentId and reportedByName are then held
+      // equal to their stored values, so a report can never be reassigned to
+      // someone else or have its reporter name rewritten (requirement 6).
+      // `type` is immutable for the same reason it is fixed in the Item model:
+      // flipping lost <-> found would invalidate any match already made.
+      // `closeReason` is admin-only, so a student may never set it.
+      //
+      // Status transitions are type-aware. A student may leave the status
+      // unchanged (when editing other fields) or:
+      //   - lost:  Active -> Requested Close (a closure request, never a
+      //            direct close — the admin must approve it);
+      //   - found: Active -> Closed, and the legacy 'Awaiting Handover' ->
+      //            Closed for reports created before found reports were born
+      //            'Active'.
+      // A student can never move a lost report directly to Closed, and every
+      // official status is admin-only — enforced here at the database level,
+      // not just in the client.
       //
       // This rule is also the soft-delete path — `isDeleted` is not pinned, so
       // the owner may flip it to true (requirement 7).
       allow update: if isSelf(resource.data.reportedByUid)
         && request.resource.data.reportedByUid == resource.data.reportedByUid
         && request.resource.data.reportedByStudentId == resource.data.reportedByStudentId
+        && request.resource.data.get('reportedByName', '') == resource.data.get('reportedByName', '')
+        && request.resource.data.get('closeReason', '') == resource.data.get('closeReason', '')
         && request.resource.data.type == resource.data.type
         && request.resource.data.isDeleted is bool
-        && request.resource.data.status in ['Active', 'Matched - Pending', 'Resolved', 'Closed'];
+        && (
+          request.resource.data.status == resource.data.status
+          || (resource.data.type == 'lost'
+              && resource.data.status == 'Active'
+              && request.resource.data.status == 'Requested Close')
+          || (resource.data.type == 'found'
+              && resource.data.status == 'Active'
+              && request.resource.data.status == 'Closed')
+          || (resource.data.type == 'found'
+              && resource.data.status == 'Awaiting Handover'
+              && request.resource.data.status == 'Closed')
+          // Student handover completion (Workflow 2): the finder's scan moves
+          // the report to 'In Inventory' in the same transaction that confirms
+          // their handover code. `handoverTxnId` must point at a code that is
+          // 'Confirmed' by this same student for this same report — enforced
+          // via getAfter, so a report can never close without a matching
+          // confirmed handover, and a code can never confirm without the
+          // report closing (see the qrTransactions rule).
+          || (resource.data.type == 'found'
+              && resource.data.status in ['Active', 'Awaiting Handover']
+              && request.resource.data.status == 'In Inventory'
+              && request.resource.data.handoverTxnId is string
+              && existsAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId))
+              && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.kind == 'handover'
+              && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.foundReportId == itemId
+              && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.intendedStudentUid == request.auth.uid
+              && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.status == 'Confirmed'
+              && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.confirmedByUid == request.auth.uid)
+        );
 
-      // Admins moderate any report — resolve it, close it, or soft-delete it —
-      // but may not rewrite who filed it either (requirements 6 and 8).
+      // Admins moderate any report — resolve it, close it, soft-delete it, or
+      // move it through the handover/inventory/return lifecycle — but may not
+      // rewrite who filed it or the reporter's name (requirements 6 and 8).
+      //
+      // `closeReason` is the only field an admin may change beyond the status:
+      // it must stay unchanged, or be set to exactly one of the two fixed
+      // closure reasons. An arbitrary client-supplied reason is rejected.
       allow update: if isAdmin()
         && request.resource.data.reportedByUid == resource.data.reportedByUid
         && request.resource.data.reportedByStudentId == resource.data.reportedByStudentId
+        && request.resource.data.get('reportedByName', '') == resource.data.get('reportedByName', '')
         && request.resource.data.type == resource.data.type
         && request.resource.data.isDeleted is bool
-        && request.resource.data.status in ['Active', 'Matched - Pending', 'Resolved', 'Closed'];
+        && request.resource.data.status in [
+             'Active', 'Awaiting Handover', 'Matched - Pending',
+             'In Inventory', 'Resolved', 'Returned', 'Closed', 'Requested Close'
+           ]
+        && (
+          request.resource.data.get('closeReason', '') == resource.data.get('closeReason', '')
+          || request.resource.data.get('closeReason', '') in ['STUDENT_REQUEST_APPROVED', 'ADMIN_RESOLVED']
+        );
 
       // Reports are never hard-deleted, by students or by admins. Removal is
       // `isDeleted: true` through the update rules above, so admin history and
       // any match already made against a report survive (requirement 7).
+      allow delete: if false;
+    }
+
+    // ── LOST & FOUND — INVENTORY, MATCHES, QR TRANSACTIONS ──────────
+    //
+    // The four collections that carry Workflow 2 (handover) and Workflow 3
+    // (match + return). There is no trusted server (owner decision: the
+    // Cloud Functions API is not enabled on this project), so these rules
+    // ARE the enforcement layer. Every protected action — QR issuance, QR
+    // scan, physical-handover confirmation, inventory creation, match
+    // approval, return confirmation — is gated here by role and ownership;
+    // the client merely performs the writes, and the atomic multi-document
+    // updates run inside Firestore transactions whose individual writes
+    // these rules still check one by one.
+
+    match /qrTransactions/{txnId} {
+
+      // A student may read only the QR transactions issued to them; admins
+      // read everything. Reading grants nothing — the token is meaningless
+      // without a matching write rule below.
+      allow get, list: if isAdmin()
+        || (signedIn() && request.auth.uid == resource.data.intendedStudentUid);
+
+      // Only admins issue QR transactions. A transaction is born 'Issued'
+      // with an opaque token, a pinned intended student, and a short expiry
+      // window the client sets to 10 minutes. The upper bound is 15 minutes
+      // rather than 10 to tolerate device clock skew (a client whose clock is
+      // ahead still lands inside the bound); expiry checks on scan/confirm
+      // remain exact against `expiresAt`. `issuedAt` is a record-keeping
+      // timestamp — the client computes it, so it is type-checked only.
+      allow create: if isAdmin()
+        && request.resource.data.kind in ['handover', 'return']
+        && request.resource.data.status == 'Issued'
+        && request.resource.data.token is string
+        && request.resource.data.intendedStudentUid is string
+        && request.resource.data.intendedStudentId is string
+        && request.resource.data.issuedAt is timestamp
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt
+             <= request.time + duration.value(15, 'm');
+
+      // The student scan: only the intended student, only while 'Issued' and
+      // unexpired, and only `status`/`scannedAt` may change. This is what
+      // makes a token single-use — once 'Scanned' it can never be issued
+      // again, and a student can never push it further.
+      allow update: if signedIn()
+        && request.auth.uid == resource.data.intendedStudentUid
+        && resource.data.status == 'Issued'
+        && request.time < resource.data.expiresAt
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'scannedAt'])
+        && request.resource.data.status == 'Scanned';
+
+      // Student handover completion (Workflow 2): the intended student's scan
+      // closes the physical handover atomically. The code jumps straight from
+      // 'Issued' to 'Confirmed' (skipping 'Scanned'), and the report must have
+      // moved to 'In Inventory' — pointing back at this code via
+      // `handoverTxnId` — in the same transaction. `confirmedByUid` is the
+      // student's own UID. The `getAfter` cross-document checks make a code
+      // impossible to confirm without the report closing, and vice versa.
+      allow update: if signedIn()
+        && request.auth.uid == resource.data.intendedStudentUid
+        && resource.data.kind == 'handover'
+        && resource.data.status == 'Issued'
+        && request.time < resource.data.expiresAt
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'scannedAt', 'confirmedAt', 'confirmedByUid', 'updatedAt'])
+        && request.resource.data.status == 'Confirmed'
+        && request.resource.data.confirmedByUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/items/$(resource.data.foundReportId)).data.status == 'In Inventory'
+        && getAfter(/databases/$(database)/documents/items/$(resource.data.foundReportId)).data.handoverTxnId == txnId;
+
+      // Admin confirmation/cancellation. Confirmation requires the intended
+      // student to have scanned first ('Scanned' -> 'Confirmed'), still
+      // within expiry. Cancellation is 'Issued' -> 'Cancelled'. Every
+      // identifying field is pinned via affectedKeys, so a transaction can
+      // never be re-pointed at another student, report or inventory item.
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'confirmedAt', 'confirmedByUid', 'updatedAt'])
+        && (
+          (resource.data.status == 'Scanned'
+            && request.resource.data.status == 'Confirmed'
+            && request.time < resource.data.expiresAt)
+          || (resource.data.status == 'Issued'
+            && request.resource.data.status == 'Cancelled')
+        );
+
+      // QR transactions are audit records, never deleted.
+      allow delete: if false;
+    }
+
+    match /inventory/{inventoryId} {
+
+      // The finder sees their own handed-over items; admins see everything.
+      // Any signed-in user may read inventory items with status 'In Inventory'
+      // (needed for AI matching pre-checks on the student's client).
+      allow get, list: if isAdmin()
+        || (signedIn() && request.auth.uid == resource.data.finderUid)
+        || (signedIn() && resource.data.status == 'In Inventory');
+
+      // Only admins create inventory records, and a record is born
+      // 'In Inventory'. Exactly-one-per-handover is enforced by the
+      // confirmation transaction in the client (a single-use QR), not by
+      // this rule.
+      allow create: if isAdmin()
+        && request.resource.data.status == 'In Inventory'
+        && request.resource.data.foundReportId is string
+        && request.resource.data.finderUid is string
+        && request.resource.data.finderStudentId is string;
+
+      // Student handover completion (Workflow 2): the finder creates their
+      // own inventory record in the same transaction that confirms their
+      // handover code. The record must point back at a code that is
+      // 'Confirmed' by this same student for this same report — enforced via
+      // getAfter, so an inventory record can never be born without a matching
+      // confirmed handover.
+      allow create: if signedIn()
+        && request.resource.data.status == 'In Inventory'
+        && request.resource.data.foundReportId is string
+        && request.resource.data.finderUid == request.auth.uid
+        && request.resource.data.finderStudentId is string
+        && request.resource.data.handoverTxnId is string
+        && existsAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId))
+        && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.kind == 'handover'
+        && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.foundReportId == request.resource.data.foundReportId
+        && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.intendedStudentUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.status == 'Confirmed'
+        && getAfter(/databases/$(database)/documents/qrTransactions/$(request.resource.data.handoverTxnId)).data.confirmedByUid == request.auth.uid;
+
+      // Admin-only edits: status moves only In Inventory -> Reserved ->
+      // In Inventory (release) or Returned, and the record can never be
+      // re-pointed at another finder or report.
+      allow update: if isAdmin()
+        && request.resource.data.foundReportId == resource.data.foundReportId
+        && request.resource.data.finderUid == resource.data.finderUid
+        && request.resource.data.finderStudentId == resource.data.finderStudentId
+        && resource.data.status in ['In Inventory', 'Reserved']
+        && request.resource.data.status in ['In Inventory', 'Reserved', 'Returned'];
+
+      // Inventory records are audit history, never deleted.
+      allow delete: if false;
+    }
+
+    match /matches/{matchId} {
+
+      // Admin and the matched lost-report owner only. The owner sees exactly
+      // the safe summary the client renders; admins see everything.
+      allow get, list: if isAdmin()
+        || (signedIn() && request.auth.uid == resource.data.lostOwnerUid);
+
+      // Only admins create or approve matches; a match is born 'Proposed'
+      // (awaiting approval) or directly 'Approved'.
+      // AI-created matches include source:'ai' plus optional score/evidence
+      // fields; manual matches omit them. notes is optional.
+      //
+      // The lost-report owner may create AI-proposed matches for their
+      // own report (Flow A — new Lost Report matched against existing
+      // Inventory items).
+      //
+      // The finder (inventory item owner) may also create AI-proposed
+      // matches for the item they handed in (Flow B — new Inventory item
+      // matched against existing Lost Reports).
+      allow create: if (isAdmin()
+          && request.resource.data.status in ['Proposed', 'Approved']
+          && request.resource.data.lostReportId is string
+          && request.resource.data.inventoryItemId is string
+          && request.resource.data.lostOwnerUid is string
+          && request.resource.data.lostOwnerStudentId is string
+          && (request.resource.data.source == null
+              || request.resource.data.source in ['manual', 'ai']))
+        || (signedIn()
+          && request.auth.uid == request.resource.data.lostOwnerUid
+          && request.resource.data.source == 'ai'
+          && request.resource.data.status == 'Proposed'
+          && request.resource.data.lostReportId is string
+          && request.resource.data.inventoryItemId is string
+          && request.resource.data.lostOwnerUid is string)
+        || (signedIn()
+          && request.auth.uid == request.resource.data.finderUid
+          && request.resource.data.source == 'ai'
+          && request.resource.data.status == 'Proposed'
+          && request.resource.data.lostReportId is string
+          && request.resource.data.inventoryItemId is string
+          && request.resource.data.lostOwnerUid is string);
+
+      // Admin-only edits through the lifecycle; the two linked records,
+      // the owner, source, and AI score fields are immutable.
+      allow update: if isAdmin()
+        && request.resource.data.lostReportId == resource.data.lostReportId
+        && request.resource.data.inventoryItemId == resource.data.inventoryItemId
+        && request.resource.data.lostOwnerUid == resource.data.lostOwnerUid
+        && request.resource.data.lostOwnerStudentId == resource.data.lostOwnerStudentId
+        && request.resource.data.status in ['Proposed', 'Approved', 'Completed', 'Rejected']
+        && (request.resource.data.source == null
+            || request.resource.data.source == resource.data.source);
+
+      // Matches are audit records, never deleted.
+      allow delete: if false;
+    }
+
+    match /lfNotifications/{notificationId} {
+
+      // Ownership is keyed on the campus Student ID (`studentId`), resolved
+      // through the caller's profile — the same trust anchor the
+      // `lockerNotifications` rules use.
+      function ownsLfNotification() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+               == resource.data.studentId;
+      }
+
+      // A student sees only their own L&F notifications; an admin sees all.
+      allow get, list: if ownsLfNotification() || isAdmin();
+
+      // Only admins create L&F notifications (match alerts). `studentId`
+      // identifies the recipient campus ID.
+      allow create: if isAdmin()
+        && request.resource.data.studentId is string
+        && request.resource.data.title is string
+        && request.resource.data.body is string;
+
+      // A student may mark their own notification read; every other field is
+      // immutable.
+      allow update: if ownsLfNotification()
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['read']);
+
+      // Notifications are never hard-deleted from the app.
       allow delete: if false;
     }
 
@@ -409,5 +699,271 @@ service cloud.firestore {
       // Locker notifications are never hard-deleted from the app.
       allow delete: if false;
     }
+
+    // ── EVENTS ────────────────────────────────────────────────────
+    //
+    // Three collections, split the same way the Lockers subsystem is split: a
+    // world-readable inventory document (`events`) and the owner-scoped
+    // documents that carry anything personal (`eventJoinings`). A student's
+    // name, course, club ID, payment state and entry ticket therefore never
+    // sit on a document every signed-in user can read — the same rule that
+    // keeps a locker's digital code off `lockers`.
+
+    match /events/{eventId} {
+
+      // Ownership is keyed on the campus Student ID (`hostStudentId`, e.g.
+      // S001), resolved through the caller's profile — the trust anchor every
+      // other collection here uses. Admin-created events have no host.
+      function ownsEvent() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+               == resource.data.hostStudentId;
+      }
+
+      function ownsNewEvent() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+               == request.resource.data.hostStudentId;
+      }
+
+      // A published event is public to signed-in users; everything still in
+      // review is visible only to its host and to admins.
+      //
+      // On `list`: rules are not filters, so this single per-document rule
+      // covers every feed. The browse query (`status == 'Published'`) passes,
+      // My Events (`hostStudentId == <caller's>`) passes, an admin's
+      // unfiltered query passes via isAdmin(), and a student's attempt to list
+      // the whole review queue is denied — the intended outcome.
+      allow get, list: if resource.data.status == 'Published'
+        || ownsEvent()
+        || isAdmin();
+
+      // A student submits only in their own name, and a submission is born in
+      // review with an empty roster — it can never be created already
+      // published or already full.
+      allow create: if ownsNewEvent()
+        && request.resource.data.status == 'Pending'
+        && request.resource.data.attendeeIds == []
+        && request.resource.data.pendingJoiningIds == [];
+
+      // Admins may author an event directly (the admin create-and-publish
+      // flow) — hostStudentId is null in that case, so ownsNewEvent() cannot
+      // apply.
+      allow create: if isAdmin();
+
+      // Host edits: correcting a submission and resubmitting after a revision
+      // request. Only while the event is still in the review pipeline — once
+      // it is Published, Rejected or Completed the host is done. Ownership is
+      // immutable, and the host can never publish their own event.
+      allow update: if ownsEvent()
+        && resource.data.status in ['Pending', 'Under Review', 'Needs Revision']
+        && request.resource.data.hostStudentId == resource.data.hostStudentId
+        && request.resource.data.status in ['Pending', 'Under Review', 'Needs Revision'];
+
+      // ── Roster updates ──────────────────────────────────────────
+      //
+      // Three tightly-scoped rules replace the previous single rule that
+      // allowed any signed-in user to modify both roster arrays freely.
+      // Each rule permits exactly the operation the app's workflow needs
+      // and nothing more.
+
+      // Student auto-join: adds only their own studentId to attendeeIds
+      // on a published event. The array must grow by exactly one element,
+      // that element must be the caller's own studentId (verified through
+      // their profile), and no other field may change. A student can
+      // therefore never inject or remove another person's ID.
+      allow update: if signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && resource.data.status == 'Published'
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['attendeeIds'])
+        && request.resource.data.attendeeIds.size()
+             == resource.data.attendeeIds.size() + 1
+        && request.resource.data.attendeeIds.hasAll(resource.data.attendeeIds)
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+             in request.resource.data.attendeeIds
+        && !(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+             in resource.data.attendeeIds);
+
+      // Student pending-join: adds one entry to pendingJoiningIds on a
+      // published event. The array must grow by exactly one element and
+      // no other field may change. A student cannot read other students'
+      // joining IDs (eventJoinings reads are owner-scoped), so they
+      // cannot inject a real joining ID — only a phantom string with no
+      // matching document, which has no effect on the workflow.
+      allow update: if signedIn()
+        && resource.data.status == 'Published'
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['pendingJoiningIds'])
+        && request.resource.data.pendingJoiningIds.size()
+             == resource.data.pendingJoiningIds.size() + 1
+        && request.resource.data.pendingJoiningIds.hasAll(resource.data.pendingJoiningIds);
+
+      // Host roster management: the event's host may modify both roster
+      // arrays on their own published event to approve or reject
+      // participants. Status, host identity and all other fields are
+      // immutable here — only the two roster arrays may change.
+      allow update: if ownsEvent()
+        && resource.data.status == 'Published'
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['attendeeIds', 'pendingJoiningIds'])
+        && request.resource.data.hostStudentId == resource.data.hostStudentId
+        && request.resource.data.status == resource.data.status;
+
+      // Admin edits: the whole review lifecycle (approve, reject, request
+      // revision, mark completed) plus direct edits. The event's host is
+      // immutable to admins too, so a submission can never be reassigned.
+      allow update: if isAdmin()
+        && request.resource.data.hostStudentId == resource.data.hostStudentId;
+
+      // A host may withdraw a submission that has not been published yet;
+      // admins may remove any event. A published event with attendees is
+      // retired by marking it 'Completed', not by deletion.
+      allow delete: if isAdmin()
+        || (ownsEvent() && resource.data.status in ['Pending', 'Under Review', 'Needs Revision', 'Rejected']);
+    }
+
+    match /eventJoinings/{joiningId} {
+
+      // The registration's owner — the student who joined.
+      function ownsJoining() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+               == resource.data.studentId;
+      }
+
+      function ownsNewJoining() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId
+               == request.resource.data.studentId;
+      }
+
+      // The host of the event this registration belongs to. Approving and
+      // rejecting participants is the host's job, so they must be able to read
+      // and decide registrations they do not own.
+      function hostsThisEvent() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && exists(/databases/$(database)/documents/events/$(resource.data.eventId))
+          && get(/databases/$(database)/documents/events/$(resource.data.eventId)).data.hostStudentId
+               == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId;
+      }
+
+      // On `list`: a student's own feed must keep its
+      // `where('studentId', '==', …)` filter and the host's participant list
+      // must keep its `where('eventId', '==', …)` filter, or the query is
+      // rejected wholesale.
+      allow get, list: if ownsJoining() || hostsThisEvent() || isAdmin();
+
+      // A student registers only in their own name. A registration is born
+      // 'Pending' (host approval) or 'Approved' (open event, no gate), never
+      // already attended.
+      allow create: if ownsNewJoining()
+        && request.resource.data.status in ['Pending', 'Approved']
+        && request.resource.data.hasAttended == false;
+
+      // Student edits: completing payment for their own registration. The
+      // owner, the event and the decision are immutable here — a student can
+      // neither approve themselves nor mark themselves present.
+      allow update: if ownsJoining()
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.eventId == resource.data.eventId
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.hasAttended == resource.data.hasAttended;
+
+      // Host and admin edits: approve, reject, issue the ticket, record
+      // attendance. Owner and event stay immutable.
+      allow update: if (hostsThisEvent() || isAdmin())
+        && request.resource.data.studentId == resource.data.studentId
+        && request.resource.data.eventId == resource.data.eventId;
+
+      // Registrations are never hard-deleted: attendance is a record.
+      allow delete: if false;
+    }
+
+    match /eventRoles/{roleId} {
+
+      function hostsRoleEvent() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && exists(/databases/$(database)/documents/events/$(resource.data.eventId))
+          && get(/databases/$(database)/documents/events/$(resource.data.eventId)).data.hostStudentId
+               == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId;
+      }
+
+      function hostsNewRoleEvent() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && exists(/databases/$(database)/documents/events/$(request.resource.data.eventId))
+          && get(/databases/$(database)/documents/events/$(request.resource.data.eventId)).data.hostStudentId
+               == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.studentId;
+      }
+
+      // A crew assignment carries no secret — a name, a role and a permission
+      // list — and an assigned member has to be able to discover their own
+      // permissions by reading the event's roster, so the read is open to
+      // signed-in users. Nothing here identifies a participant or grants
+      // access on its own; the permissions it names are still checked against
+      // these rules on every actual write.
+      allow get, list: if signedIn();
+
+      // Only the event's host, or an admin, may assign or revoke crew.
+      allow create: if hostsNewRoleEvent() || isAdmin();
+      allow delete: if hostsRoleEvent() || isAdmin();
+
+      // Roles are assigned and revoked, never edited in place.
+      allow update: if false;
+    }
+
+    // ── ELECTIONS ──────────────────────────────────────────────────
+    //
+    // Two collections, split the same way the Events subsystem is split: a
+    // world-readable inventory (`electionCandidates`, `electionMeta`) and
+    // admin-only writes. A published candidate / election configuration is
+    // public to signed-in users by design — exactly like a published `events`
+    // document. Students never write here; the Elections Admin publishes
+    // everything.
+
+    match /electionCandidates/{candidateId} {
+
+      // A published candidate is public to signed-in users; everything still
+      // pending is visible only to admins.
+      //
+      // On `list`: rules are not filters, so this single per-document rule
+      // covers every feed. The published query (`status == 'Published'`)
+      // passes, an admin's unfiltered query passes via isAdmin(), and a
+      // student's attempt to list the pending queue is denied — the intended
+      // outcome, mirroring `events`.
+      allow get, list: if resource.data.status == 'Published'
+        || isAdmin();
+
+      // Admins author, edit, publish/unpublish and remove candidates. The
+      // status lifecycle is enforced in the app layer, not here — the rules
+      // only gate *who* may write, not *what* they may write.
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /electionMeta/{metaId} {
+
+      // The single election configuration document. A published document is
+      // public to signed-in users; a pending one is admin-only.
+      allow get, list: if resource.data.status == 'Published'
+        || isAdmin();
+
+      // Admins author, edit, publish/unpublish and remove the configuration.
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+
+      // Elections are never hard-deleted — admins move them to the Admin
+      // Archive via status = 'Archived', and the document stays recoverable.
+      allow delete: if false;
+    }
   }
 }
+

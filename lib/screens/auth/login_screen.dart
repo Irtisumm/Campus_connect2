@@ -4,6 +4,36 @@ import 'package:provider/provider.dart';
 import '../../services/app_state.dart';
 import '../../theme/app_theme.dart';
 
+// ── Dev account model for quick-switch ──────────────────────────────
+// These are the accounts created by tools/seed_dev_accounts.mjs.
+// Passwords are stored here for dev convenience only — this is NOT
+// a production feature and must never ship to end users.
+
+class _DevAccount {
+  final String id;
+  final String password;
+  final String label;
+  final bool isAdmin;
+  const _DevAccount({
+    required this.id,
+    required this.password,
+    required this.label,
+    required this.isAdmin,
+  });
+}
+
+const _kDevAccounts = <_DevAccount>[
+  // Admins
+  _DevAccount(id: 'ADMIN001', password: 'Admin@12345', label: 'Admin 1', isAdmin: true),
+  _DevAccount(id: 'ADMIN002', password: 'Admin@12345', label: 'Admin 2', isAdmin: true),
+  // Students
+  _DevAccount(id: 'S001', password: 'Student@123', label: 'Student 1', isAdmin: false),
+  _DevAccount(id: 'S002', password: 'Student@123', label: 'Student 2', isAdmin: false),
+  _DevAccount(id: 'S003', password: 'Student@123', label: 'Student 3', isAdmin: false),
+  _DevAccount(id: 'S004', password: 'Student@123', label: 'Student 4', isAdmin: false),
+  _DevAccount(id: 'S005', password: 'Student@123', label: 'Student 5', isAdmin: false),
+];
+
 class LoginScreen extends StatefulWidget {
   final bool isAdminLogin;
   /// When true, the login screen behaves as a dialog (pop on success).
@@ -141,6 +171,20 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 40),
 
+              // ── Dev account quick-switch ──
+              if (!widget.isDialog)
+                _DevAccountSwitcher(
+                  isAdmin: _isAdmin,
+                  onSelect: (account) {
+                    setState(() {
+                      _idCtrl.text = account.id;
+                      _passCtrl.text = account.password;
+                      _errorMsg = null;
+                    });
+                  },
+                ),
+              if (!widget.isDialog) const SizedBox(height: 16),
+
               // ── Form card ──
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -271,7 +315,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     // Demo credentials
                     Center(
                       child: Text(
-                        _isAdmin ? 'Demo credentials: ADMIN001 / admin123' : 'Demo credentials: S001 / pass123',
+                        _isAdmin ? 'Admin: ADMIN001 / Admin@12345' : 'Student: S001 / Student@123',
                         style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
                       ),
                     ),
@@ -374,12 +418,101 @@ class _LoginScreenState extends State<LoginScreen> {
             const SizedBox(height: 16),
             Center(
               child: Text(
-                _isAdmin ? 'Demo: ADMIN001 / admin123' : 'Demo: S001 / pass123',
+                _isAdmin ? 'Admin: ADMIN001 / Admin@12345' : 'Student: S001 / Student@123',
                 style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ── Dev Account Quick-Switch Widget ─────────────────────────────────
+// Renders tappable chips that auto-fill the login form. Only visible
+// when the login screen is used full-screen (not in dialog mode).
+
+class _DevAccountSwitcher extends StatelessWidget {
+  final bool isAdmin;
+  final void Function(_DevAccount account) onSelect;
+
+  const _DevAccountSwitcher({
+    required this.isAdmin,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final accounts = _kDevAccounts.where((a) => a.isAdmin == isAdmin).toList();
+    if (accounts.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.switch_account_rounded,
+                  size: 14, color: AppTheme.textMuted),
+              const SizedBox(width: 6),
+              const Text(
+                'Quick Switch',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.textMuted,
+                    letterSpacing: 0.5),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: accounts.map((a) {
+              return Material(
+                color: AppTheme.bgCard,
+                borderRadius: BorderRadius.circular(20),
+                elevation: 0.5,
+                child: InkWell(
+                  onTap: () => onSelect(a),
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                          color: AppTheme.red.withOpacity(0.2), width: 1),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isAdmin
+                              ? Icons.shield_rounded
+                              : Icons.person_rounded,
+                          size: 14,
+                          color: AppTheme.red,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          a.label,
+                          style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.textPrimary),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
       ),
     );
   }

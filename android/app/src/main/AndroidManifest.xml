@@ -1,8 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Camera for QR scanning (mobile_scanner). -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Network access for Firebase / Cloudinary in all build types. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="campus_connect"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

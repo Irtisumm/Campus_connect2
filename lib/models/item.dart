@@ -25,16 +25,26 @@ enum ItemType {
 ///
 /// The wire values are the exact strings the existing screens already display
 /// and filter on, so nothing had to be renamed to move this into Firestore.
+///
+/// The last three values belong to the full-workflow build (Workflows 2 and
+/// 3): a found report is born `Active`, moves to `In Inventory` when the
+/// admin confirms the physical handover, and to `Returned` when the item
+/// goes back to its owner.
 enum ItemStatus {
   active('Active'),
+  awaitingHandover('Awaiting Handover'),
   matchedPending('Matched - Pending'),
+  inInventory('In Inventory'),
   resolved('Resolved'),
+  returned('Returned'),
+  requestedClose('Requested Close'),
   closed('Closed');
 
   const ItemStatus(this.wireValue);
   final String wireValue;
 
-  static ItemStatus fromWire(Object? value, {ItemStatus fallback = ItemStatus.active}) {
+  static ItemStatus fromWire(Object? value,
+      {ItemStatus fallback = ItemStatus.active}) {
     final raw = value?.toString();
     for (final status in ItemStatus.values) {
       if (status.wireValue == raw) return status;
@@ -74,8 +84,17 @@ class Item {
   /// can show who reported an item without a second read.
   final String reportedByStudentId;
 
+  /// Display name of the reporter, captured at creation from the authenticated
+  /// profile. Immutable — never editable by the student or admin, and never a
+  /// fallback to [reportedByStudentId].
+  final String reportedByName;
+
   final List<String> imageUrls;
   final ItemStatus status;
+
+  /// Why the report reached `Closed`. Set only by the authorized admin closure
+  /// paths (`STUDENT_REQUEST_APPROVED` / `ADMIN_RESOLVED`); null otherwise.
+  final String? closeReason;
 
   /// Soft delete. Reports are hidden rather than removed so admin history and
   /// any match already made against them survive.
@@ -93,9 +112,11 @@ class Item {
     required this.whereLost,
     required this.reportedByUid,
     required this.reportedByStudentId,
+    this.reportedByName = '',
     this.whenLost,
     this.imageUrls = const <String>[],
     this.status = ItemStatus.active,
+    this.closeReason,
     this.isDeleted = false,
     this.createdAt,
     this.updatedAt,
@@ -133,8 +154,10 @@ class Item {
       // Reporter identity is fixed at creation.
       reportedByUid: reportedByUid,
       reportedByStudentId: reportedByStudentId,
+      reportedByName: reportedByName,
       imageUrls: imageUrls ?? this.imageUrls,
       status: status ?? this.status,
+      closeReason: closeReason,
       isDeleted: isDeleted ?? this.isDeleted,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -154,10 +177,30 @@ class Item {
       'whenLost': whenLost == null ? null : Timestamp.fromDate(whenLost!),
       'reportedByUid': reportedByUid,
       'reportedByStudentId': reportedByStudentId,
+      'reportedByName': reportedByName,
       'imageUrls': imageUrls,
       'status': status.wireValue,
       'isDeleted': isDeleted,
       'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+  }
+
+  /// The payload written when an existing report is edited.
+  ///
+  /// Only the editable fields are included — `type`, `reportedByUid`,
+  /// `reportedByStudentId`, and `createdAt` are deliberately absent because
+  /// they are immutable (enforced by both `copyWith` and the Firestore rules).
+  /// `updatedAt` is always refreshed via a server timestamp.
+  Map<String, dynamic> toUpdateMap() {
+    return {
+      'title': title,
+      'category': category,
+      'description': description,
+      'whereLost': whereLost,
+      'imageUrls': imageUrls,
+      'status': status.wireValue,
+      'isDeleted': isDeleted,
       'updatedAt': FieldValue.serverTimestamp(),
     };
   }
@@ -173,8 +216,10 @@ class Item {
       whenLost: _asDate(data['whenLost']),
       reportedByUid: data['reportedByUid']?.toString() ?? '',
       reportedByStudentId: data['reportedByStudentId']?.toString() ?? '',
+      reportedByName: data['reportedByName']?.toString() ?? '',
       imageUrls: _asStringList(data['imageUrls']),
       status: ItemStatus.fromWire(data['status']),
+      closeReason: data['closeReason']?.toString(),
       isDeleted: data['isDeleted'] == true,
       createdAt: _asDate(data['createdAt']),
       updatedAt: _asDate(data['updatedAt']),

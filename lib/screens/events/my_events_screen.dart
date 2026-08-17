@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -5,9 +7,9 @@ import 'package:qr_flutter/qr_flutter.dart' as qr;
 
 import '../../data/mock_data.dart';
 import '../../services/app_state.dart';
-import '../../services/data_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/common.dart';
+import 'widgets/event_widgets.dart';
 
 void _toast(BuildContext ctx, String msg) => ScaffoldMessenger.of(ctx).showSnackBar(
       SnackBar(
@@ -29,19 +31,89 @@ AppBar _appBar(String title, BuildContext ctx) => AppBar(
       ),
     );
 
-class MyEventsScreen extends StatelessWidget {
+class MyEventsScreen extends StatefulWidget {
   const MyEventsScreen({super.key});
 
   @override
+  State<MyEventsScreen> createState() => _MyEventsScreenState();
+}
+
+class _MyEventsScreenState extends State<MyEventsScreen> {
+  /// Events currently being deleted. Guards against double taps: while an id
+  /// is in this set its card shows a spinner and its delete button ignores
+  /// taps, so the confirm dialog can never be opened twice for one event.
+  final Set<String> _deletingIds = <String>{};
+
+  bool _isDeleteable(Event ev) => kDeleteableSubmissionStatuses.contains(ev.status);
+
+  /// Opens the confirmation dialog. The event is removed only AFTER the
+  /// Firestore write succeeds — the live `watchMyEvents` stream then re-emits
+  /// and the card disappears on its own, so no manual list mutation is needed.
+  void _confirmDelete(Event ev) {
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete Event?',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+        content: const Text(
+          'This will permanently delete this event. This action cannot be undone.',
+          style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => _delete(ev, dialogCtx),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _delete(Event ev, BuildContext dialogCtx) async {
+    // Close the dialog immediately; the card's spinner covers the loading
+    // state and the id guard blocks any further taps on this event.
+    Navigator.of(dialogCtx).pop();
+    if (!_deletingIds.add(ev.id)) return; // already deleting — ignore double fire
+    setState(() {}); // show the spinner
+    final ok = await context.read<AppState>().deleteEvent(ev.id);
+    if (!mounted) return;
+    setState(() => _deletingIds.remove(ev.id));
+    _toast(context,
+        ok ? 'Event deleted successfully.' : 'Unable to delete event. Please try again.');
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Consumer2<DataService, AppState>(
-      builder: (context, dataService, appState, child) {
-        final myEvents = dataService.getEventsForHost(appState.userId ?? '');
-        return Scaffold(
+    return Consumer<AppState>(
+      builder: (context, appState, child) {
+        return StreamBuilder<List<Event>>(
+          stream: appState.watchMyEvents(),
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return Scaffold(
+                appBar: _appBar('My Submitted Events', context),
+                body: const EmptyState(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load events',
+                  subtitle: 'Please check your connection and try again.',
+                ),
+              );
+            }
+            final myEvents = snapshot.data ?? const <Event>[];
+            return Scaffold(
           appBar: _appBar('My Submitted Events', context),
           body: RefreshIndicator(
               color: AppTheme.red,
-              onRefresh: () async => dataService.refresh(),
+              onRefresh: () async {
+                // Streams auto-refresh; this is just for the pull-to-refresh gesture
+                await Future.delayed(const Duration(milliseconds: 500));
+              },
               child: myEvents.isEmpty
                   ? ListView(
                       physics: const AlwaysScrollableScrollPhysics(),
@@ -66,10 +138,19 @@ class MyEventsScreen extends StatelessWidget {
                           onManage: ev.status == 'Published'
                               ? () => context.push('/events/manage/${ev.id}')
                               : null,
+                          // A published or completed event is retired, not
+                          // deleted — the rules forbid it, so the affordance is
+                          // only wired for statuses the host may actually delete.
+                          onDelete: _isDeleteable(ev) && !_deletingIds.contains(ev.id)
+                              ? () => _confirmDelete(ev)
+                              : null,
+                          deleting: _deletingIds.contains(ev.id),
                         );
                       },
                     ),
             ),
+        );
+          },
         );
       },
     );
@@ -96,17 +177,17 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
     super.dispose();
   }
 
-  void _handleScan(BuildContext ctx, DataService dataService, String eventId) {
+  void _handleScan(BuildContext ctx, AppState appState, String eventId) async {
     final code = _qrScanCtrl.text.trim();
     if (code.isEmpty) return;
     
-    final success = dataService.verifyAndMarkAttendance(eventId, code);
-    if (success) {
-      _toast(ctx, '✅ Entry Verified!');
+    final result = await appState.verifyTicket(eventId, code);
+    _toast(ctx, result.success
+        ? '✅ ${result.message}'
+        : '❌ ${result.message}');
+    if (result.success) {
       _qrScanCtrl.clear();
       setState(() {});
-    } else {
-      _toast(ctx, '❌ Invalid or unapproved QR code.');
     }
   }
 
@@ -160,48 +241,53 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Consumer2<DataService, AppState>(
-      builder: (context, dataService, appState, child) {
-        Event? event = dataService.getEventById(widget.id);
-
-        if (event == null) {
-          try {
-            final allCreatedEvents = dataService.getEventsForHost(appState.userId ?? '');
-            if (allCreatedEvents.isNotEmpty) {
-              final foundEvent = allCreatedEvents.firstWhere(
-                (e) => e.id == widget.id,
-                orElse: () => const Event(
-                  id: '', title: '', date: '', time: '', location: '',
-                  category: '', organizer: '', description: '', status: '',
+    return Consumer<AppState>(
+      builder: (context, appState, child) {
+        return StreamBuilder<Event?>(
+          stream: appState.watchEvent(widget.id),
+          builder: (context, eventSnap) {
+            if (eventSnap.hasError) {
+              return Scaffold(
+                appBar: _appBar('My Event', context),
+                body: const EmptyState(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load event',
+                  subtitle: 'Please check your connection and try again.',
                 ),
               );
-              if (foundEvent.id.isNotEmpty) {
-                event = foundEvent;
-              }
             }
-          } catch (e) {
-            // Silently catch errors
-          }
-        }
+            final event = eventSnap.data;
+            if (event == null) {
+              return Scaffold(
+                appBar: _appBar('My Event', context),
+                body: const EmptyState(
+                  title: 'Event Not Found',
+                  subtitle: 'This event no longer exists or has been deleted.',
+                  icon: Icons.error_outline_rounded,
+                ),
+              );
+            }
 
-        if (event == null) {
-          return Scaffold(
-            appBar: _appBar('My Event', context),
-            body: const EmptyState(
-              title: 'Event Not Found',
-              subtitle: 'This event no longer exists or has been deleted.',
-              icon: Icons.error_outline_rounded,
-            ),
-          );
-        }
-
+            return StreamBuilder<List<EventJoining>>(
+              stream: appState.watchEventJoinings(event.id),
+              builder: (context, joiningsSnap) {
+                if (joiningsSnap.hasError) {
+                  return Scaffold(
+                    appBar: _appBar('Event Dashboard', context),
+                    body: const EmptyState(
+                      icon: Icons.cloud_off_rounded,
+                      title: 'Unable to load event',
+                      subtitle: 'Please check your connection and try again.',
+                    ),
+                  );
+                }
+                final allJoinings = joiningsSnap.data ?? const <EventJoining>[];
         final eventId = event.id;
         final eventStatus = event.status;
         final canResubmit = event.status == 'Needs Revision' || event.status == 'Rejected';
         final messages = event.messages ?? const <EventMessage>[];
-        final attendees = dataService.getEventAttendees(eventId);
-        final pendingRequests = dataService.getJoiningRequestsForEvent(eventId)
-            .where((j) => j.status == 'Pending').toList();
+        final attendees = allJoinings.where((j) => j.status == 'Approved').toList();
+        final pendingRequests = allJoinings.where((j) => j.status == 'Pending').toList();
 
         return Scaffold(
           appBar: _appBar('Event Dashboard', context),
@@ -210,6 +296,20 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Cover image (if set)
+                if (event.coverImageUrl != null && event.coverImageUrl!.isNotEmpty) ...[
+                  SizedBox(
+                    height: 160,
+                    width: double.infinity,
+                    child: EventCover(
+                      category: event.category,
+                      coverImageUrl: event.coverImageUrl,
+                      radius: BorderRadius.circular(14),
+                      iconSize: 54,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                ],
                 // Event Overview Card
                 Card(
                   elevation: 2,
@@ -285,7 +385,7 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
                   title: 'Event Rejected',
                   body: event.rejectionReason ?? 'No reason provided. Please contact admin.',
                   actionLabel: 'Resubmit Event',
-                  onAction: () => _showResubmitDialog(context, dataService, event!),
+                  onAction: () => _showResubmitDialog(context, appState, event!),
                 ),
                 if (eventStatus == 'Needs Revision') _StatusBanner(
                   icon: Icons.edit_note_rounded,
@@ -293,7 +393,7 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
                   title: 'Changes Requested',
                   body: event.revisionNotes ?? 'Admin has requested changes. Check admin messages below.',
                   actionLabel: 'Resubmit with Changes',
-                  onAction: () => _showResubmitDialog(context, dataService, event!),
+                  onAction: () => _showResubmitDialog(context, appState, event!),
                 ),
                 if (eventStatus == 'Under Review') const _StatusBanner(
                   icon: Icons.rate_review_rounded,
@@ -376,7 +476,7 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
                                   SizedBox(
                                     width: double.infinity,
                                     child: ElevatedButton(
-                                      onPressed: () => _handleScan(context, dataService, eventId),
+                                      onPressed: () => _handleScan(context, appState, eventId),
                                       style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, padding: const EdgeInsets.symmetric(vertical: 12)),
                                       child: const Text('Verify Participant Entry', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
                                     ),
@@ -428,10 +528,11 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 GestureDetector(
-                                  onTap: () {
-                                    dataService.approveEventJoining(req.id);
-                                    _toast(context, '${req.name} approved');
-                                    setState(() {});
+                                  onTap: () async {
+                                    final result = await appState.approveJoining(req);
+                                    _toast(context, result.success
+                                        ? '${req.name} approved'
+                                        : '❌ ${result.message}');
                                   },
                                   child: Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -444,10 +545,9 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
                                 ),
                                 const SizedBox(width: 8),
                                 GestureDetector(
-                                  onTap: () {
-                                    dataService.rejectEventJoining(req.id, reason: 'Rejected by organizer');
+                                  onTap: () async {
+                                    await appState.rejectJoining(req);
                                     _toast(context, '${req.name} rejected');
-                                    setState(() {});
                                   },
                                   child: Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -484,7 +584,9 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         GestureDetector(
-                          onTap: () => dataService.toggleManualAttendance(a.id),
+                          onTap: () async {
+                            await appState.setAttendance(a.id, !a.hasAttended);
+                          },
                           child: Container(
                             margin: const EdgeInsets.only(right: 12),
                             width: 24, height: 24,
@@ -595,18 +697,12 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
                     Expanded(
                       child: OutlineBtn(
                         label: 'Send Message',
-                        onPressed: () {
+                        onPressed: () async {
                           final msg = _messageCtrl.text.trim();
                           if (msg.isEmpty) return;
-                          dataService.addEventMessage(
-                            eventId,
-                            appState.userId ?? 'S001',
-                            'student',
-                            msg,
-                          );
+                          await appState.addEventMessage(eventId, msg);
                           _messageCtrl.clear();
                           _toast(context, 'Message sent');
-                          setState(() {});
                         },
                       ),
                     ),
@@ -615,7 +711,7 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
                       Expanded(
                         child: GradientButton(
                           label: 'Resubmit',
-                          onPressed: () => _showResubmitDialog(context, dataService, event!),
+                          onPressed: () => _showResubmitDialog(context, appState, event!),
                         ),
                       ),
                     ] else if (eventStatus == 'Pending') ...[
@@ -623,7 +719,7 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
                       Expanded(
                         child: OutlineBtn(
                           label: 'Edit Details',
-                          onPressed: () => _showEditDialog(context, dataService, event!),
+                          onPressed: () => _showEditDialog(context, appState, event!),
                         ),
                       ),
                     ] else if (eventStatus == 'Published') ...[
@@ -641,11 +737,15 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
             ),
           ),
         );
+              },
+            );
+          },
+        );
       },
     );
   }
 
-  void _showEditDialog(BuildContext context, DataService dataService, Event event) {
+  void _showEditDialog(BuildContext context, AppState appState, Event event) {
     final titleCtrl = TextEditingController(text: event.title);
     final dateCtrl = TextEditingController(text: event.date);
     final timeCtrl = TextEditingController(text: event.time);
@@ -654,85 +754,176 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
     final descCtrl = TextEditingController(text: event.description);
     var category = event.category;
     final key = GlobalKey<FormState>();
+    File? coverImage;
+    bool uploadingCover = false;
+    bool dialogActive = true;
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Edit Event Details', style: TextStyle(fontWeight: FontWeight.w800)),
-        content: Form(
-          key: key,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: titleCtrl,
-                  decoration: const InputDecoration(labelText: 'Title'),
-                  validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
-                ),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  initialValue: category,
-                  decoration: const InputDecoration(labelText: 'Category'),
-                  items: const ['Academic', 'Sport', 'Club', 'General']
-                      .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                      .toList(),
-                  onChanged: (v) => category = v ?? category,
-                ),
-                const SizedBox(height: 8),
-                TextFormField(controller: dateCtrl, decoration: const InputDecoration(labelText: 'Date (YYYY-MM-DD)')),
-                const SizedBox(height: 8),
-                TextFormField(controller: timeCtrl, decoration: const InputDecoration(labelText: 'Time')),
-                const SizedBox(height: 8),
-                TextFormField(controller: locCtrl, decoration: const InputDecoration(labelText: 'Location')),
-                const SizedBox(height: 8),
-                TextFormField(controller: orgCtrl, decoration: const InputDecoration(labelText: 'Organizer')),
-                const SizedBox(height: 8),
-                TextFormField(
-                  controller: descCtrl,
-                  maxLines: 3,
-                  decoration: const InputDecoration(labelText: 'Description'),
-                ),
-              ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Edit Event Details', style: TextStyle(fontWeight: FontWeight.w800)),
+          content: Form(
+            key: key,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    controller: titleCtrl,
+                    decoration: const InputDecoration(labelText: 'Title'),
+                    validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    initialValue: category,
+                    decoration: const InputDecoration(labelText: 'Category'),
+                    items: const ['Academic', 'Sport', 'Club', 'General']
+                        .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                        .toList(),
+                    onChanged: (v) => category = v ?? category,
+                  ),
+                  const SizedBox(height: 8),
+                  TextFormField(controller: dateCtrl, decoration: const InputDecoration(labelText: 'Date (YYYY-MM-DD)')),
+                  const SizedBox(height: 8),
+                  TextFormField(controller: timeCtrl, decoration: const InputDecoration(labelText: 'Time')),
+                  const SizedBox(height: 8),
+                  TextFormField(controller: locCtrl, decoration: const InputDecoration(labelText: 'Location')),
+                  const SizedBox(height: 8),
+                  TextFormField(controller: orgCtrl, decoration: const InputDecoration(labelText: 'Organizer')),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    controller: descCtrl,
+                    maxLines: 3,
+                    decoration: const InputDecoration(labelText: 'Description'),
+                  ),
+                  const SizedBox(height: 12),
+                  // Cover image picker
+                  if (coverImage != null)
+                    Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: SizedBox(
+                            height: 120,
+                            child: Image.file(coverImage!, fit: BoxFit.cover),
+                          ),
+                        ),
+                        Positioned(
+                          top: 4, right: 4,
+                          child: GestureDetector(
+                            onTap: () => setDialogState(() => coverImage = null),
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                              child: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
+                            ),
+                          ),
+                        ),
+                        if (uploadingCover)
+                          const Positioned.fill(
+                            child: Center(child: CircularProgressIndicator(color: Colors.white)),
+                          ),
+                      ],
+                    )
+                  else
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        try {
+                          final file = await appState.pickEventCoverImage();
+                          if (file != null && dialogActive) {
+                            setDialogState(() => coverImage = file);
+                          }
+                        } on CloudinaryException catch (e) {
+                          if (dialogActive) _toast(context, e.message);
+                        }
+                      },
+                      icon: const Icon(Icons.add_photo_alternate_outlined),
+                      label: Text(event.coverImageUrl != null ? 'Replace Cover Image' : 'Add Cover Image'),
+                    ),
+                ],
+              ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                dialogActive = false;
+                Navigator.pop(ctx);
+              },
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1565C0)),
+              onPressed: () async {
+                if (!key.currentState!.validate()) return;
+                final parsed = DateTime.tryParse(dateCtrl.text.trim());
+                if (parsed == null) {
+                  _toast(context, 'Please enter a valid date (YYYY-MM-DD)');
+                  return;
+                }
+
+                String? coverUrl = event.coverImageUrl;
+                String? coverPublicId = event.coverImagePublicId;
+
+                if (coverImage != null) {
+                  setDialogState(() => uploadingCover = true);
+                  try {
+                    final result = await appState.uploadEventCoverToCloudinary(coverImage!);
+                    if (!dialogActive) return;
+                    coverUrl = result.url;
+                    coverPublicId = result.publicId;
+                  } on CloudinaryException catch (e) {
+                    if (!dialogActive) return;
+                    setDialogState(() => uploadingCover = false);
+                    _toast(context, 'Cover image upload failed: ${e.message}');
+                    return;
+                  }
+                  if (!dialogActive) return;
+                  setDialogState(() => uploadingCover = false);
+                }
+
+                final updated = Event(
+                  id: event.id,
+                  title: titleCtrl.text.trim(),
+                  date: dateCtrl.text.trim(),
+                  time: timeCtrl.text.trim(),
+                  location: locCtrl.text.trim(),
+                  category: category,
+                  organizer: orgCtrl.text.trim(),
+                  description: descCtrl.text.trim(),
+                  status: event.status,
+                  hostStudentId: event.hostStudentId,
+                  approvalLetterPath: event.approvalLetterPath,
+                  approvalLetterName: event.approvalLetterName,
+                  hasApprovalLetter: event.hasApprovalLetter,
+                  submittedDate: event.submittedDate,
+                  revisionCount: event.revisionCount,
+                  messages: event.messages,
+                  eventType: event.eventType,
+                  isPrivate: event.isPrivate,
+                  clubIdRequired: event.clubIdRequired,
+                  isPaid: event.isPaid,
+                  price: event.price,
+                  coverImageUrl: coverUrl,
+                  coverImagePublicId: coverPublicId,
+                );
+                await appState.updateEvent(updated);
+                if (!dialogActive) return;
+                dialogActive = false;
+                Navigator.pop(ctx);
+                _toast(context, 'Details updated successfully');
+              },
+              child: const Text('Save Changes', style: TextStyle(color: Colors.white)),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1565C0)),
-            onPressed: () {
-              if (!key.currentState!.validate()) return;
-              final parsed = DateTime.tryParse(dateCtrl.text.trim());
-              if (parsed == null) {
-                _toast(context, 'Please enter a valid date (YYYY-MM-DD)');
-                return;
-              }
-              
-              final updated = Event(
-                id: event.id,
-                title: titleCtrl.text.trim(),
-                date: dateCtrl.text.trim(),
-                time: timeCtrl.text.trim(),
-                location: locCtrl.text.trim(),
-                category: category,
-                organizer: orgCtrl.text.trim(),
-                description: descCtrl.text.trim(),
-                status: event.status, // preserve status
-              );
-              dataService.updateEventDetails(event.id, updated);
-              Navigator.pop(ctx);
-              _toast(context, 'Details updated successfully');
-            },
-            child: const Text('Save Changes', style: TextStyle(color: Colors.white)),
-          ),
-        ],
       ),
     );
   }
 
-  void _showResubmitDialog(BuildContext context, DataService dataService, Event event) {
+  void _showResubmitDialog(BuildContext context, AppState appState, Event event) {
     final titleCtrl = TextEditingController(text: event.title);
     final dateCtrl = TextEditingController(text: event.date);
     final timeCtrl = TextEditingController(text: event.time);
@@ -789,7 +980,7 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.red),
-            onPressed: () {
+            onPressed: () async {
               if (!key.currentState!.validate()) return;
               final parsed = DateTime.tryParse(dateCtrl.text.trim());
               if (parsed == null) {
@@ -820,8 +1011,15 @@ class _MyEventDetailScreenState extends State<MyEventDetailScreen> {
                 submittedDate: event.submittedDate,
                 revisionCount: event.revisionCount,
                 messages: event.messages,
+                eventType: event.eventType,
+                isPrivate: event.isPrivate,
+                clubIdRequired: event.clubIdRequired,
+                isPaid: event.isPaid,
+                price: event.price,
+                coverImageUrl: event.coverImageUrl,
+                coverImagePublicId: event.coverImagePublicId,
               );
-              dataService.resubmitEvent(event.id, updated);
+              await appState.resubmitEvent(updated);
               Navigator.pop(ctx);
               _toast(context, 'Event resubmitted');
             },
@@ -916,10 +1114,20 @@ class _EventStatusCard extends StatelessWidget {
   final Event event;
   final VoidCallback onTap;
   final VoidCallback? onManage;
+
+  /// Optional destructive action (delete). When provided, a small delete chip
+  /// is rendered in the bottom action row next to Manage. While [deleting] is
+  /// true it renders a spinner and ignores taps, so a double tap cannot
+  /// double-fire the write.
+  final VoidCallback? onDelete;
+  final bool deleting;
+
   const _EventStatusCard({
     required this.event,
     required this.onTap,
     this.onManage,
+    this.onDelete,
+    this.deleting = false,
   });
 
   Color get _accentColor => switch (event.status) {
@@ -1103,6 +1311,42 @@ class _EventStatusCard extends StatelessWidget {
                           fontSize: 11,
                           fontWeight: FontWeight.w700, color: color)),
                 ),
+              // Destructive delete chip — rendered next to Manage for the
+              // host's own non-published, non-completed submissions. Ignores
+              // taps while deleting so a double tap cannot double-fire.
+              if (onDelete != null) ...[
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: deleting ? null : onDelete,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppTheme.danger.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color: AppTheme.danger.withValues(alpha: 0.3)),
+                    ),
+                    child: deleting
+                        ? const SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 1.6, color: AppTheme.danger),
+                          )
+                        : const Row(mainAxisSize: MainAxisSize.min, children: [
+                            Icon(Icons.delete_outline_rounded,
+                                color: AppTheme.danger, size: 13),
+                            SizedBox(width: 5),
+                            Text('Delete',
+                                style: TextStyle(
+                                    color: AppTheme.danger,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700)),
+                          ]),
+                  ),
+                ),
+              ],
             ]),
           ),
         ]),
@@ -1130,21 +1374,34 @@ class _AdminPendingEventDetailScreenState extends State<AdminPendingEventDetailS
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<DataService>(
-      builder: (context, dataService, child) {
-        final event = dataService.getEventById(widget.id);
-        if (event == null) {
-          return Scaffold(
-            appBar: _appBar('Pending Event', context),
-            body: const EmptyState(
-              title: 'Event Not Found',
-              subtitle: 'Unable to load this pending event.',
-              icon: Icons.error_outline_rounded,
-            ),
-          );
-        }
+    return Consumer<AppState>(
+      builder: (context, appState, child) {
+        return StreamBuilder<Event?>(
+          stream: appState.watchEvent(widget.id),
+          builder: (context, eventSnap) {
+            if (eventSnap.hasError) {
+              return Scaffold(
+                appBar: _appBar('Pending Event', context),
+                body: const EmptyState(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Unable to load event',
+                  subtitle: 'Please check your connection and try again.',
+                ),
+              );
+            }
+            final event = eventSnap.data;
+            if (event == null) {
+              return Scaffold(
+                appBar: _appBar('Pending Event', context),
+                body: const EmptyState(
+                  title: 'Event Not Found',
+                  subtitle: 'Unable to load this pending event.',
+                  icon: Icons.error_outline_rounded,
+                ),
+              );
+            }
 
-        final messages = event.messages ?? const <EventMessage>[];
+            final messages = event.messages ?? const <EventMessage>[];
         return Scaffold(
           appBar: _appBar('Pending Event Review', context),
           body: SingleChildScrollView(
@@ -1154,6 +1411,20 @@ class _AdminPendingEventDetailScreenState extends State<AdminPendingEventDetailS
               children: [
                 const AdminBar(),
                 const SizedBox(height: 10),
+                if (event.coverImageUrl != null && event.coverImageUrl!.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: SizedBox(
+                      height: 160,
+                      width: double.infinity,
+                      child: EventCover(
+                        category: event.category,
+                        coverImageUrl: event.coverImageUrl,
+                        radius: BorderRadius.circular(14),
+                        iconSize: 54,
+                      ),
+                    ),
+                  ),
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -1192,8 +1463,8 @@ class _AdminPendingEventDetailScreenState extends State<AdminPendingEventDetailS
                       child: OutlineBtn(
                         label: 'Under Review',
                         color: const Color(0xFF1565C0),
-                        onPressed: () {
-                          dataService.setEventUnderReview(event.id);
+                        onPressed: () async {
+                          await appState.setEventUnderReview(event.id);
                           _toast(context, 'Moved to Under Review');
                         },
                       ),
@@ -1206,8 +1477,8 @@ class _AdminPendingEventDetailScreenState extends State<AdminPendingEventDetailS
                         onPressed: () => _showReasonDialog(
                           context,
                           title: 'Request Revision',
-                          onSubmit: (text) {
-                            dataService.requestEventRevision(event.id, text);
+                          onSubmit: (text) async {
+                            await appState.requestEventRevision(event.id, text);
                             _toast(context, 'Revision requested');
                           },
                         ),
@@ -1225,8 +1496,8 @@ class _AdminPendingEventDetailScreenState extends State<AdminPendingEventDetailS
                         onPressed: () => _showReasonDialog(
                           context,
                           title: 'Reject Event',
-                          onSubmit: (text) {
-                            dataService.rejectEvent(event.id, reason: text);
+                          onSubmit: (text) async {
+                            await appState.rejectEvent(event.id, text);
                             _toast(context, 'Event rejected');
                           },
                         ),
@@ -1236,8 +1507,8 @@ class _AdminPendingEventDetailScreenState extends State<AdminPendingEventDetailS
                     Expanded(
                       child: GradientButton(
                         label: 'Approve',
-                        onPressed: () {
-                          dataService.approveEvent(event.id);
+                        onPressed: () async {
+                          await appState.approveEvent(event.id);
                           _toast(context, 'Event approved');
                           context.pop();
                         },
@@ -1285,10 +1556,10 @@ class _AdminPendingEventDetailScreenState extends State<AdminPendingEventDetailS
                 const SizedBox(height: 8),
                 OutlineBtn(
                   label: 'Send Message',
-                  onPressed: () {
+                  onPressed: () async {
                     final msg = _messageCtrl.text.trim();
                     if (msg.isEmpty) return;
-                    dataService.addEventMessage(event.id, 'ADMIN', 'admin', msg);
+                    await appState.addEventMessage(event.id, msg);
                     _messageCtrl.clear();
                     _toast(context, 'Message sent');
                   },
@@ -1296,6 +1567,8 @@ class _AdminPendingEventDetailScreenState extends State<AdminPendingEventDetailS
               ],
             ),
           ),
+        );
+          },
         );
       },
     );
