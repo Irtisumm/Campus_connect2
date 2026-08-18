@@ -84,6 +84,7 @@ class _FakeLfWorkflowService extends LfWorkflowService {
   Future<QrScanOutcome> scanQr({
     required String token,
     required String studentUid,
+    String? lostReportId,
     DateTime? now,
   }) async {
     if (myQrs.isEmpty) return const QrScanOutcome.invalid();

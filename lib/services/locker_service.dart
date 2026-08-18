@@ -430,6 +430,24 @@ class LockerService {
         );
   }
 
+  /// Live feed of every locker notification, for the admin screens.
+  Stream<List<LockerNotification>> watchAllLockerNotifications() {
+    if (!isAvailable) return Stream.value(const <LockerNotification>[]);
+    return _notifications
+        .snapshots()
+        .map((snap) {
+          final notifications = snap.docs
+              .map((doc) => LockerNotification.fromMap(doc.id, doc.data()))
+              .toList();
+          notifications.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+          return notifications;
+        })
+        .handleError(
+          (Object error) => throw AuthFailure.fromCode((error as FirebaseException).code),
+          test: (Object? error) => error is FirebaseException,
+        );
+  }
+
   /// Creates a locker notification document. Returns it with its Firestore ID.
   Future<LockerNotification> createLockerNotification(LockerNotification notification) async {
     _assertAvailable();
@@ -446,6 +464,28 @@ class LockerService {
     _assertAvailable();
     try {
       await _notifications.doc(id).update({'read': true});
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
+  /// Marks every unread notification owned by [studentId] as read in a single
+  /// batch. The Firestore rules allow only the owner to update, so the batch
+  /// contains only the caller's own documents.
+  Future<void> markAllRead(String studentId) async {
+    _assertAvailable();
+    if (studentId.isEmpty) return;
+    try {
+      final snap = await _notifications
+          .where('studentId', isEqualTo: studentId)
+          .where('read', isEqualTo: false)
+          .get();
+      if (snap.docs.isEmpty) return;
+      final batch = _dbOrNull!.batch();
+      for (final doc in snap.docs) {
+        batch.update(doc.reference, {'read': true});
+      }
+      await batch.commit();
     } on FirebaseException catch (e) {
       throw AuthFailure.fromCode(e.code);
     }

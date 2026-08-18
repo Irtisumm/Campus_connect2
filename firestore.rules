@@ -79,6 +79,27 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ── Device Push Tokens ──────────────────────────────────────────
+    // Each device gets one document keyed by a stable device ID (stored
+    // in the client's SharedPreferences).  The FCM token value is updated
+    // in-place on token refresh.  The Cloud Function uses the Admin SDK
+    // to read these documents — no admin rule is needed here.
+    match /users/{uid}/deviceTokens/{tokenId} {
+      // Only the owner can see their own tokens.
+      allow get, list: if isSelf(uid);
+
+      // Owner registers a token at login and refreshes it when FCM
+      // rotates the value.
+      allow create, update: if isSelf(uid)
+        && request.resource.data.token is string
+        && request.resource.data.platform is string
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp;
+
+      // Owner cleans up their token at logout.
+      allow delete: if isSelf(uid);
+    }
+
     match /items/{itemId} {
 
       // Reads are owner-or-admin, mirroring the `users` get rule above.
@@ -245,6 +266,7 @@ service cloud.firestore {
         && request.resource.data.token is string
         && request.resource.data.intendedStudentUid is string
         && request.resource.data.intendedStudentId is string
+        && request.resource.data.matchId is string
         && request.resource.data.issuedAt is timestamp
         && request.resource.data.expiresAt is timestamp
         && request.resource.data.expiresAt > request.time
@@ -347,8 +369,8 @@ service cloud.firestore {
         && request.resource.data.foundReportId == resource.data.foundReportId
         && request.resource.data.finderUid == resource.data.finderUid
         && request.resource.data.finderStudentId == resource.data.finderStudentId
-        && resource.data.status in ['In Inventory', 'Reserved']
-        && request.resource.data.status in ['In Inventory', 'Reserved', 'Returned'];
+        && resource.data.status in ['In Inventory', 'Reserved', 'Waiting for Collection']
+        && request.resource.data.status in ['In Inventory', 'Reserved', 'Waiting for Collection', 'Returned'];
 
       // Inventory records are audit history, never deleted.
       allow delete: if false;

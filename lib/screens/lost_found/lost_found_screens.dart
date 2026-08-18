@@ -13,7 +13,6 @@ import '../../models/item.dart';
 import '../../widgets/common.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/luxe.dart';
-import '../../services/data_service.dart';
 import '../../services/lost_found_service.dart';
 import '../../services/app_state.dart';
 import '../../services/cloudinary_service.dart';
@@ -221,8 +220,12 @@ class _HubSectionHeader extends StatelessWidget {
 /// remain the same as the shell controls used on the other tabs.
 class _LostFoundIdentityRow extends StatelessWidget {
   final bool includeTopSafeArea;
+  final bool showMenu;
 
-  const _LostFoundIdentityRow({this.includeTopSafeArea = true});
+  const _LostFoundIdentityRow({
+    this.includeTopSafeArea = true,
+    this.showMenu = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -230,31 +233,61 @@ class _LostFoundIdentityRow extends StatelessWidget {
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 390;
         final tiny = constraints.maxWidth < 350;
-        final logoSize = tiny
-            ? 44.0
-            : compact
-                ? 46.0
-                : 52.0;
-        final controlSize = tiny
-            ? 36.0
-            : compact
-                ? 38.0
-                : 44.0;
-        final iconSize = tiny
-            ? 18.0
-            : compact
-                ? 20.0
-                : 23.0;
-        final gap = tiny
-            ? 3.0
-            : compact
-                ? 4.0
-                : 8.0;
-        final roleWidth = tiny
-            ? 66.0
-            : compact
-                ? 74.0
-                : 132.0;
+        final logoSize = showMenu
+            ? (tiny
+                ? 40.0
+                : compact
+                    ? 44.0
+                    : 48.0)
+            : (tiny
+                ? 44.0
+                : compact
+                    ? 46.0
+                    : 52.0);
+        final controlSize = showMenu
+            ? (tiny
+                ? 34.0
+                : compact
+                    ? 36.0
+                    : 40.0)
+            : (tiny
+                ? 36.0
+                : compact
+                    ? 38.0
+                    : 44.0);
+        final iconSize = showMenu
+            ? (tiny
+                ? 17.0
+                : compact
+                    ? 19.0
+                    : 21.0)
+            : (tiny
+                ? 18.0
+                : compact
+                    ? 20.0
+                    : 23.0);
+        final gap = showMenu
+            ? (tiny
+                ? 3.0
+                : compact
+                    ? 4.0
+                    : 6.0)
+            : (tiny
+                ? 3.0
+                : compact
+                    ? 4.0
+                    : 8.0);
+        final roleWidth = showMenu
+            ? (tiny
+                ? 62.0
+                : compact
+                    ? 82.0
+                    : 108.0)
+            : (tiny
+                ? 66.0
+                : compact
+                    ? 74.0
+                    : 132.0);
 
         final row = Padding(
           padding: EdgeInsets.only(
@@ -263,6 +296,13 @@ class _LostFoundIdentityRow extends StatelessWidget {
           ),
           child: Row(
             children: [
+              if (showMenu) ...[
+                _IdentityMenuButton(
+                  size: controlSize,
+                  onPressed: () => Scaffold.of(context).openDrawer(),
+                ),
+                SizedBox(width: gap),
+              ],
               Container(
                 width: logoSize,
                 height: logoSize,
@@ -298,7 +338,9 @@ class _LostFoundIdentityRow extends StatelessWidget {
                         'Campus Connect',
                         maxLines: 1,
                         style: TextStyle(
-                          fontSize: compact ? 17 : 19,
+                          fontSize: showMenu
+                              ? (compact ? 16 : 18)
+                              : (compact ? 17 : 19),
                           fontWeight: FontWeight.w800,
                           color: Luxe.ink,
                           letterSpacing: -.45,
@@ -317,7 +359,9 @@ class _LostFoundIdentityRow extends StatelessWidget {
                               'City University Malaysia',
                               maxLines: 1,
                               style: TextStyle(
-                                fontSize: compact ? 10 : 10.5,
+                                fontSize: showMenu
+                                    ? (compact ? 9 : 9.5)
+                                    : (compact ? 10 : 10.5),
                                 color: Luxe.inkSoft,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -428,54 +472,58 @@ class _LostFoundIdentityRow extends StatelessWidget {
                 onPressed: () => context.push('/profile'),
               ),
               SizedBox(width: gap),
-              Consumer2<DataService, AppState>(
-                builder: (context, dataService, appState, child) {
-                  final legacyUnread =
-                      dataService.unreadNotificationCountForUser(
-                          appState.userId, appState.isAdmin);
+              Consumer<AppState>(
+                builder: (context, appState, child) {
                   return StreamBuilder<int>(
                     stream: appState.watchUnreadLfNotifications(),
                     initialData: 0,
-                    builder: (context, snap) {
-                      final unreadCount = legacyUnread + (snap.data ?? 0);
-                      return Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          _IdentityIconButton(
-                            size: controlSize,
-                            iconSize: iconSize,
-                            icon: Icons.notifications_none_rounded,
-                            onPressed: () =>
-                                context.push('/lost-found/notifications'),
-                          ),
-                          if (unreadCount > 0)
-                            Positioned(
-                              top: -3,
-                              right: -3,
-                              child: IgnorePointer(
-                                child: Container(
-                                  padding: const EdgeInsets.all(3),
-                                  constraints: const BoxConstraints(
-                                      minWidth: 17, minHeight: 17),
-                                  decoration: BoxDecoration(
-                                    color: Luxe.accent,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                        color:
-                                            Colors.white.withValues(alpha: .9),
-                                        width: 1.5),
-                                  ),
-                                  child: Text('$unreadCount',
-                                      textAlign: TextAlign.center,
-                                      style: const TextStyle(
-                                          fontSize: 9,
-                                          height: 1.15,
-                                          fontWeight: FontWeight.w800,
-                                          color: Color(0xFF7A4B00))),
-                                ),
+                    builder: (context, lfSnap) {
+                      return StreamBuilder<int>(
+                        stream: appState.watchUnreadLockerNotifications(),
+                        initialData: 0,
+                        builder: (context, lockerSnap) {
+                          final unreadCount =
+                              (lfSnap.data ?? 0) + (lockerSnap.data ?? 0);
+                          return Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              _IdentityIconButton(
+                                size: controlSize,
+                                iconSize: iconSize,
+                                icon: Icons.notifications_none_rounded,
+                                onPressed: () =>
+                                    context.push('/lost-found/notifications'),
                               ),
-                            ),
-                        ],
+                              if (unreadCount > 0)
+                                Positioned(
+                                  top: -3,
+                                  right: -3,
+                                  child: IgnorePointer(
+                                    child: Container(
+                                      padding: const EdgeInsets.all(3),
+                                      constraints: const BoxConstraints(
+                                          minWidth: 17, minHeight: 17),
+                                      decoration: BoxDecoration(
+                                        color: Luxe.accent,
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                            color: Colors.white
+                                                .withValues(alpha: .9),
+                                            width: 1.5),
+                                      ),
+                                      child: Text('$unreadCount',
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                              fontSize: 9,
+                                              height: 1.15,
+                                              fontWeight: FontWeight.w800,
+                                              color: Color(0xFF7A4B00))),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
                       );
                     },
                   );
@@ -528,6 +576,39 @@ class _IdentityIconButton extends StatelessWidget {
         padding: EdgeInsets.zero,
         constraints: BoxConstraints.tightFor(width: size, height: size),
         icon: Icon(icon, color: Luxe.ink, size: iconSize),
+      ),
+    );
+  }
+}
+
+class _IdentityMenuButton extends StatelessWidget {
+  final double size;
+  final VoidCallback onPressed;
+
+  const _IdentityMenuButton({required this.size, required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(Luxe.rSmall),
+        border: Border.all(color: Luxe.primary.withValues(alpha: .10)),
+        boxShadow: [
+          BoxShadow(
+            color: Luxe.primary.withValues(alpha: .07),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: IconButton(
+        onPressed: onPressed,
+        padding: EdgeInsets.zero,
+        constraints: BoxConstraints.tightFor(width: size, height: size),
+        icon: Icon(Icons.menu_rounded, color: Luxe.ink, size: size * .54),
       ),
     );
   }
@@ -3418,6 +3499,7 @@ class _LostDetailScreenState extends State<LostDetailScreen> {
                     _QrScanSection(
                       instruction:
                           'The office has a Return QR ready for you. Tap Scan QR to use your camera (or upload a photo), or tap Input Key and type the key shown under the QR code.',
+                      lostReportId: widget.id,
                       onSuccess: () => _toast(context,
                           'Code verified. Please wait for the office to confirm.'),
                     ),
@@ -3426,10 +3508,10 @@ class _LostDetailScreenState extends State<LostDetailScreen> {
                   if (qrScanned) ...[
                     const _StatusBanner(
                         text:
-                            'Code verified — the office will confirm your collection.'),
+                            'Collection confirmed — waiting for Admin handover.'),
                     const SizedBox(height: 10),
                   ],
-                  if (r.status == ItemStatus.active)
+                  if (r.status == ItemStatus.active && !approved)
                     OutlineBtn(
                       label: 'Request to Close',
                       color: AppTheme.danger,
@@ -3815,8 +3897,8 @@ class NotificationsScreen extends StatefulWidget {
   State<NotificationsScreen> createState() => _NotificationsScreenState();
 }
 
-/// One merged row: either a Firestore `lfNotifications` document (match
-/// alerts, Workflow 3) or a derived report notification.
+/// One row in the notifications list, backed by a Firestore
+/// `lfNotifications` document.
 class _NotifRow {
   final bool isLf;
   final String title;
@@ -3824,7 +3906,6 @@ class _NotifRow {
   final DateTime? at;
   final bool read;
   final String lfId;
-  final String derivedReportId;
   final String relatedReportId;
 
   const _NotifRow({
@@ -3834,28 +3915,17 @@ class _NotifRow {
     required this.at,
     required this.read,
     this.lfId = '',
-    this.derivedReportId = '',
     this.relatedReportId = '',
   });
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
   /// Held in a field so rebuilds do not re-subscribe to Firestore.
-  late final Stream<List<AppNotification>> _notifications;
   late final Stream<List<LfNotification>> _lfNotifications;
-
-  /// Derived-notification rows the user has tapped, by report ID.
-  ///
-  /// Read state for derived rows lives here rather than in Firestore:
-  /// notifications are derived from the `items` documents, and `Item` has no
-  /// `read` field to write to, so marking them read is session-local. Match
-  /// alerts (`lfNotifications`) persist their read state in Firestore.
-  final Set<String> _read = <String>{};
 
   @override
   void initState() {
     super.initState();
-    _notifications = context.read<AppState>().watchNotifications();
     _lfNotifications = context.read<AppState>().watchMyLfNotifications();
   }
 
@@ -3865,163 +3935,146 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       stream: _lfNotifications,
       builder: (context, lfSnap) {
         final lfNs = lfSnap.data ?? const <LfNotification>[];
-        return StreamBuilder<List<AppNotification>>(
-          stream: _notifications,
-          builder: (context, snapshot) {
-            final ns = snapshot.data ?? const <AppNotification>[];
-            final isLoading =
-                (snapshot.connectionState == ConnectionState.waiting ||
-                        lfSnap.connectionState == ConnectionState.waiting) &&
-                    ns.isEmpty &&
-                    lfNs.isEmpty;
-            // The services map every FirebaseException to an AuthFailure, so
-            // these messages are already safe to show — permission denied,
-            // offline and network failures all arrive with their own wording.
-            final error = snapshot.error ?? lfSnap.error;
+        final isLoading =
+            lfSnap.connectionState == ConnectionState.waiting && lfNs.isEmpty;
+        final error = lfSnap.error;
 
-            final rows = <_NotifRow>[
-              for (final lf in lfNs)
-                _NotifRow(
-                  isLf: true,
-                  title: lf.title,
-                  body: lf.body,
-                  at: lf.createdAt,
-                  read: lf.read,
-                  lfId: lf.id,
-                  relatedReportId: lf.relatedReportId,
-                ),
-              for (final n in ns)
-                _NotifRow(
-                  isLf: false,
-                  title: n.text,
-                  body: '',
-                  at: n.at,
-                  read: _read.contains(n.id),
-                  derivedReportId: n.id,
-                ),
-            ]..sort((a, b) => (b.at ?? DateTime.fromMillisecondsSinceEpoch(0))
-                .compareTo(a.at ?? DateTime.fromMillisecondsSinceEpoch(0)));
+        final rows = <_NotifRow>[
+          for (final lf in lfNs)
+            _NotifRow(
+              isLf: true,
+              title: lf.title,
+              body: lf.body,
+              at: lf.createdAt,
+              read: lf.read,
+              lfId: lf.id,
+              relatedReportId: lf.relatedReportId,
+            ),
+        ]..sort((a, b) => (b.at ?? DateTime.fromMillisecondsSinceEpoch(0))
+            .compareTo(a.at ?? DateTime.fromMillisecondsSinceEpoch(0)));
 
-            return Scaffold(
-              appBar: _gradientAppBar('Notifications', context),
-              body: isLoading
-                  ? const Center(
-                      child: CircularProgressIndicator(color: AppTheme.red))
-                  : error != null
-                      ? EmptyState(
-                          title: 'Could Not Load Notifications',
-                          subtitle: error is AuthFailure
-                              ? error.message
-                              : 'Something went wrong. Please try again.',
-                          icon: Icons.cloud_off_rounded,
-                        )
-                      : rows.isEmpty
-                          ? const EmptyState(
-                              title: 'No Notifications',
-                              icon: Icons.notifications_off_rounded)
-                          : ListView.builder(
-                              padding: const EdgeInsets.all(16),
-                              itemCount: rows.length,
-                              itemBuilder: (ctx, i) {
-                                final row = rows[i];
-                                return GestureDetector(
-                                  onTap: () => _onRowTap(context, row),
-                                  child: Container(
-                                    margin: const EdgeInsets.only(bottom: 10),
-                                    decoration: BoxDecoration(
+        final hasUnread = rows.any((r) => !r.read);
+
+        return Scaffold(
+          appBar: _gradientAppBar('Notifications', context, actions: [
+            if (hasUnread)
+              TextButton(
+                onPressed: () =>
+                    context.read<AppState>().markAllLfNotificationsRead(),
+                child: const Text('Mark all read',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600)),
+              ),
+          ]),
+          body: isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(color: AppTheme.red))
+              : error != null
+                  ? EmptyState(
+                      title: 'Could Not Load Notifications',
+                      subtitle: error is AuthFailure
+                          ? error.message
+                          : 'Something went wrong. Please try again.',
+                      icon: Icons.cloud_off_rounded,
+                    )
+                  : rows.isEmpty
+                      ? const EmptyState(
+                          title: 'No Notifications',
+                          icon: Icons.notifications_off_rounded)
+                      : ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: rows.length,
+                          itemBuilder: (ctx, i) {
+                            final row = rows[i];
+                            return GestureDetector(
+                              onTap: () => _onRowTap(context, row),
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 10),
+                                decoration: BoxDecoration(
+                                  color: row.read
+                                      ? AppTheme.bgCard
+                                      : AppTheme.red.withOpacity(0.05),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
                                       color: row.read
-                                          ? AppTheme.bgCard
-                                          : AppTheme.red.withOpacity(0.05),
-                                      borderRadius: BorderRadius.circular(14),
-                                      border: Border.all(
-                                          color: row.read
-                                              ? AppTheme.red.withOpacity(0.1)
-                                              : AppTheme.red.withOpacity(0.25)),
-                                    ),
-                                    child: ListTile(
-                                      contentPadding:
-                                          const EdgeInsets.symmetric(
-                                              horizontal: 14, vertical: 6),
-                                      leading: CircleAvatar(
-                                          backgroundColor: row.isLf
-                                              ? AppTheme.red.withOpacity(0.12)
-                                              : AppTheme.gold.withOpacity(0.2),
-                                          child: Icon(
-                                              row.isLf
-                                                  ? Icons.link_rounded
-                                                  : Icons.campaign_rounded,
-                                              color: row.isLf
-                                                  ? AppTheme.red
-                                                  : AppTheme.goldDark,
-                                              size: 20)),
-                                      title: Text(row.title,
-                                          style: TextStyle(
-                                              fontSize: 13,
-                                              fontWeight: row.read
-                                                  ? FontWeight.w500
-                                                  : FontWeight.w700,
-                                              color: AppTheme.textPrimary)),
-                                      subtitle: row.body.isEmpty
-                                          ? Text(_rowTime(row),
-                                              style: const TextStyle(
-                                                  fontSize: 11,
-                                                  color: AppTheme.textMuted))
-                                          : Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text(row.body,
-                                                    maxLines: 2,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
-                                                    style: const TextStyle(
-                                                        fontSize: 11,
-                                                        color: AppTheme
-                                                            .textSecondary)),
-                                                Text(_rowTime(row),
-                                                    style: const TextStyle(
-                                                        fontSize: 11,
-                                                        color: AppTheme
-                                                            .textMuted)),
-                                              ],
-                                            ),
-                                      trailing: row.read
-                                          ? null
-                                          : Container(
-                                              width: 8,
-                                              height: 8,
-                                              decoration: const BoxDecoration(
-                                                  color: AppTheme.red,
-                                                  shape: BoxShape.circle)),
-                                    ),
-                                  ),
-                                )
-                                    .animate()
-                                    .fadeIn(delay: (i * 55).ms)
-                                    .slideX(begin: 0.1);
-                              }),
-            );
-          },
+                                          ? AppTheme.red.withOpacity(0.1)
+                                          : AppTheme.red.withOpacity(0.25)),
+                                ),
+                                child: ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 14, vertical: 6),
+                                  leading: CircleAvatar(
+                                      backgroundColor: row.isLf
+                                          ? AppTheme.red.withOpacity(0.12)
+                                          : AppTheme.gold.withOpacity(0.2),
+                                      child: Icon(
+                                          row.isLf
+                                              ? Icons.link_rounded
+                                              : Icons.campaign_rounded,
+                                          color: row.isLf
+                                              ? AppTheme.red
+                                              : AppTheme.goldDark,
+                                          size: 20)),
+                                  title: Text(row.title,
+                                      style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: row.read
+                                              ? FontWeight.w500
+                                              : FontWeight.w700,
+                                          color: AppTheme.textPrimary)),
+                                  subtitle: row.body.isEmpty
+                                      ? Text(_rowTime(row),
+                                          style: const TextStyle(
+                                              fontSize: 11,
+                                              color: AppTheme.textMuted))
+                                      : Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(row.body,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: AppTheme
+                                                        .textSecondary)),
+                                            Text(_rowTime(row),
+                                                style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: AppTheme.textMuted)),
+                                          ],
+                                        ),
+                                  trailing: row.read
+                                      ? null
+                                      : Container(
+                                          width: 8,
+                                          height: 8,
+                                          decoration: const BoxDecoration(
+                                              color: AppTheme.red,
+                                              shape: BoxShape.circle)),
+                                ),
+                              ),
+                            )
+                                .animate()
+                                .fadeIn(delay: (i * 55).ms)
+                                .slideX(begin: 0.1);
+                          }),
         );
       },
     );
   }
 
   Future<void> _onRowTap(BuildContext context, _NotifRow row) async {
-    if (row.isLf) {
-      // Match alerts persist read state in Firestore; tapping also opens the
-      // linked lost report when one is attached.
-      if (!row.read) {
-        await context.read<AppState>().markLfNotificationRead(row.lfId);
-      }
-      if (!mounted) return;
-      if (row.relatedReportId.isNotEmpty) {
-        context.push('/lost-found/lost/${row.relatedReportId}');
-      }
-      return;
-    }
+    // Match alerts persist read state in Firestore; tapping also opens the
+    // linked lost report when one is attached.
     if (!row.read) {
-      setState(() => _read.add(row.derivedReportId));
+      await context.read<AppState>().markLfNotificationRead(row.lfId);
+    }
+    if (!mounted) return;
+    if (row.relatedReportId.isNotEmpty) {
+      context.push('/lost-found/lost/${row.relatedReportId}');
     }
   }
 
@@ -4048,6 +4101,7 @@ class _AdminLFDashboardScreenState extends State<AdminLFDashboardScreen> {
   late final Stream<List<Item>> _reports;
   late final Stream<List<LfMatch>> _matches;
   late final Stream<List<InventoryItem>> _inventory;
+  late final Stream<List<UserProfile>> _registrations;
 
   @override
   void initState() {
@@ -4055,10 +4109,24 @@ class _AdminLFDashboardScreenState extends State<AdminLFDashboardScreen> {
     _reports = context.read<AppState>().watchAdminAllReports();
     _matches = context.read<AppState>().watchAllMatches();
     _inventory = context.read<AppState>().watchAllInventoryItems();
+    _registrations = context.read<AppState>().watchStudentRegistrations();
   }
 
   @override
   Widget build(BuildContext context) {
+    return _buildAdminDashboard(context);
+  }
+
+  Widget _buildAdminDashboard(BuildContext context) {
+    return _AdminDashboardBody(
+      reports: _reports,
+      matches: _matches,
+      inventory: _inventory,
+      registrations: _registrations,
+    );
+  }
+
+  /*
     final appState = context.watch<AppState>();
     return Scaffold(
       body: SafeArea(
@@ -4200,14 +4268,14 @@ class _AdminLFDashboardScreenState extends State<AdminLFDashboardScreen> {
                 stream: _matches,
                 builder: (context, matchSnap) {
                   final matches = matchSnap.data ?? const <LfMatch>[];
-                  final pending = matches
-                      .where((m) => m.status == MatchStatus.proposed)
-                      .length;
                   final aiPending = matches
                       .where((m) =>
                           m.isAiMatch &&
                           m.status == MatchStatus.proposed &&
                           (m.overallScore ?? 0) >= 50)
+                      .length;
+                  final approvedCount = matches
+                      .where((m) => m.status == MatchStatus.approved)
                       .length;
                   return Column(children: [
                     HubButton(
@@ -4222,11 +4290,14 @@ class _AdminLFDashboardScreenState extends State<AdminLFDashboardScreen> {
                         delay: 340.ms),
                     const SizedBox(height: 8),
                     HubButton(
-                            icon: Icons.compare_arrows_rounded,
-                            label: 'Review Matches',
-                            subtitle: '$pending pending approval',
-                            onTap: () =>
-                                context.push('/admin/lost-found/match-list'))
+                        icon: Icons.check_circle_outline,
+                        label: 'Approved Matches',
+                        subtitle: approvedCount > 0
+                            ? '$approvedCount awaiting collection'
+                            : 'None awaiting collection',
+                        isAmber: approvedCount > 0,
+                        onTap: () => context.push(
+                            '/admin/lost-found/approved-matches'))
                         .animate()
                         .fadeIn(delay: 350.ms),
                   ]);
@@ -4262,6 +4333,7 @@ class _AdminLFDashboardScreenState extends State<AdminLFDashboardScreen> {
       ),
     );
   }
+  */
 }
 
 // ── Shared admin section switcher + countdown dialog ──────────────
@@ -4269,6 +4341,1075 @@ class _AdminLFDashboardScreenState extends State<AdminLFDashboardScreen> {
 /// The three-section tab bar used by the admin Lost and Found report lists.
 /// Unlike the student switchers, the tabs are always Active / Notified /
 /// Closed (no vertical indicator lines, matching the student design).
+class _AdminDashboardPalette {
+  static const background = Color(0xFFFFFCFB);
+  static const ink = Color(0xFF15233B);
+  static const muted = Color(0xFF64748B);
+  static const hairline = Color(0xFFEFE8EA);
+  static const pink = Color(0xFFD71958);
+  static const pinkBright = Color(0xFFF65E7B);
+  static const pinkTint = Color(0xFFFFE8EF);
+  static const green = Color(0xFF159447);
+  static const greenTint = Color(0xFFE6F5E9);
+  static const gold = Color(0xFFA46808);
+  static const goldTint = Color(0xFFFFF2DD);
+  static const blue = Color(0xFF2E72D3);
+  static const blueTint = Color(0xFFEAF2FF);
+  static const purple = Color(0xFF7135B8);
+  static const purpleTint = Color(0xFFF3EAFF);
+}
+
+class _AdminDashboardBody extends StatelessWidget {
+  final Stream<List<Item>> reports;
+  final Stream<List<LfMatch>> matches;
+  final Stream<List<InventoryItem>> inventory;
+  final Stream<List<UserProfile>> registrations;
+
+  const _AdminDashboardBody({
+    required this.reports,
+    required this.matches,
+    required this.inventory,
+    required this.registrations,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final appState = context.watch<AppState>();
+    return Scaffold(
+      backgroundColor: _AdminDashboardPalette.background,
+      drawer: const _AdminDashboardDrawer(),
+      body: SafeArea(
+        top: true,
+        bottom: false,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final horizontal = constraints.maxWidth >= 640 ? 28.0 : 20.0;
+            return ListView(
+              physics: const BouncingScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(horizontal, 8, horizontal,
+                  104 + MediaQuery.paddingOf(context).bottom),
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const _LostFoundIdentityRow(
+                      includeTopSafeArea: false,
+                      showMenu: true,
+                    ),
+                    const SizedBox(height: 12),
+                    const _AdminModeBanner(),
+                    const SizedBox(height: 18),
+                    StreamBuilder<List<Item>>(
+                      stream: reports,
+                      builder: (context, snapshot) {
+                        final ready = snapshot.hasData && !snapshot.hasError;
+                        final error = snapshot.error;
+                        final all = snapshot.data ?? const <Item>[];
+                        final lost = all
+                            .where((r) =>
+                                r.isLost &&
+                                r.status != ItemStatus.resolved &&
+                                r.status != ItemStatus.returned &&
+                                r.status != ItemStatus.closed)
+                            .length;
+                        final found = all
+                            .where((r) =>
+                                r.isFound &&
+                                r.status != ItemStatus.resolved &&
+                                r.status != ItemStatus.inInventory &&
+                                r.status != ItemStatus.returned &&
+                                r.status != ItemStatus.closed)
+                            .length;
+                        // Keep the top metric aligned with the open lost
+                        // reports shown by the admin lost-report workflow.
+                        final activeLost = lost;
+                        final activeLostValue = ready ? '$activeLost' : '—';
+                        final foundValue = ready ? '$found' : '—';
+                        final reportLoadingText =
+                            error != null ? '—' : 'Loading…';
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: _AdminMetricCard(
+                                    icon: Icons.business_center_outlined,
+                                    value: activeLostValue,
+                                    title: 'Active Lost Items',
+                                    subtitle: 'Currently tracked',
+                                    accent: _AdminDashboardPalette.pink,
+                                    tint: _AdminDashboardPalette.pinkTint,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: _AdminMetricCard(
+                                    icon: Icons.bookmark_border_rounded,
+                                    value: foundValue,
+                                    title: 'Found Reports',
+                                    subtitle: 'Awaiting review',
+                                    accent: _AdminDashboardPalette.green,
+                                    tint: _AdminDashboardPalette.greenTint,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (error != null) ...[
+                              const SizedBox(height: 12),
+                              _AdminDashboardError(
+                                message: error is AuthFailure
+                                    ? error.message
+                                    : 'Something went wrong. Please try again.',
+                              ),
+                            ],
+                            _AdminDashboardSectionHeader(
+                              'Quick Actions',
+                              onViewAll: () =>
+                                  context.push('/admin/lost-found/lost-list'),
+                            ),
+                            _AdminActionGroup(
+                              rows: [
+                                _AdminActionRowData(
+                                  icon: Icons.description_outlined,
+                                  label: 'View Lost Reports',
+                                  subtitle: ready
+                                      ? '$lost open reports'
+                                      : reportLoadingText,
+                                  onTap: () => context
+                                      .push('/admin/lost-found/lost-list'),
+                                ),
+                                _AdminActionRowData(
+                                  icon: Icons.find_in_page_outlined,
+                                  label: 'View Found Report',
+                                  subtitle: ready
+                                      ? '$found ${found == 1 ? 'item reported' : 'items reported'}'
+                                      : reportLoadingText,
+                                  emphasis: true,
+                                  onTap: () => context
+                                      .push('/admin/lost-found/found-list'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                    _AdminDashboardSectionHeader(
+                      'Admin Tools',
+                      onViewAll: () => context.push('/admin/registrations'),
+                    ),
+                    StreamBuilder<List<UserProfile>>(
+                      stream: registrations,
+                      builder: (context, registrationSnapshot) {
+                        final ready = registrationSnapshot.hasData &&
+                            !registrationSnapshot.hasError;
+                        final error = registrationSnapshot.error;
+                        final registrationData =
+                            registrationSnapshot.data ?? const <UserProfile>[];
+                        final pending = registrationData
+                            .where((registration) => registration.isPending)
+                            .length;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _AdminActionGroup(
+                              rows: [
+                                _AdminActionRowData(
+                                  icon: Icons.group_add_outlined,
+                                  label: 'Student Registrations',
+                                  subtitle: ready
+                                      ? '$pending pending approval'
+                                      : error != null
+                                          ? '—'
+                                          : 'Loading…',
+                                  onTap: () =>
+                                      context.push('/admin/registrations'),
+                                ),
+                              ],
+                            ),
+                            if (error != null) ...[
+                              const SizedBox(height: 12),
+                              _AdminDashboardError(
+                                message: error is AuthFailure
+                                    ? error.message
+                                    : 'Could not load student registrations.',
+                              ),
+                            ],
+                          ],
+                        );
+                      },
+                    ),
+                    const _AdminDashboardSectionHeader(
+                      'Lost & Found Workflow',
+                      fontSize: 13,
+                      letterSpacing: 1.1,
+                    ),
+                    StreamBuilder<List<InventoryItem>>(
+                      stream: inventory,
+                      builder: (context, invSnapshot) {
+                        final inventoryReady =
+                            invSnapshot.hasData && !invSnapshot.hasError;
+                        final inventoryError = invSnapshot.error;
+                        final inv = invSnapshot.data ?? const <InventoryItem>[];
+                        final inOffice = inv.where((i) => !i.isReturned).length;
+                        return StreamBuilder<List<LfMatch>>(
+                          stream: matches,
+                          builder: (context, matchSnapshot) {
+                            final matchesReady = matchSnapshot.hasData &&
+                                !matchSnapshot.hasError;
+                            final matchError = matchSnapshot.error;
+                            final currentMatches =
+                                matchSnapshot.data ?? const <LfMatch>[];
+                            final aiPending = currentMatches
+                                .where((m) =>
+                                    m.isAiMatch &&
+                                    m.status == MatchStatus.proposed &&
+                                    (m.overallScore ?? 0) >= 50)
+                                .length;
+                            final approvedCount = currentMatches
+                                .where((m) => m.status == MatchStatus.approved)
+                                .length;
+                            final workflowError = inventoryError ?? matchError;
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                _AdminWorkflowCard(
+                                  rows: [
+                                    _AdminWorkflowRowData(
+                                      icon: Icons.account_balance_outlined,
+                                      label: 'Inventory Office',
+                                      subtitle: inventoryReady
+                                          ? '$inOffice items in office'
+                                          : inventoryError != null
+                                              ? '—'
+                                              : 'Loading…',
+                                      count: inventoryReady ? '$inOffice' : '—',
+                                      color: _AdminDashboardPalette.gold,
+                                      tint: _AdminDashboardPalette.goldTint,
+                                      onTap: () => context
+                                          .push('/admin/lost-found/inventory'),
+                                    ),
+                                    _AdminWorkflowRowData(
+                                      icon: Icons.auto_awesome_rounded,
+                                      label: 'AI Suggested Matches',
+                                      subtitle: matchesReady
+                                          ? aiPending > 0
+                                              ? '$aiPending AI-proposed match${aiPending == 1 ? '' : 'es'}'
+                                              : 'No AI suggestions'
+                                          : matchError != null
+                                              ? '—'
+                                              : 'Loading…',
+                                      count: matchesReady ? '$aiPending' : '—',
+                                      color: _AdminDashboardPalette.pink,
+                                      tint: _AdminDashboardPalette.pinkTint,
+                                      onTap: () => context
+                                          .push('/admin/lost-found/match-list'),
+                                    ),
+                                    _AdminWorkflowRowData(
+                                      icon: Icons.check_circle_outline_rounded,
+                                      label: 'Approved Matches',
+                                      subtitle: matchesReady
+                                          ? approvedCount > 0
+                                              ? '$approvedCount awaiting collection'
+                                              : 'None awaiting collection'
+                                          : matchError != null
+                                              ? '—'
+                                              : 'Loading…',
+                                      count:
+                                          matchesReady ? '$approvedCount' : '—',
+                                      color: _AdminDashboardPalette.green,
+                                      tint: _AdminDashboardPalette.greenTint,
+                                      onTap: () => context.push(
+                                          '/admin/lost-found/approved-matches'),
+                                    ),
+                                  ],
+                                ),
+                                if (workflowError != null) ...[
+                                  const SizedBox(height: 12),
+                                  _AdminDashboardError(
+                                    message: workflowError is AuthFailure
+                                        ? workflowError.message
+                                        : 'Could not load workflow data.',
+                                  ),
+                                ],
+                              ],
+                            );
+                          },
+                        );
+                      },
+                    ),
+                    const _AdminDashboardSectionHeader(
+                      'User Analytics',
+                      fontSize: 13,
+                      letterSpacing: 1.1,
+                    ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: _AdminAnalyticsCard(
+                            icon: Icons.people_alt_outlined,
+                            value: appState.accountStatsReady
+                                ? '${appState.totalAccounts}'
+                                : '—',
+                            title: 'Total Accounts',
+                            subtitle: 'All platform users',
+                            accent: _AdminDashboardPalette.blue,
+                            tint: _AdminDashboardPalette.blueTint,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _AdminAnalyticsCard(
+                            icon: Icons.school_outlined,
+                            value: appState.accountStatsReady
+                                ? '${appState.totalStudentAccounts}'
+                                : '—',
+                            title: 'Students',
+                            subtitle: 'Registered students',
+                            accent: _AdminDashboardPalette.green,
+                            tint: _AdminDashboardPalette.greenTint,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _AdminAnalyticsCard(
+                            icon: Icons.shield_outlined,
+                            value: appState.accountStatsReady
+                                ? '${appState.totalAdminAccounts}'
+                                : '—',
+                            title: 'Admins',
+                            subtitle: 'System administrators',
+                            accent: _AdminDashboardPalette.purple,
+                            tint: _AdminDashboardPalette.purpleTint,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (appState.accountStatsError != null) ...[
+                      const SizedBox(height: 12),
+                      _AdminDashboardError(
+                        message: appState.accountStatsError is AuthFailure
+                            ? (appState.accountStatsError as AuthFailure)
+                                .message
+                            : 'Could not load account analytics.',
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _AdminModeBanner extends StatelessWidget {
+  const _AdminModeBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: _AdminDashboardPalette.goldTint.withValues(alpha: .34),
+        borderRadius: BorderRadius.circular(18),
+        border:
+            Border.all(color: const Color(0xFFFFC96C).withValues(alpha: .82)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: _AdminDashboardPalette.goldTint,
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: const Icon(Icons.shield_outlined,
+                color: _AdminDashboardPalette.gold, size: 25),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'ADMIN MODE',
+                  style: TextStyle(
+                    color: _AdminDashboardPalette.gold,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: .2,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'You have full access to manage the platform.',
+                  style: TextStyle(
+                    color: _AdminDashboardPalette.muted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.chevron_right_rounded,
+              color: _AdminDashboardPalette.gold, size: 25),
+        ],
+      ),
+    );
+  }
+}
+
+class _AdminMetricCard extends StatelessWidget {
+  final IconData icon;
+  final String value;
+  final String title;
+  final String subtitle;
+  final Color accent;
+  final Color tint;
+
+  const _AdminMetricCard({
+    required this.icon,
+    required this.value,
+    required this.title,
+    required this.subtitle,
+    required this.accent,
+    required this.tint,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 16, 12, 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(21),
+        border: Border.all(color: accent.withValues(alpha: .11)),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: .07),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: tint,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: accent, size: 24),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            value,
+            style: TextStyle(
+              color: accent,
+              fontSize: 31,
+              height: .98,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -.6,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: _AdminDashboardPalette.ink,
+              fontSize: 13,
+              height: 1.15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: _AdminDashboardPalette.muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AdminDashboardSectionHeader extends StatelessWidget {
+  final String label;
+  final VoidCallback? onViewAll;
+  final double fontSize;
+  final double letterSpacing;
+
+  const _AdminDashboardSectionHeader(
+    this.label, {
+    this.onViewAll,
+    this.fontSize = 12,
+    this.letterSpacing = 1.15,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 22, bottom: 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label.toUpperCase(),
+              style: TextStyle(
+                color: _AdminDashboardPalette.muted,
+                fontWeight: FontWeight.w700,
+                fontSize: fontSize,
+                letterSpacing: letterSpacing,
+              ),
+            ),
+          ),
+          if (onViewAll != null)
+            GestureDetector(
+              onTap: onViewAll,
+              behavior: HitTestBehavior.opaque,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'View All',
+                      style: TextStyle(
+                        color: _AdminDashboardPalette.pink,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SizedBox(width: 4),
+                    Icon(Icons.arrow_forward_ios_rounded,
+                        color: _AdminDashboardPalette.pink, size: 13),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AdminActionRowData {
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final bool emphasis;
+  final VoidCallback onTap;
+
+  const _AdminActionRowData({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.onTap,
+    this.emphasis = false,
+  });
+}
+
+class _AdminActionGroup extends StatelessWidget {
+  final List<_AdminActionRowData> rows;
+
+  const _AdminActionGroup({required this.rows});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: _AdminDashboardPalette.hairline),
+        boxShadow: [
+          BoxShadow(
+            color: _AdminDashboardPalette.ink.withValues(alpha: .05),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          for (var i = 0; i < rows.length; i++) ...[
+            _AdminActionRow(data: rows[i]),
+            if (i < rows.length - 1) const SizedBox(height: 8),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AdminActionRow extends StatelessWidget {
+  final _AdminActionRowData data;
+
+  const _AdminActionRow({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final foreground =
+        data.emphasis ? Colors.white : _AdminDashboardPalette.ink;
+    final secondary = data.emphasis
+        ? Colors.white.withValues(alpha: .82)
+        : _AdminDashboardPalette.muted;
+    final iconColor =
+        data.emphasis ? Colors.white : _AdminDashboardPalette.pink;
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(17),
+      child: InkWell(
+        onTap: data.onTap,
+        borderRadius: BorderRadius.circular(17),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: data.emphasis ? null : Colors.white,
+            gradient: data.emphasis
+                ? const LinearGradient(
+                    colors: [
+                      _AdminDashboardPalette.pinkBright,
+                      _AdminDashboardPalette.pink,
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  )
+                : null,
+            borderRadius: BorderRadius.circular(17),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: data.emphasis
+                      ? Colors.white.withValues(alpha: .18)
+                      : _AdminDashboardPalette.pinkTint,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(data.icon, color: iconColor, size: 24),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      data.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: foreground,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      data.subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: secondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(Icons.chevron_right_rounded,
+                  color: data.emphasis
+                      ? Colors.white
+                      : _AdminDashboardPalette.muted,
+                  size: 24),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AdminWorkflowRowData {
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final String count;
+  final Color color;
+  final Color tint;
+  final VoidCallback onTap;
+
+  const _AdminWorkflowRowData({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.count,
+    required this.color,
+    required this.tint,
+    required this.onTap,
+  });
+}
+
+class _AdminWorkflowCard extends StatelessWidget {
+  final List<_AdminWorkflowRowData> rows;
+
+  const _AdminWorkflowCard({required this.rows});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: _AdminDashboardPalette.hairline),
+        boxShadow: [
+          BoxShadow(
+            color: _AdminDashboardPalette.ink.withValues(alpha: .05),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          for (var i = 0; i < rows.length; i++) ...[
+            _AdminWorkflowRow(data: rows[i]),
+            if (i < rows.length - 1)
+              const Divider(
+                height: 1,
+                indent: 56,
+                color: _AdminDashboardPalette.hairline,
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AdminWorkflowRow extends StatelessWidget {
+  final _AdminWorkflowRowData data;
+
+  const _AdminWorkflowRow({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: data.onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 11),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: data.tint,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(data.icon, color: data.color, size: 25),
+              ),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      data.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _AdminDashboardPalette.ink,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      data.subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _AdminDashboardPalette.muted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 9),
+              Container(
+                constraints: const BoxConstraints(minWidth: 40),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: data.tint,
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Text(
+                  data.count,
+                  style: TextStyle(
+                    color: data.color,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 9),
+              const Icon(Icons.chevron_right_rounded,
+                  color: _AdminDashboardPalette.muted, size: 24),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AdminAnalyticsCard extends StatelessWidget {
+  final IconData icon;
+  final String value;
+  final String title;
+  final String subtitle;
+  final Color accent;
+  final Color tint;
+
+  const _AdminAnalyticsCard({
+    required this.icon,
+    required this.value,
+    required this.title,
+    required this.subtitle,
+    required this.accent,
+    required this.tint,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(11, 12, 9, 11),
+      decoration: BoxDecoration(
+        color: tint.withValues(alpha: .22),
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(color: accent.withValues(alpha: .22)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 37,
+            height: 37,
+            decoration: BoxDecoration(
+              color: tint,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: accent, size: 21),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              color: accent,
+              fontSize: 28,
+              height: .95,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: _AdminDashboardPalette.ink,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: _AdminDashboardPalette.muted,
+              fontSize: 10.5,
+              height: 1.2,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AdminDashboardError extends StatelessWidget {
+  final String message;
+
+  const _AdminDashboardError({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _AdminDashboardPalette.pinkTint.withValues(alpha: .45),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color: _AdminDashboardPalette.pink.withValues(alpha: .14)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off_rounded,
+              color: _AdminDashboardPalette.pink, size: 21),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: const TextStyle(
+                color: _AdminDashboardPalette.muted,
+                fontSize: 12,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AdminDashboardDrawer extends StatelessWidget {
+  const _AdminDashboardDrawer();
+
+  @override
+  Widget build(BuildContext context) {
+    void open(String route) {
+      Navigator.of(context).pop();
+      context.push(route);
+    }
+
+    return Drawer(
+      backgroundColor: _AdminDashboardPalette.background,
+      child: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.school_rounded,
+                    color: _AdminDashboardPalette.pink, size: 27),
+                SizedBox(width: 10),
+                Text(
+                  'Admin tools',
+                  style: TextStyle(
+                    color: _AdminDashboardPalette.ink,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 22),
+            _AdminDrawerItem(
+              icon: Icons.dashboard_outlined,
+              label: 'Dashboard',
+              onTap: () => open('/lost-found'),
+            ),
+            _AdminDrawerItem(
+              icon: Icons.description_outlined,
+              label: 'Lost Reports',
+              onTap: () => open('/admin/lost-found/lost-list'),
+            ),
+            _AdminDrawerItem(
+              icon: Icons.find_in_page_outlined,
+              label: 'Found Reports',
+              onTap: () => open('/admin/lost-found/found-list'),
+            ),
+            _AdminDrawerItem(
+              icon: Icons.account_balance_outlined,
+              label: 'Inventory Office',
+              onTap: () => open('/admin/lost-found/inventory'),
+            ),
+            _AdminDrawerItem(
+              icon: Icons.group_add_outlined,
+              label: 'Student Registrations',
+              onTap: () => open('/admin/registrations'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AdminDrawerItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _AdminDrawerItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: ListTile(
+        onTap: onTap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        leading: Icon(icon, color: _AdminDashboardPalette.pink, size: 22),
+        title: Text(
+          label,
+          style: const TextStyle(
+            color: _AdminDashboardPalette.ink,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        trailing: const Icon(Icons.chevron_right_rounded,
+            color: _AdminDashboardPalette.muted),
+      ),
+    );
+  }
+}
+
 class _AdminSectionSwitcher extends StatelessWidget {
   final int activeCount;
   final int notifiedCount;
@@ -4815,13 +5956,11 @@ class _AdminLostDetailScreenState extends State<AdminLostDetailScreen> {
   /// Held in a field so rebuilds do not re-subscribe to Firestore. Same shape
   /// as the student [LostDetailScreen] — only the body differs.
   late final Stream<Item?> _report;
-  late final Stream<List<LfMatch>> _matches;
 
   @override
   void initState() {
     super.initState();
     _report = context.read<AppState>().watchReport(widget.id);
-    _matches = context.read<AppState>().watchAllMatches();
   }
 
   @override
@@ -4905,28 +6044,6 @@ class _AdminLostDetailScreenState extends State<AdminLostDetailScreen> {
                     _PhotoStrip(urls: r.imageUrls),
                   ]))),
           const SizedBox(height: 10),
-          // Workflow A — match this lost report against an inventory item.
-          if (r.status == ItemStatus.active ||
-              r.status == ItemStatus.matchedPending)
-            _findMatchSection(context, r),
-          // Matches already linked to this lost report.
-          StreamBuilder<List<LfMatch>>(
-            stream: _matches,
-            builder: (context, snap) {
-              final all = snap.data ?? const <LfMatch>[];
-              final mine =
-                  all.where((m) => m.lostReportId == widget.id).toList();
-              if (mine.isEmpty) return const SizedBox.shrink();
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SectionLabel('Matches'),
-                  ...mine.map((m) => _matchCard(context, m)),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 10),
           // Closure request approval — the report is in Requested Close.
           if (r.status == ItemStatus.requestedClose)
             GradientButton(
@@ -4940,49 +6057,6 @@ class _AdminLostDetailScreenState extends State<AdminLostDetailScreen> {
         ],
       ),
     );
-  }
-
-  Widget _findMatchSection(BuildContext context, Item r) {
-    return Column(children: [
-      const NoticeBox(
-        message:
-            'Search the Inventory Office for an item that may match this lost report, then notify the student to come and verify it.',
-        icon: Icons.compare_arrows_rounded,
-      ),
-      GradientButton(
-          label: 'Find Match', onPressed: () => _pickInventoryItem(context, r)),
-    ]);
-  }
-
-  Future<void> _pickInventoryItem(BuildContext context, Item r) async {
-    final item = await showModalBottomSheet<InventoryItem>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (sheetCtx) => const _InventoryPickerSheet(),
-    );
-    if (item == null || !mounted) return;
-    final appState = context.read<AppState>();
-    try {
-      await appState.createMatch(LfMatch(
-        lostReportId: r.id,
-        inventoryItemId: item.id,
-        lostOwnerUid: r.reportedByUid,
-        lostOwnerStudentId: r.reportedByStudentId,
-        status: MatchStatus.proposed,
-        notes: '${item.title} ↔ ${r.title}',
-      ));
-      await appState.reserveInventoryItem(item.id);
-      if (!mounted) return;
-      _toast(context, 'Match created. Notify the student to send it.');
-    } on AuthFailure catch (e) {
-      if (!mounted) return;
-      _toast(context, e.message);
-    } catch (_) {
-      if (!mounted) return;
-      _toast(context, 'Could not create the match. Try again.');
-    }
   }
 
   Future<void> _confirmResolve(BuildContext context) async {
@@ -5761,12 +6835,14 @@ class _AdminInventoryDetailScreenState
     extends State<AdminInventoryDetailScreen> {
   late final Stream<InventoryItem?> _item;
   late final Stream<List<LfMatch>> _matches;
+  late final Stream<List<Item>> _reports;
 
   @override
   void initState() {
     super.initState();
     _item = context.read<AppState>().watchInventoryItem(widget.id);
     _matches = context.read<AppState>().watchAllMatches();
+    _reports = context.read<AppState>().watchAdminAllReports();
   }
 
   @override
@@ -5794,13 +6870,24 @@ class _AdminInventoryDetailScreenState
                       ? const EmptyState(
                           title: 'Item Not Found',
                           icon: Icons.search_off_rounded)
-                      : _inventoryDetailBody(context, item),
+                      : StreamBuilder<List<Item>>(
+                          stream: _reports,
+                          builder: (context, reportsSnap) {
+                            final reports = reportsSnap.data ?? const <Item>[];
+                            final reportMap = <String, Item>{
+                              for (final r in reports) r.id: r
+                            };
+                            return _inventoryDetailBody(
+                                context, item, reportMap);
+                          },
+                        ),
         );
       },
     );
   }
 
-  Widget _inventoryDetailBody(BuildContext context, InventoryItem item) {
+  Widget _inventoryDetailBody(
+      BuildContext context, InventoryItem item, Map<String, Item> reportMap) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -5812,13 +6899,26 @@ class _AdminInventoryDetailScreenState
               child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: Column(children: [
-                    Row(children: [
-                      Expanded(
-                          child: Text(item.title,
-                              style: const TextStyle(
-                                  fontSize: 16, fontWeight: FontWeight.w800))),
-                      StatusBadge(item.status.wireValue),
-                    ]),
+                    // Photo gallery — at the top of the card.
+                    _InventoryPhotoGallery(urls: item.imageUrls),
+                    const SizedBox(height: 12),
+                    // Title row with badge.
+                    Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        const Text('Item Title',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: AppTheme.textMuted)),
+                        StatusBadge(item.status.wireValue),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(item.title,
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w800)),
                     const Divider(height: 18),
                     InfoRow(label: 'Category', value: item.category),
                     InfoRow(label: 'Finder ID', value: item.finderStudentId),
@@ -5831,30 +6931,43 @@ class _AdminInventoryDetailScreenState
                       InfoRow(
                           label: 'Matched Lost Report',
                           value: item.matchedLostReportId!),
-                    const SizedBox(height: 8),
-                    Text(item.description,
-                        style: const TextStyle(
-                            fontSize: 13,
-                            color: AppTheme.textSecondary,
-                            height: 1.55)),
+                    if (item.description.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      const Text('Description',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.textMuted)),
+                      const SizedBox(height: 6),
+                      Text(item.description,
+                          style: const TextStyle(
+                              fontSize: 13,
+                              color: AppTheme.textSecondary,
+                              height: 1.55)),
+                    ],
                   ]))),
-          const SizedBox(height: 10),
-          if (!item.isReturned) _createMatchSection(context, item),
-          // Matches already linked to this inventory item.
+          // Match actions — driven by existing matches for this item.
           StreamBuilder<List<LfMatch>>(
             stream: _matches,
             builder: (context, snap) {
               final all = snap.data ?? const <LfMatch>[];
               final mine =
                   all.where((m) => m.inventoryItemId == item.id).toList();
-              if (mine.isEmpty) return const SizedBox.shrink();
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+              final hasActive = mine.any((m) =>
+                  m.status == MatchStatus.proposed ||
+                  m.status == MatchStatus.approved);
+              // Item is returned — nothing to show.
+              if (item.isReturned) return const SizedBox.shrink();
+              return Column(children: [
+                // Show Create Match only when no active match exists.
+                if (!hasActive) _createMatchSection(context, item),
+                // Show match history when any matches exist.
+                if (mine.isNotEmpty) ...[
                   const SectionLabel('Matches'),
-                  ...mine.map((m) => _matchCard(context, m)),
+                  ...mine.map((m) => _matchCard(context, m,
+                      lostTitle: reportMap[m.lostReportId]?.title)),
                 ],
-              );
+              ]);
             },
           ),
         ],
@@ -5997,8 +7110,7 @@ class _AiSection extends StatelessWidget {
               Expanded(
                 child: Text(
                   'Could not load AI matches.',
-                  style:
-                      TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                 ),
               ),
             ]),
@@ -6020,8 +7132,7 @@ class _AiSection extends StatelessWidget {
               Expanded(
                 child: Text(
                   'No AI matches yet',
-                  style:
-                      TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                 ),
               ),
             ]),
@@ -6035,8 +7146,8 @@ class _AiSection extends StatelessWidget {
             final m = data[i - 1];
             return _MatchRow(
               match: m,
-              lostTitle: reportMap[m.lostReportId]?.title ?? m.lostReportId,
-              foundTitle: invMap[m.inventoryItemId]?.title ?? m.inventoryItemId,
+              lostTitle: reportMap[m.lostReportId]?.title ?? 'Lost Report',
+              foundTitle: invMap[m.inventoryItemId]?.title ?? 'Inventory Item',
               category: reportMap[m.lostReportId]?.category,
               location: reportMap[m.lostReportId]?.whereLost,
               ownerLabel: _ownerLabel(reportMap[m.lostReportId]?.reportedByName,
@@ -6045,6 +7156,113 @@ class _AiSection extends StatelessWidget {
           },
         );
       },
+    );
+  }
+}
+
+// ── Screen: Approved Matches (admin-only) ──────────────────────────
+
+class ApprovedMatchesScreen extends StatefulWidget {
+  const ApprovedMatchesScreen({super.key});
+  @override
+  State<ApprovedMatchesScreen> createState() => _ApprovedMatchesScreenState();
+}
+
+class _ApprovedMatchesScreenState extends State<ApprovedMatchesScreen> {
+  late final Stream<List<LfMatch>> _matches;
+  late final Stream<List<Item>> _reports;
+  late final Stream<List<InventoryItem>> _inventory;
+
+  @override
+  void initState() {
+    super.initState();
+    final appState = context.read<AppState>();
+    _matches = appState.watchApprovedMatches();
+    _reports = appState.watchAdminAllReports();
+    _inventory = appState.watchAllInventoryItems();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: _gradientAppBar('Approved Matches', context),
+      body: StreamBuilder<List<Item>>(
+        stream: _reports,
+        builder: (ctx, reportsSnap) {
+          final reports = reportsSnap.data ?? const <Item>[];
+          final reportMap = <String, Item>{for (final r in reports) r.id: r};
+
+          return StreamBuilder<List<InventoryItem>>(
+            stream: _inventory,
+            builder: (ctx, invSnap) {
+              final inventory = invSnap.data ?? const <InventoryItem>[];
+              final invMap = <String, InventoryItem>{
+                for (final i in inventory) i.id: i
+              };
+
+              return StreamBuilder<List<LfMatch>>(
+                stream: _matches,
+                builder: (context, snap) {
+                  if (snap.hasError) {
+                    return const Padding(
+                      padding:
+                          EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      child: Row(children: [
+                        Icon(Icons.check_circle_outline,
+                            size: 18, color: AppTheme.textSecondary),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text('Could not load approved matches.',
+                              style: TextStyle(
+                                  color: AppTheme.textSecondary, fontSize: 13)),
+                        ),
+                      ]),
+                    );
+                  }
+                  final data = snap.data ?? const <LfMatch>[];
+                  if (data.isEmpty) {
+                    return const Padding(
+                      padding:
+                          EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      child: Row(children: [
+                        Icon(Icons.check_circle_outline,
+                            size: 18, color: AppTheme.textSecondary),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text('No approved matches yet.',
+                              style: TextStyle(
+                                  color: AppTheme.textSecondary, fontSize: 13)),
+                        ),
+                      ]),
+                    );
+                  }
+                  return ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(0, 8, 0, 16),
+                    itemCount: data.length + 1,
+                    itemBuilder: (ctx, i) {
+                      if (i == 0)
+                        return const Divider(indent: 16, endIndent: 16);
+                      final m = data[i - 1];
+                      return _MatchRow(
+                        match: m,
+                        lostTitle:
+                            reportMap[m.lostReportId]?.title ?? 'Lost Report',
+                        foundTitle: invMap[m.inventoryItemId]?.title ??
+                            'Inventory Item',
+                        category: reportMap[m.lostReportId]?.category,
+                        location: reportMap[m.lostReportId]?.whereLost,
+                        ownerLabel: _ownerLabel(
+                            reportMap[m.lostReportId]?.reportedByName,
+                            m.lostOwnerStudentId),
+                      );
+                    },
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }
@@ -6702,9 +7920,156 @@ class _NoImageNotice extends StatelessWidget {
   }
 }
 
+// ── Inventory photo gallery ───────────────────────────────────────
+
+/// Photo gallery for the Admin Inventory Item detail screen. Shows larger
+/// tappable thumbnails that open a full-screen viewer with pinch-to-zoom.
+/// Falls back to [_NoImageNotice] when there are no photos.
+class _InventoryPhotoGallery extends StatelessWidget {
+  final List<String> urls;
+  const _InventoryPhotoGallery({required this.urls});
+
+  static const double _photoHeight = 180;
+
+  @override
+  Widget build(BuildContext context) {
+    if (urls.isEmpty) return const _NoImageNotice();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Photos',
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppTheme.textMuted)),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: _photoHeight,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: urls.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 10),
+            itemBuilder: (context, i) => GestureDetector(
+              onTap: () => _showViewer(context, i),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  width: _photoWidth(context),
+                  height: _photoHeight,
+                  child: _image(urls[i]),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  double _photoWidth(BuildContext context) {
+    final screen = MediaQuery.of(context).size.width;
+    // Card has 16px padding on each side, plus 16px screen padding.
+    final available = screen - 64;
+    return available < 240 ? available : 240;
+  }
+
+  Widget _image(String url) => Image.network(
+        url,
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, progress) =>
+            progress == null ? child : _placeholder(),
+        errorBuilder: (context, error, stack) => _placeholder(),
+      );
+
+  Widget _placeholder() => Container(
+        color: const Color(0xFFF0F2F5),
+        child: const Center(
+          child: Icon(Icons.image_rounded, color: AppTheme.textMuted, size: 32),
+        ),
+      );
+
+  void _showViewer(BuildContext context, int initialIndex) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => _PhotoViewerDialog(
+        urls: urls,
+        initialIndex: initialIndex,
+      ),
+      fullscreenDialog: true,
+    ));
+  }
+}
+
+/// Full-screen photo viewer with pinch-to-zoom and swipe navigation.
+class _PhotoViewerDialog extends StatefulWidget {
+  final List<String> urls;
+  final int initialIndex;
+  const _PhotoViewerDialog({required this.urls, required this.initialIndex});
+
+  @override
+  State<_PhotoViewerDialog> createState() => _PhotoViewerDialogState();
+}
+
+class _PhotoViewerDialogState extends State<_PhotoViewerDialog> {
+  late final PageController _controller;
+  late int _index;
+
+  @override
+  void initState() {
+    super.initState();
+    _index = widget.initialIndex;
+    _controller = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text('${_index + 1} / ${widget.urls.length}',
+            style: const TextStyle(fontSize: 14)),
+        leading: IconButton(
+          icon: const Icon(Icons.close_rounded),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
+      body: PageView.builder(
+        controller: _controller,
+        itemCount: widget.urls.length,
+        onPageChanged: (i) => setState(() => _index = i),
+        itemBuilder: (_, i) => InteractiveViewer(
+          child: Center(
+            child: Image.network(
+              widget.urls[i],
+              fit: BoxFit.contain,
+              loadingBuilder: (context, child, progress) => progress == null
+                  ? child
+                  : const Center(
+                      child: CircularProgressIndicator(color: Colors.white54),
+                    ),
+              errorBuilder: (context, error, stack) => const Center(
+                child: Icon(Icons.broken_image_rounded,
+                    color: Colors.white38, size: 48),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// A card wrapping one match plus its admin actions, shared by the inventory
 /// detail and match detail screens.
-Widget _matchCard(BuildContext context, LfMatch m) {
+Widget _matchCard(BuildContext context, LfMatch m, {String? lostTitle}) {
   final isAi = m.isAiMatch;
   final score = m.overallScore ?? 0;
   final scoreColor = isAi
@@ -6715,6 +8080,9 @@ Widget _matchCard(BuildContext context, LfMatch m) {
               : AppTheme.textMuted)
       : AppTheme.textMuted;
 
+  final displayTitle =
+      (lostTitle != null && lostTitle.isNotEmpty) ? lostTitle : 'Lost Report';
+
   return Card(
     child: Padding(
       padding: const EdgeInsets.all(16),
@@ -6723,9 +8091,21 @@ Widget _matchCard(BuildContext context, LfMatch m) {
         children: [
           Row(children: [
             Expanded(
-                child: Text('Lost ${m.lostReportId}',
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w800))),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  const Text('Lost Item',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.textMuted)),
+                  const SizedBox(height: 2),
+                  Text(displayTitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w800)),
+                ])),
             if (isAi) ...[
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -6763,18 +8143,23 @@ Widget _matchCard(BuildContext context, LfMatch m) {
           ],
           if (isAi) ...[
             const SizedBox(height: 4),
-            Row(children: [
-              if (m.visualScore != null) _miniChip('Visual', m.visualScore!),
-              if (m.titleScore != null) _miniChip('Title', m.titleScore!),
-              if (m.descriptionScore != null)
-                _miniChip('Desc', m.descriptionScore!),
-              if (m.categoryScore != null)
-                _miniChip('Category', m.categoryScore!),
-              if (m.locationScore != null)
-                _miniChip('Location', m.locationScore!),
-              if (m.timeScore != null) _miniChip('Time', m.timeScore!),
-              if (m.confidence != null) _miniChip('Confidence', m.confidence!),
-            ]),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                if (m.visualScore != null) _miniChip('Visual', m.visualScore!),
+                if (m.titleScore != null) _miniChip('Title', m.titleScore!),
+                if (m.descriptionScore != null)
+                  _miniChip('Desc', m.descriptionScore!),
+                if (m.categoryScore != null)
+                  _miniChip('Category', m.categoryScore!),
+                if (m.locationScore != null)
+                  _miniChip('Location', m.locationScore!),
+                if (m.timeScore != null) _miniChip('Time', m.timeScore!),
+                if (m.confidence != null)
+                  _miniChip('Confidence', m.confidence!),
+              ],
+            ),
           ],
           if (!isAi) ...[
             const SizedBox(height: 6),
@@ -7947,7 +9332,16 @@ class _StatusBanner extends StatelessWidget {
 class _QrScanSection extends StatefulWidget {
   final String instruction;
   final VoidCallback onSuccess;
-  const _QrScanSection({required this.instruction, required this.onSuccess});
+
+  /// For return QRs (Workflow 3): the lost report the student is scanning
+  /// from. The QR's stored `lostReportId` must match, preventing cross-report
+  /// scanning. Pass `null` for handover scans (Workflow 2).
+  final String? lostReportId;
+  const _QrScanSection({
+    required this.instruction,
+    required this.onSuccess,
+    this.lostReportId,
+  });
 
   @override
   State<_QrScanSection> createState() => _QrScanSectionState();
@@ -7974,7 +9368,8 @@ class _QrScanSectionState extends State<_QrScanSection> {
     final appState = context.read<AppState>();
     setState(() => _busy = true);
     try {
-      final outcome = await appState.scanQrCode(code);
+      final outcome =
+          await appState.scanQrCode(code, lostReportId: widget.lostReportId);
       if (!mounted) return;
       setState(() => _busy = false);
       if (outcome.success) {

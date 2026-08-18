@@ -173,6 +173,18 @@ class LfWorkflowService {
     return rows;
   }
 
+  /// Live feed of approved matches only (status == 'Approved').
+  ///
+  /// Used by the Admin "Approved Matches" section. Sorted newest-first.
+  Stream<List<LfMatch>> watchApprovedMatches() {
+    if (!isAvailable) return Stream.value(const <LfMatch>[]);
+    return _matches
+        .where('status', isEqualTo: MatchStatus.approved.wireValue)
+        .snapshots()
+        .map(_sortedMatches)
+        .handleError(_translateError);
+  }
+
   /// Live view of a single match by ID.
   Stream<LfMatch?> watchMatch(String id) {
     if (!isAvailable || id.isEmpty) return Stream.value(null);
@@ -405,6 +417,15 @@ class LfWorkflowService {
           'updatedAt': FieldValue.serverTimestamp(),
         });
 
+        // Mark the inventory item as waiting for collection — the student
+        // has been notified and the item is no longer freely matchable.
+        if (invDoc.exists) {
+          tx.update(_inventory.doc(match.inventoryItemId), {
+            'status': InventoryStatus.waitingForCollection.wireValue,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+
         final notification = LfNotification(
           studentId: match.lostOwnerStudentId,
           title: 'Possible match found',
@@ -414,7 +435,12 @@ class LfWorkflowService {
           type: 'match',
           relatedReportId: match.lostReportId,
         );
-        final notifRef = await _notifications.add(notification.toCreateMap());
+        // Create the notification as part of the same atomic transaction —
+        // using tx.set() ensures the notification is committed only if the
+        // match approval and inventory update also succeed. A non-transactional
+        // _notifications.add() here would fail inside the transaction callback.
+        final notifRef = _notifications.doc();
+        tx.set(notifRef, notification.toCreateMap());
         return notifRef.id;
       });
       return notificationId;
@@ -600,12 +626,19 @@ class LfWorkflowService {
   ///     inventory record is created, and the code moves straight to
   ///     `Confirmed` (Workflow 2).
   ///
+  /// For return codes, [lostReportId] is the ID of the lost report the
+  /// student is scanning from. The QR's stored `lostReportId` must match —
+  /// this prevents a student with multiple approved matches from scanning
+  /// a QR issued for a *different* lost report (e.g. scanning the Book's
+  /// collection code while viewing the Pen's lost report).
+  ///
   /// The Firestore rules independently enforce intended-student, single-use,
   /// expiry and the cross-document linkage — the inspection here only chooses
   /// the right message and outcome.
   Future<QrScanOutcome> scanQr({
     required String token,
     required String studentUid,
+    String? lostReportId,
     DateTime? now,
   }) async {
     final txn = await findQrByToken(token, studentUid);
@@ -634,6 +667,16 @@ class LfWorkflowService {
 
     if (txn.isHandover) {
       return _completeHandoverByScan(txn, studentUid, current);
+    }
+
+    // Return QR — the QR must be for the exact lost report the student is
+    // scanning from. This blocks cross-report scanning when a student has
+    // multiple approved matches (e.g. Pen and Book both approved, scanning
+    // the Book's code from the Pen's screen).
+    if (lostReportId != null && lostReportId.isNotEmpty &&
+        txn.lostReportId != lostReportId) {
+      return const QrScanOutcome.failure(
+          'This QR code is for a different item. Please scan the code for the correct item.');
     }
 
     try {
@@ -860,17 +903,25 @@ class LfWorkflowService {
             .get(_itemsDoc(invDoc.data()?['foundReportId']?.toString() ?? ''));
         final foundReportId = invDoc.data()?['foundReportId']?.toString() ?? '';
 
-        // The Flutter transaction API only fetches documents by reference,
-        // so the approved match is located by query before the transaction
-        // and re-read (and re-verified) inside it.
-        final matchesSnapshot = await _matches
-            .where('lostReportId', isEqualTo: txn.lostReportId)
-            .where('inventoryItemId', isEqualTo: txn.inventoryItemId)
-            .limit(1)
-            .get();
-        final matchRef = matchesSnapshot.docs.isNotEmpty
-            ? matchesSnapshot.docs.first.reference
-            : null;
+        // The QR is bound to the exact approved match via matchId. Read it
+        // directly; fall back to the lostReportId + inventoryItemId query
+        // only for legacy QR codes issued before matchId was stored.
+        DocumentReference<Map<String, dynamic>>? matchRef;
+        if (txn.matchId.isNotEmpty) {
+          final matchDoc = await tx.get(_matches.doc(txn.matchId));
+          if (matchDoc.exists) {
+            matchRef = matchDoc.reference;
+          }
+        } else {
+          final matchesSnapshot = await _matches
+              .where('lostReportId', isEqualTo: txn.lostReportId)
+              .where('inventoryItemId', isEqualTo: txn.inventoryItemId)
+              .limit(1)
+              .get();
+          if (matchesSnapshot.docs.isNotEmpty) {
+            matchRef = matchesSnapshot.docs.first.reference;
+          }
+        }
 
         final now = DateTime.now();
         tx.update(_inventory.doc(txn.inventoryItemId), {
@@ -956,6 +1007,28 @@ class LfWorkflowService {
     _assertAvailable();
     try {
       await _notifications.doc(id).update(LfNotification.readMap());
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
+  /// Marks every unread notification owned by [studentId] as read in a single
+  /// batch. The Firestore rules allow only the owner to update, so the batch
+  /// contains only the caller's own documents.
+  Future<void> markAllRead(String studentId) async {
+    _assertAvailable();
+    if (studentId.isEmpty) return;
+    try {
+      final snap = await _notifications
+          .where('studentId', isEqualTo: studentId)
+          .where('read', isEqualTo: false)
+          .get();
+      if (snap.docs.isEmpty) return;
+      final batch = _dbOrNull!.batch();
+      for (final doc in snap.docs) {
+        batch.update(doc.reference, LfNotification.readMap());
+      }
+      await batch.commit();
     } on FirebaseException catch (e) {
       throw AuthFailure.fromCode(e.code);
     }

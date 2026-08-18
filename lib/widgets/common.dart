@@ -19,6 +19,7 @@ class StatusBadge extends StatelessWidget {
     'Triaged':                [Color(0xFF8A5F0A), Color(0x28F8D49B)],
     'Assigned':               [Color(0xFF8B1428), Color(0x1AC41E3A)],
     'In Inventory':           [Color(0xFF7A5B00), Color(0x28F8D49B)],
+    'Waiting for Collection': [Color(0xFF1565C0), Color(0x181565C0)],
     'Pending Pickup':         [Color(0xFF8A5F0A), Color(0x28F8D49B)],
     'Release Requested':      [Color(0xFF1565C0), Color(0x181565C0)],
     'Overdue':                [Color(0xFFB03030), Color(0x18D65E5E)],

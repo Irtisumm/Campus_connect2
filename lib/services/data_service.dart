@@ -1165,26 +1165,6 @@ class DataService extends ChangeNotifier {
     _addNotification(message, type);
   }
 
-  void markNotificationAsRead(String id) {
-    final index = notifications.indexWhere((n) => n.id == id);
-    if (index != -1) {
-      notifications[index] = mockdata.Notification(
-        id: notifications[index].id,
-        type: notifications[index].type,
-        visibility: notifications[index].visibility,
-        text: notifications[index].text,
-        detailText: notifications[index].detailText,
-        time: notifications[index].time,
-        read: true,
-        relatedScreen: notifications[index].relatedScreen,
-        relatedId: notifications[index].relatedId,
-        targetUserId: notifications[index].targetUserId,
-        source: notifications[index].source,
-      );
-      notifyListeners();
-    }
-  }
-
   // ── LOCKERS ──────────────────────────────────────────────────────
   void bookLocker(String lockerId, {int durationMonths = 6}) {
     final lockerIndex = lockers.indexWhere((l) => l.id == lockerId);
@@ -1861,8 +1841,6 @@ class DataService extends ChangeNotifier {
     notifyListeners();
   }
 
-  int get unreadNotificationCount => notifications.where((n) => !n.read).length;
-
   // ── SMART MATCHING ENGINE: Auto-match found items with lost reports ──
   void _checkForMatches(FoundReport foundReport) {
     for (int i = 0; i < myLostReports.length; i++) {
@@ -1948,52 +1926,6 @@ class DataService extends ChangeNotifier {
       .split(RegExp(r'\s+'))
       .where((w) => w.length > 2 && !stopWords.contains(w))
       .toSet();
-  }
-
-  // ── PERSONALIZED NOTIFICATIONS ──
-  List<mockdata.Notification> getNotificationsForUser(String? userId, bool isAdmin) {
-    return notifications.where((n) {
-      // Public notifications visible to all
-      if (n.type == 'public') return true;
-      // Private notifications: check target user or admin visibility
-      if (n.type == 'private') {
-        if (n.targetUserId != null && n.targetUserId == userId) return true;
-        if (n.visibility == 'admin' && isAdmin) return true;
-        if (n.visibility == 'all') return true;
-      }
-      return false;
-    }).toList();
-  }
-
-  int unreadNotificationCountForUser(String? userId, bool isAdmin) {
-    return getNotificationsForUser(userId, isAdmin).where((n) => !n.read).length;
-  }
-
-  // Filter notifications by source
-  List<mockdata.Notification> getNotificationsBySource(String? userId, bool isAdmin, String source) {
-    return getNotificationsForUser(userId, isAdmin).where((n) => n.source == source).toList();
-  }
-
-  // Mark all as read
-  void markAllNotificationsAsRead() {
-    for (int i = 0; i < notifications.length; i++) {
-      if (!notifications[i].read) {
-        notifications[i] = mockdata.Notification(
-          id: notifications[i].id,
-          type: notifications[i].type,
-          visibility: notifications[i].visibility,
-          text: notifications[i].text,
-          detailText: notifications[i].detailText,
-          time: notifications[i].time,
-          read: true,
-          relatedScreen: notifications[i].relatedScreen,
-          relatedId: notifications[i].relatedId,
-          targetUserId: notifications[i].targetUserId,
-          source: notifications[i].source,
-        );
-      }
-    }
-    notifyListeners();
   }
 
   // ── HANDOVER STEP TRACKING ──

@@ -5,9 +5,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 ///
 /// `Reserved` is set while an admin has linked the item to a lost report via
 /// a match; it is released back to `In Inventory` if the match is rejected.
+/// `Waiting for Collection` is set when the admin approves a match — the item
+/// is waiting for the student to scan the collection QR and the admin to
+/// complete the handover.
 enum InventoryStatus {
   inInventory('In Inventory'),
   reserved('Reserved'),
+  waitingForCollection('Waiting for Collection'),
   returned('Returned');
 
   const InventoryStatus(this.wireValue);

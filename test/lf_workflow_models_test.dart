@@ -106,6 +106,37 @@ void main() {
       final restored = InventoryItem.fromMap('inv1', withTxn.toCreateMap());
       expect(restored.handoverTxnId, 'qr1');
     });
+
+    test('waitingForCollection status wire round-trips', () {
+      expect(InventoryStatus.waitingForCollection.wireValue,
+          'Waiting for Collection');
+      expect(
+          InventoryStatus.fromWire('Waiting for Collection'),
+          InventoryStatus.waitingForCollection);
+      // Unknown wire falls back to inInventory, not waitingForCollection.
+      expect(InventoryStatus.fromWire('Unknown'),
+          InventoryStatus.inInventory);
+
+      final map = InventoryItem(
+        id: 'inv1',
+        foundReportId: 'r1',
+        finderUid: 'uidA',
+        finderStudentId: 'S001',
+        title: 'Phone',
+        category: 'Phone',
+        description: 'desc',
+        status: InventoryStatus.waitingForCollection,
+      ).toUpdateMap();
+      expect(map['status'], 'Waiting for Collection');
+
+      final restored = InventoryItem.fromMap('inv1', {
+        ...map,
+        'createdAt': DateTime.utc(2026, 8, 15),
+        'updatedAt': DateTime.utc(2026, 8, 15),
+      });
+      expect(restored.status, InventoryStatus.waitingForCollection);
+      expect(restored.isReturned, isFalse);
+    });
   });
 
   group('LfMatch', () {

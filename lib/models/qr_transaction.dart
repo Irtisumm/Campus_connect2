@@ -75,6 +75,11 @@ class QrTransaction {
   /// Workflow 3: the inventory item going home.
   final String inventoryItemId;
 
+  /// Workflow 3: the approved match this return QR is bound to. The QR is
+  /// valid only for the exact collection action identified by this match —
+  /// scanning it from a different lost report's screen must be rejected.
+  final String matchId;
+
   final QrStatus status;
   final DateTime? issuedAt;
 
@@ -96,6 +101,7 @@ class QrTransaction {
     this.foundReportId = '',
     this.lostReportId = '',
     this.inventoryItemId = '',
+    this.matchId = '',
     this.status = QrStatus.issued,
     this.issuedAt,
     this.expiresAt,
@@ -121,6 +127,7 @@ class QrTransaction {
     String foundReportId = '',
     String lostReportId = '',
     String inventoryItemId = '',
+    String matchId = '',
     DateTime? now,
   }) {
     final issued = now ?? DateTime.now();
@@ -132,6 +139,7 @@ class QrTransaction {
       foundReportId: foundReportId,
       lostReportId: lostReportId,
       inventoryItemId: inventoryItemId,
+      matchId: matchId,
       status: QrStatus.issued,
       issuedAt: issued,
       expiresAt: issued.add(validityWindow),
@@ -164,6 +172,7 @@ class QrTransaction {
       'foundReportId': foundReportId,
       'lostReportId': lostReportId,
       'inventoryItemId': inventoryItemId,
+      'matchId': matchId,
       'status': status.wireValue,
       'issuedAt': issuedAt == null ? null : Timestamp.fromDate(issuedAt!),
       'expiresAt': expiresAt == null ? null : Timestamp.fromDate(expiresAt!),
@@ -223,6 +232,7 @@ class QrTransaction {
       foundReportId: data['foundReportId']?.toString() ?? '',
       lostReportId: data['lostReportId']?.toString() ?? '',
       inventoryItemId: data['inventoryItemId']?.toString() ?? '',
+      matchId: data['matchId']?.toString() ?? '',
       status: QrStatus.fromWire(data['status']),
       issuedAt: _asDate(data['issuedAt']),
       expiresAt: _asDate(data['expiresAt']),

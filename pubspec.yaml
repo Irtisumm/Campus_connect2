@@ -23,6 +23,8 @@ dependencies:
   firebase_auth: ^6.5.6
   cloud_firestore: ^6.7.1
   firebase_storage: ^13.4.5
+  firebase_messaging: ^16.4.3
+  onesignal_flutter: ^5.2.6
   http: ^1.6.0
   mobile_scanner: ^7.4.0
 

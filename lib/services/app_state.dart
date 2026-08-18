@@ -40,6 +40,8 @@ import 'locker_service.dart';
 import 'locker_pricing.dart';
 import 'lost_found_service.dart';
 import 'payment_service.dart';
+import 'push_service.dart';
+import 'onesignal_service.dart';
 import 'user_service.dart';
 
 // Re-exported so screens keep importing a single file for session types.
@@ -76,6 +78,8 @@ export 'lf_workflow_service.dart' show LfWorkflowService, QrScanOutcome;
 /// This is the only object the widget tree talks to, and the only
 /// `ChangeNotifier` in the auth stack — the Provider graph is unchanged.
 /// No Firebase type crosses this boundary.
+enum AccountStatsLoadStatus { idle, loading, ready, error }
+
 class AppState extends ChangeNotifier {
   final AuthService _auth;
   final UserService _users;
@@ -87,6 +91,8 @@ class AppState extends ChangeNotifier {
   final PaymentService _payments;
   final EventService _eventsService;
   final ElectionService _electionsService;
+  final PushService _pushService;
+  final OneSignalService _oneSignal;
   final CloudinaryService _cloudinary;
   final CloudinaryService _lostFoundCloudinary;
 
@@ -101,6 +107,8 @@ class AppState extends ChangeNotifier {
   UserProfile? _profile;
   ProfileLoadStatus _profileStatus = ProfileLoadStatus.idle;
   AccountCounts _counts = AccountCounts.empty;
+  AccountStatsLoadStatus _accountStatsStatus = AccountStatsLoadStatus.idle;
+  Object? _accountStatsError;
   StreamSubscription<String?>? _authSub;
 
   AppState({
@@ -114,6 +122,8 @@ class AppState extends ChangeNotifier {
     PaymentService? paymentService,
     EventService? eventService,
     ElectionService? electionService,
+    PushService? pushService,
+    OneSignalService? oneSignalService,
     CloudinaryService? cloudinaryService,
     CloudinaryService? lostFoundCloudinaryService,
   })  : _auth = authService ?? AuthService(),
@@ -126,6 +136,8 @@ class AppState extends ChangeNotifier {
         _payments = paymentService ?? PaymentService(),
         _eventsService = eventService ?? EventService(),
         _electionsService = electionService ?? ElectionService(),
+        _pushService = pushService ?? PushService(),
+        _oneSignal = oneSignalService ?? OneSignalService(),
         _cloudinary = cloudinaryService ??
             CloudinaryService(
               cloudName: 'xijxwdly',
@@ -198,10 +210,36 @@ class AppState extends ChangeNotifier {
   /// Students still awaiting approval on the Student Registrations screen.
   int get pendingStudentAccounts => _counts.pendingStudents;
 
+  AccountStatsLoadStatus get accountStatsLoadStatus => _accountStatsStatus;
+  bool get accountStatsReady =>
+      _accountStatsStatus == AccountStatsLoadStatus.ready;
+  Object? get accountStatsError => _accountStatsError;
+
   Future<void> refreshAccountStats() async {
-    final counts = await _admin.fetchAccountCounts();
-    _counts = counts;
+    if (_accountStatsStatus == AccountStatsLoadStatus.loading) return;
+    final requestUid = _firebaseUid;
+    _accountStatsStatus = AccountStatsLoadStatus.loading;
+    _accountStatsError = null;
     notifyListeners();
+    try {
+      final counts = await _admin.fetchAccountCounts();
+      // Do not let a request from a signed-out or replaced session repopulate
+      // the next user's dashboard.
+      if (requestUid != _firebaseUid || requestUid == null) return;
+      _counts = counts;
+      _accountStatsStatus = AccountStatsLoadStatus.ready;
+    } on Object catch (error) {
+      if (requestUid != _firebaseUid || requestUid == null) return;
+      _accountStatsStatus = AccountStatsLoadStatus.error;
+      _accountStatsError = error;
+    }
+    notifyListeners();
+  }
+
+  void _resetAccountStats() {
+    _counts = AccountCounts.empty;
+    _accountStatsStatus = AccountStatsLoadStatus.idle;
+    _accountStatsError = null;
   }
 
   Future<void> _onUidChanged(String? uid) async {
@@ -209,6 +247,7 @@ class AppState extends ChangeNotifier {
     if (uid == null) {
       _profile = null;
       _profileStatus = ProfileLoadStatus.idle;
+      _resetAccountStats();
       notifyListeners();
       return;
     }
@@ -241,6 +280,8 @@ class AppState extends ChangeNotifier {
         // Only admins can fetch account stats — the queries count all users
         // and are denied by Firestore rules for students.
         unawaited(refreshAccountStats());
+      } else {
+        _resetAccountStats();
       }
     }
     notifyListeners();
@@ -306,6 +347,17 @@ class AppState extends ChangeNotifier {
       _profile = profile;
       _profileStatus = ProfileLoadStatus.ready;
       notifyListeners();
+      // Register this device for push notifications (best-effort).
+      _pushService.listenToTokenRefresh(uid);
+      unawaited(_pushService.registerToken(uid));
+      // Associate OneSignal subscription with this authenticated user.
+      unawaited(_oneSignal.setExternalUserId(uid));
+      // Request notification permission after a brief delay so the login
+      // UI settles first. OneSignal will not re-prompt if already granted
+      // or permanently denied — the app continues either way.
+      Future.delayed(const Duration(seconds: 2), () {
+        unawaited(_oneSignal.requestPermission());
+      });
       // Only fetch account stats for admins — the queries count all users
       // and are denied by Firestore rules for students.
       if (profile.isAdmin) {
@@ -414,6 +466,13 @@ class AppState extends ChangeNotifier {
 
   // ── SIGN OUT / RESET ──────────────────────────────────────────────
   Future<void> logout() async {
+    // Remove this device's push token so the logged-out user stops
+    // receiving private notifications.
+    final uid = _firebaseUid;
+    if (uid != null) {
+      unawaited(_pushService.unregisterToken(uid));
+      unawaited(_oneSignal.removeExternalUserId());
+    }
     try {
       await _auth.signOut();
     } on AuthFailure {
@@ -423,6 +482,7 @@ class AppState extends ChangeNotifier {
     _firebaseUid = null;
     _profile = null;
     _profileStatus = ProfileLoadStatus.idle;
+    _resetAccountStats();
     notifyListeners();
   }
 
@@ -610,8 +670,7 @@ class AppState extends ChangeNotifier {
             '[AI MATCH] LOST→INVENTORY anchor=${created.id} matched=$count '
             'cat=${created.category} images=${created.imageUrls.length}');
       }).catchError((e) {
-        debugPrint(
-            '[AI MATCH] LOST→INVENTORY anchor=${created.id} FAILED: $e');
+        debugPrint('[AI MATCH] LOST→INVENTORY anchor=${created.id} FAILED: $e');
       });
     } else {
       debugPrint('[AI MATCH DEBUG] createReport type=found — Flow B requires '
@@ -894,12 +953,10 @@ class AppState extends ChangeNotifier {
           return;
         }
         runAiMatchingForInventoryItem(invItem).then((count) {
-          debugPrint(
-              '[AI MATCH] INVENTORY→LOST anchor=$invId matched=$count '
+          debugPrint('[AI MATCH] INVENTORY→LOST anchor=$invId matched=$count '
               'cat=${invItem.category} images=${invItem.imageUrls.length}');
         }).catchError((e) {
-          debugPrint(
-              '[AI MATCH] INVENTORY→LOST anchor=$invId FAILED: $e');
+          debugPrint('[AI MATCH] INVENTORY→LOST anchor=$invId FAILED: $e');
         });
       }).catchError((e) {
         debugPrint(
@@ -1070,8 +1127,7 @@ class AppState extends ChangeNotifier {
       // Duplicate check.
       debugPrint('[AI MATCH DEBUG] stage=pair-duplicate-check '
           'candidateId=$candidateId started=true');
-      if (await _lfWorkflow.pairAlreadyMatched(
-          lostReport.id, invItem.id,
+      if (await _lfWorkflow.pairAlreadyMatched(lostReport.id, invItem.id,
           lostOwnerUid: lostReport.reportedByUid)) {
         debugPrint('[AI MATCH DEBUG] stage=pair-duplicate-check '
             'candidateId=$candidateId alreadyMatched=true error=none');
@@ -1123,8 +1179,6 @@ class AppState extends ChangeNotifier {
             'score=$overallScore id=${createdMatch.id} '
             'evidence=${match.evidence?.matchingFeatures.length ?? 0}m/'
             '${match.evidence?.conflictingFeatures.length ?? 0}c');
-        // Create notification for the lost owner (fire-and-forget).
-        _createAiMatchNotification(createdMatch).catchError((_) => 0);
       } else {
         debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
             'cand=$candidateId CREATE_REJECTED (null)');
@@ -1183,8 +1237,7 @@ class AppState extends ChangeNotifier {
     int created = 0;
     for (final lostReport in candidates) {
       // Duplicate check.
-      if (await _lfWorkflow.pairAlreadyMatched(
-          lostReport.id, invItem.id,
+      if (await _lfWorkflow.pairAlreadyMatched(lostReport.id, invItem.id,
           lostOwnerUid: lostReport.reportedByUid)) {
         debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
             'cand=${lostReport.id} SKIP: pairAlreadyMatched=true');
@@ -1252,7 +1305,6 @@ class AppState extends ChangeNotifier {
             'score=$overallScore id=${createdMatch.id} '
             'evidence=${match.evidence?.matchingFeatures.length ?? 0}m/'
             '${match.evidence?.conflictingFeatures.length ?? 0}c');
-        _createAiMatchNotification(createdMatch).catchError((_) => 0);
       } else {
         debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
             'cand=${lostReport.id} CREATE_REJECTED (null)');
@@ -1363,28 +1415,6 @@ class AppState extends ChangeNotifier {
       debugPrint('[AI MATCH] batch-match EXCEPTION on $host: '
           '${e.runtimeType} — ${e.toString().split('\n').first}');
       return null;
-    }
-  }
-
-  /// Creates an lfNotification for the lost owner when an AI match is found.
-  Future<void> _createAiMatchNotification(LfMatch match) async {
-    try {
-      final notification = LfNotification(
-        studentId: match.lostOwnerStudentId,
-        title: 'Possible Match Found',
-        body: 'An AI-powered match was found for your lost item. '
-            'Review it under My Lost Reports → Possible Matches.',
-        type: 'match',
-        relatedReportId: match.lostReportId,
-      );
-      await _lfWorkflow.createNotification(notification);
-      debugPrint('[AI MATCH] NOTIFICATION CREATED '
-          'match=${match.lostReportId}_${match.inventoryItemId} '
-          'owner=${match.lostOwnerStudentId}');
-    } catch (e) {
-      debugPrint('[AI MATCH] NOTIFICATION FAILED '
-          'match=${match.lostReportId}_${match.inventoryItemId} '
-          'owner=${match.lostOwnerStudentId}: $e');
     }
   }
 

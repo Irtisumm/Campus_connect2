@@ -1,0 +1,13 @@
+{
+  "name": "campus-connect-functions",
+  "description": "Firebase Cloud Functions — push notification dispatch for Campus Connect",
+  "engines": {
+    "node": "18"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "firebase-functions": "^6.0.0"
+  },
+  "private": true
+}

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'firebase_options.dart';
 
 import 'screens/events/manage_event_screen.dart';
@@ -11,6 +12,8 @@ import 'theme/app_theme.dart';
 import 'theme/luxe.dart';
 import 'services/app_state.dart';
 import 'services/data_service.dart';
+import 'services/push_service.dart';
+import 'services/onesignal_service.dart';
 import 'services/lost_found_service.dart';
 import 'services/photo_service.dart';
 import 'screens/auth/splash_screen.dart';
@@ -27,6 +30,43 @@ import 'screens/auth/registration_screen.dart';
 import 'screens/admin/admin_registrations_screen.dart';
 import 'screens/profile/profile_screen.dart';
 
+// ── Push background handler ──────────────────────────────────────
+/// Registered as the Firebase Messaging background-message handler.
+///
+/// This runs in a separate isolate when the app is in the background or
+/// terminated.  Its only job is to ensure the Firebase SDKs are
+/// initialised so the payload is routed correctly.  The actual tap
+/// handling (mark-read + navigation) is done by [PushService.initialize]
+/// in [main] via `onMessageOpenedApp` / `getInitialMessage`.
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  // No UI work in the background isolate — onMessageOpenedApp handles
+  // the tap when the user brings the app to the foreground.
+}
+
+/// Called when the user taps a OneSignal push notification (background
+/// or terminated).  Marks the notification read in Firestore and navigates
+/// to the relevant screen.
+void _handleOneSignalTap(Map<String, dynamic> data, AppState appState) {
+  final tap = OneSignalService.parseTap(data);
+  if (tap == null) return;
+
+  // Mark the notification as read in Firestore.
+  if (tap.type == 'lfNotification') {
+    appState.markLfNotificationRead(tap.notificationId);
+  } else if (tap.type == 'lockerNotification') {
+    appState.markLockerNotificationRead(tap.notificationId);
+  }
+
+  // Deep-link when a valid report is attached.
+  if (tap.relatedReportId.isNotEmpty) {
+    _router.push('/lost-found/lost/${tap.relatedReportId}');
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -36,11 +76,31 @@ Future<void> main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
+  // Register the top-level background-message handler so FCM messages
+  // are received when the app is not in the foreground.
+  FirebaseMessaging.onBackgroundMessage(
+    _firebaseMessagingBackgroundHandler,
+  );
+
+  // Initialise push service and capture the message that launched the
+  // app (if the user tapped a notification while the app was killed).
+  // The onTap callback uses the router — build it first, then wire.
+  final pushService = PushService();
+
   // Build the AppState instance first — the router needs it for the auth guard.
-  final appState = AppState();
+  final appState = AppState(pushService: pushService);
 
   // Build the router with the auth guard wired to AppState.
   _buildRouter(appState);
+
+  // ── OneSignal push notification delivery ─────────────────────────
+  // OneSignal replaces FCM as the push delivery layer. The existing
+  // PushService / firebase_messaging code is kept intact but will be
+  // removed once OneSignal is verified on a real device.
+  final oneSignal = OneSignalService();
+  oneSignal.initialize(
+    onClick: (data) => _handleOneSignalTap(data, appState),
+  );
 
   // Lock app orientation
   await SystemChrome.setPreferredOrientations([
@@ -149,6 +209,9 @@ void _buildRouter(AppState appState) {
       GoRoute(
           path: '/admin/lost-found/match-list',
           builder: (_, __) => const AdminMatchListScreen()),
+      GoRoute(
+          path: '/admin/lost-found/approved-matches',
+          builder: (_, __) => const ApprovedMatchesScreen()),
       GoRoute(
           path: '/admin/lost-found/match/:id',
           builder: (_, s) =>
@@ -663,101 +726,126 @@ class AppShell extends StatelessWidget {
                               SizedBox(
                                   width: lightHeader && narrowHeader ? 4 : 7),
                               // ── Notifications ─────────────────────────────
-                              Consumer2<DataService, AppState>(
-                                builder:
-                                    (context, dataService, appState, child) {
-                                  final legacyUnread = dataService
-                                      .unreadNotificationCountForUser(
-                                          appState.userId, appState.isAdmin);
+                              Consumer<AppState>(
+                                builder: (context, appState, child) {
                                   return StreamBuilder<int>(
-                                    stream: appState.watchUnreadLfNotifications(),
+                                    stream:
+                                        appState.watchUnreadLfNotifications(),
                                     initialData: 0,
-                                    builder: (context, snap) {
-                                      final unreadCount =
-                                          legacyUnread + (snap.data ?? 0);
-                                      return Stack(
-                                        clipBehavior: Clip.none,
-                                        children: [
-                                      lightHeader
-                                          ? Container(
-                                              decoration: BoxDecoration(
-                                                color: Luxe.surface,
-                                                shape: BoxShape.circle,
-                                                border: Border.all(
-                                                    color: Luxe.primary
-                                                        .withValues(
-                                                            alpha: .12)),
-                                              ),
-                                              child: IconButton(
-                                                onPressed: () => context.push(
-                                                    '/lost-found/notifications'),
-                                                icon: Icon(
-                                                    Icons
-                                                        .notifications_none_rounded,
-                                                    color: Luxe.ink,
-                                                    size:
-                                                        narrowHeader ? 20 : 24),
-                                                padding: EdgeInsets.all(
-                                                    narrowHeader ? 6 : 10),
-                                                constraints:
-                                                    const BoxConstraints(),
-                                              ),
-                                            )
-                                          : GlassSurface(
-                                              radius: Luxe.rChip,
-                                              padding: const EdgeInsets.all(9),
-                                              onTap: () => context.push(
-                                                  '/lost-found/notifications'),
-                                              child: const Icon(
-                                                  Icons.notifications_rounded,
-                                                  color: Colors.white,
-                                                  size: 19),
-                                            ),
-                                      if (unreadCount > 0)
-                                        Positioned(
-                                          top: -3,
-                                          right: -3,
-                                          child: IgnorePointer(
-                                            child: Container(
-                                              padding: const EdgeInsets.all(3),
-                                              constraints: const BoxConstraints(
-                                                  minWidth: 18, minHeight: 18),
-                                              decoration: BoxDecoration(
-                                                color: Luxe.accent,
-                                                shape: BoxShape.circle,
-                                                border: Border.all(
-                                                    color: Colors.white
-                                                        .withValues(alpha: 0.9),
-                                                    width: 1.5),
-                                                boxShadow: [
-                                                  BoxShadow(
-                                                    color: Luxe.accent
-                                                        .withValues(alpha: 0.6),
-                                                    blurRadius: 8,
+                                    builder: (context, lfSnap) {
+                                      return StreamBuilder<int>(
+                                        stream: appState
+                                            .watchUnreadLockerNotifications(),
+                                        initialData: 0,
+                                        builder: (context, lockerSnap) {
+                                          final unreadCount =
+                                              (lfSnap.data ?? 0) +
+                                                  (lockerSnap.data ?? 0);
+                                          return Stack(
+                                            clipBehavior: Clip.none,
+                                            children: [
+                                              lightHeader
+                                                  ? Container(
+                                                      decoration: BoxDecoration(
+                                                        color: Luxe.surface,
+                                                        shape: BoxShape.circle,
+                                                        border: Border.all(
+                                                            color: Luxe.primary
+                                                                .withValues(
+                                                                    alpha:
+                                                                        .12)),
+                                                      ),
+                                                      child: IconButton(
+                                                        onPressed: () =>
+                                                            context.push(
+                                                                '/lost-found/notifications'),
+                                                        icon: Icon(
+                                                            Icons
+                                                                .notifications_none_rounded,
+                                                            color: Luxe.ink,
+                                                            size: narrowHeader
+                                                                ? 20
+                                                                : 24),
+                                                        padding: EdgeInsets.all(
+                                                            narrowHeader
+                                                                ? 6
+                                                                : 10),
+                                                        constraints:
+                                                            const BoxConstraints(),
+                                                      ),
+                                                    )
+                                                  : GlassSurface(
+                                                      radius: Luxe.rChip,
+                                                      padding:
+                                                          const EdgeInsets.all(
+                                                              9),
+                                                      onTap: () => context.push(
+                                                          '/lost-found/notifications'),
+                                                      child: const Icon(
+                                                          Icons
+                                                              .notifications_rounded,
+                                                          color: Colors.white,
+                                                          size: 19),
+                                                    ),
+                                              if (unreadCount > 0)
+                                                Positioned(
+                                                  top: -3,
+                                                  right: -3,
+                                                  child: IgnorePointer(
+                                                    child: Container(
+                                                      padding:
+                                                          const EdgeInsets.all(
+                                                              3),
+                                                      constraints:
+                                                          const BoxConstraints(
+                                                              minWidth: 18,
+                                                              minHeight: 18),
+                                                      decoration: BoxDecoration(
+                                                        color: Luxe.accent,
+                                                        shape: BoxShape.circle,
+                                                        border: Border.all(
+                                                            color: Colors.white
+                                                                .withValues(
+                                                                    alpha: 0.9),
+                                                            width: 1.5),
+                                                        boxShadow: [
+                                                          BoxShadow(
+                                                            color: Luxe.accent
+                                                                .withValues(
+                                                                    alpha: 0.6),
+                                                            blurRadius: 8,
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      child: Text(
+                                                          '$unreadCount',
+                                                          textAlign:
+                                                              TextAlign.center,
+                                                          style: const TextStyle(
+                                                              fontSize: 9,
+                                                              height: 1.15,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w800,
+                                                              color: Color(
+                                                                  0xFF7A4B00))),
+                                                    )
+                                                        .animate(
+                                                            onPlay: (c) =>
+                                                                c.repeat(
+                                                                    reverse:
+                                                                        true))
+                                                        .scaleXY(
+                                                            begin: 1.0,
+                                                            end: 1.14,
+                                                            duration: 1100.ms,
+                                                            curve: Curves
+                                                                .easeInOut),
                                                   ),
-                                                ],
-                                              ),
-                                              child: Text('$unreadCount',
-                                                  textAlign: TextAlign.center,
-                                                  style: const TextStyle(
-                                                      fontSize: 9,
-                                                      height: 1.15,
-                                                      fontWeight:
-                                                          FontWeight.w800,
-                                                      color:
-                                                          Color(0xFF7A4B00))),
-                                            )
-                                                .animate(
-                                                    onPlay: (c) =>
-                                                        c.repeat(reverse: true))
-                                                .scaleXY(
-                                                    begin: 1.0,
-                                                    end: 1.14,
-                                                    duration: 1100.ms,
-                                                    curve: Curves.easeInOut),
-                                          ),
-                                        ),
-                                        ],
+                                                ),
+                                            ],
+                                          );
+                                        },
                                       );
                                     },
                                   );
@@ -818,51 +906,87 @@ class AppShell extends StatelessWidget {
                 children: List.generate(_tabs.length, (i) {
                   final active = idx == i;
                   return Expanded(
-                    child: GestureDetector(
-                      onTap: () => context.go(_tabs[i]),
-                      behavior: HitTestBehavior.opaque,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // M3 pill indicator
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 260),
-                            curve: Curves.easeOutCubic,
-                            height: 30,
-                            width: active ? 54 : 40,
-                            decoration: BoxDecoration(
-                              gradient: active
-                                  ? LinearGradient(colors: [
-                                      Luxe.secondary.withValues(alpha: 0.16),
-                                      Luxe.primary.withValues(alpha: 0.13),
-                                    ])
-                                  : null,
-                              borderRadius: BorderRadius.circular(Luxe.rChip),
-                            ),
-                            child: Icon(
-                              active ? _iconsActive[i] : _iconsIdle[i],
-                              size: active ? 22 : 21,
-                              color: active ? Luxe.primary : Luxe.inkMuted,
-                            ),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        // AnimatedContainer cannot tween between a finite
+                        // width and double.infinity. The Expanded tab already
+                        // gives us the exact finite width needed by the active
+                        // pill, so use that bound explicitly.
+                        final tabWidth = constraints.maxWidth.isFinite
+                            ? constraints.maxWidth
+                            : 40.0;
+                        return GestureDetector(
+                          onTap: () => context.go(_tabs[i]),
+                          behavior: HitTestBehavior.opaque,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // M3 pill indicator
+                              AnimatedContainer(
+                                duration: const Duration(milliseconds: 260),
+                                curve: Curves.easeOutCubic,
+                                height: 34,
+                                width: active ? tabWidth : 40,
+                                padding: active
+                                    ? const EdgeInsets.symmetric(horizontal: 8)
+                                    : EdgeInsets.zero,
+                                decoration: BoxDecoration(
+                                  gradient: active
+                                      ? LinearGradient(colors: [
+                                          Luxe.secondary
+                                              .withValues(alpha: 0.16),
+                                          Luxe.primary.withValues(alpha: 0.13),
+                                        ])
+                                      : null,
+                                  borderRadius:
+                                      BorderRadius.circular(Luxe.rChip),
+                                ),
+                                child: active
+                                    ? FittedBox(
+                                        fit: BoxFit.scaleDown,
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(_iconsActive[i],
+                                                size: 20, color: Luxe.primary),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              _labels[i],
+                                              maxLines: 1,
+                                              style: const TextStyle(
+                                                fontFamily: 'Inter',
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w800,
+                                                color: Luxe.primary,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      )
+                                    : Icon(_iconsIdle[i],
+                                        size: 21, color: Luxe.inkMuted),
+                              ),
+                              if (!active) ...[
+                                const SizedBox(height: 4),
+                                AnimatedDefaultTextStyle(
+                                  duration: const Duration(milliseconds: 220),
+                                  style: const TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontSize: 10,
+                                    height: 1.1,
+                                    fontWeight: FontWeight.w500,
+                                    color: Luxe.inkMuted,
+                                  ),
+                                  child: Text(_labels[i],
+                                      maxLines: 1,
+                                      textAlign: TextAlign.center,
+                                      overflow: TextOverflow.ellipsis),
+                                ),
+                              ],
+                            ],
                           ),
-                          const SizedBox(height: 4),
-                          AnimatedDefaultTextStyle(
-                            duration: const Duration(milliseconds: 220),
-                            style: TextStyle(
-                              fontFamily: 'Inter',
-                              fontSize: 10,
-                              height: 1.1,
-                              fontWeight:
-                                  active ? FontWeight.w800 : FontWeight.w500,
-                              color: active ? Luxe.primary : Luxe.inkMuted,
-                            ),
-                            child: Text(_labels[i],
-                                maxLines: 1,
-                                textAlign: TextAlign.center,
-                                overflow: TextOverflow.ellipsis),
-                          ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
                   );
                 }),

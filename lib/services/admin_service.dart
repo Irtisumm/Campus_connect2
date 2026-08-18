@@ -32,7 +32,8 @@ class AccountCounts {
 class AdminService {
   final FirebaseFirestore? _dbOrNull;
 
-  AdminService({FirebaseFirestore? firestore}) : _dbOrNull = _resolve(firestore);
+  AdminService({FirebaseFirestore? firestore})
+      : _dbOrNull = _resolve(firestore);
 
   static FirebaseFirestore? _resolve(FirebaseFirestore? injected) {
     try {
@@ -75,7 +76,8 @@ class AdminService {
   /// the login gate for a student.
   Future<void> setAccountStatus(String uid, AccountStatus status) async {
     if (!isAvailable) {
-      throw const AuthFailure('The database is unavailable. Please restart the app.');
+      throw const AuthFailure(
+          'The database is unavailable. Please restart the app.');
     }
     try {
       await _users.doc(uid).update({
@@ -88,7 +90,10 @@ class AdminService {
   }
 
   Future<AccountCounts> fetchAccountCounts() async {
-    if (!isAvailable) return AccountCounts.empty;
+    if (!isAvailable) {
+      throw const AuthFailure(
+          'The database is unavailable. Please restart the app.');
+    }
     try {
       final students = await _countByRole(UserRole.student);
       final admins = await _countByRole(UserRole.admin);
@@ -98,9 +103,10 @@ class AdminService {
         admins: admins,
         pendingStudents: pending,
       );
-    } on FirebaseException {
-      // Counts are cosmetic — never fail a screen over them.
-      return AccountCounts.empty;
+    } on FirebaseException catch (e) {
+      // Preserve the read failure so the dashboard can show an error instead
+      // of presenting an empty database as zero accounts.
+      throw AuthFailure.fromCode(e.code);
     }
   }
 
