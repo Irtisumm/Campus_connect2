@@ -732,6 +732,9 @@ class AppState extends ChangeNotifier {
   Stream<List<LfMatch>> watchAiProposedMatches() =>
       _lfWorkflow.watchAiProposedMatches();
 
+  Stream<List<LfMatch>> watchApprovedMatches() =>
+      _lfWorkflow.watchApprovedMatches();
+
   /// Live view of a single match by ID.
   Stream<LfMatch?> watchMatch(String id) => _lfWorkflow.watchMatch(id);
 
@@ -778,6 +781,17 @@ class AppState extends ChangeNotifier {
     return stream.map((list) => list.where((n) => !n.read).length);
   }
 
+  /// Marks all of the signed-in user's own L&F notifications as read.
+  /// Returns `true` on success.
+  Future<bool> markAllLfNotificationsRead() async {
+    try {
+      await _lfWorkflow.markAllRead(userId ?? '');
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
   /// Issues a Handover QR for a found report awaiting handover
   /// (admin-only). The returned transaction carries the [QrTransaction.token]
   /// to encode in the QR image.
@@ -790,7 +804,7 @@ class AppState extends ChangeNotifier {
       ));
 
   /// Issues a Return QR for an approved match (admin-only). Bound to the
-  /// match's lost report, the inventory item, and the lost report's owner.
+  /// match's ID, lost report, the inventory item, and the lost report's owner.
   Future<QrTransaction> issueReturnQr(LfMatch match) =>
       _lfWorkflow.issueQr(QrTransaction.issue(
         kind: QrKind.return_,
@@ -798,18 +812,27 @@ class AppState extends ChangeNotifier {
         intendedStudentId: match.lostOwnerStudentId,
         lostReportId: match.lostReportId,
         inventoryItemId: match.inventoryItemId,
+        matchId: match.id,
       ));
 
   /// A student scanning a code. Returns a [QrScanOutcome] whose message is
   /// display-ready for every case: invalid, expired, already used, cancelled,
-  /// wrong account, or success.
+  /// wrong account, wrong item, or success.
+  ///
+  /// [lostReportId] is the ID of the lost report the student is scanning
+  /// from. For return QRs, the QR's stored `lostReportId` must match — this
+  /// prevents cross-report scanning when a student has multiple approved
+  /// matches. Pass `null` for handover scans (Workflow 2).
   ///
   /// When a handover scan creates a new inventory record, AI matching (Flow B)
   /// is triggered fire-and-forget without blocking the scan result.
-  Future<QrScanOutcome> scanQrCode(String token) async {
-    debugPrint('[AI MATCH DEBUG] scanQrCode called token=$token');
-    final outcome =
-        await _lfWorkflow.scanQr(token: token, studentUid: firebaseUid ?? '');
+  Future<QrScanOutcome> scanQrCode(String token, {String? lostReportId}) async {
+    debugPrint('[AI MATCH DEBUG] scanQrCode called token=$token '
+        'lostReportId=$lostReportId');
+    final outcome = await _lfWorkflow.scanQr(
+        token: token,
+        studentUid: firebaseUid ?? '',
+        lostReportId: lostReportId);
     debugPrint('[AI MATCH DEBUG] scanQrCode result: success=${outcome.success} '
         'invId=${outcome.inventoryId}');
     if (outcome.success && outcome.inventoryId != null) {
@@ -930,8 +953,15 @@ class AppState extends ChangeNotifier {
     defaultValue: 'http://127.0.0.1:8787',
   );
 
-  /// Maximum number of candidates to send to the Worker in one batch.
-  static const int _aiMaxCandidates = 5;
+  /// Maximum number of candidates evaluated in one batch.
+  ///
+  /// This is the single source of truth for both directions: exactly this many
+  /// candidates are fetched, sent, and evaluated. It must not exceed the
+  /// Worker's own `BATCH_MAX_CANDIDATES` (10), which is the hard cap.
+  ///
+  /// Previously 5 was sent as `maxCandidates` while 10 were fetched, so the
+  /// Worker silently dropped half of every candidate set.
+  static const int _aiMaxCandidates = 10;
 
   /// Runs AI matching for a newly created **Lost Report** (Flow A).
   ///
@@ -976,9 +1006,10 @@ class AppState extends ChangeNotifier {
     // 1. Find eligible inventory candidates (same category, In Inventory,
     //    must have at least one image). Uses a targeted status+category
     //    query so the student's client can read under the 'In Inventory' rule.
+    // Fetch exactly as many as will be evaluated — no silent drop.
     final candidates = await _lfWorkflow.queryInventoryForAi(
       category: lostReport.category,
-      limit: _aiMaxCandidates * 2,
+      limit: _aiMaxCandidates,
     );
 
     if (candidates.isEmpty) {
@@ -1075,10 +1106,13 @@ class AppState extends ChangeNotifier {
         titleScore: (r['titleScore'] as num?)?.toInt(),
         descriptionScore: (r['descriptionScore'] as num?)?.toInt(),
         categoryScore: (r['categoryScore'] as num?)?.toInt(),
+        // locationScore/timeScore are null when the data was unavailable —
+        // the Worker omits them rather than sending a misleading 0.
         locationScore: (r['locationScore'] as num?)?.toInt(),
         timeScore: (r['timeScore'] as num?)?.toInt(),
         confidence: (r['confidence'] as num?)?.toInt(),
         reason: r['reason']?.toString(),
+        evidence: _evidenceFromWorkerResult(r),
       );
 
       final createdMatch = await _lfWorkflow.createAiMatchIfAvailable(match);
@@ -1086,7 +1120,9 @@ class AppState extends ChangeNotifier {
         created++;
         debugPrint('[AI MATCH] LOST→INVENTORY MATCH CREATED '
             'anchor=${lostReport.id} cand=$candidateId '
-            'score=$overallScore id=${createdMatch.id}');
+            'score=$overallScore id=${createdMatch.id} '
+            'evidence=${match.evidence?.matchingFeatures.length ?? 0}m/'
+            '${match.evidence?.conflictingFeatures.length ?? 0}c');
         // Create notification for the lost owner (fire-and-forget).
         _createAiMatchNotification(createdMatch).catchError((_) => 0);
       } else {
@@ -1126,14 +1162,15 @@ class AppState extends ChangeNotifier {
     }
 
     // 1. Find eligible lost reports (same category, not closed, must have
-    //    at least one image).
+    //    at least one image). Takes exactly the number that will be
+    //    evaluated, matching Flow A — no silent drop in either direction.
     final lostReports = await _lostFound.watchAllLostItems().first;
     final candidates = lostReports
         .where((r) =>
             !_isLostClosed(r) &&
             r.category == invItem.category &&
             r.imageUrls.isNotEmpty)
-        .take(_aiMaxCandidates * 2)
+        .take(_aiMaxCandidates)
         .toList();
 
     if (candidates.isEmpty) {
@@ -1198,10 +1235,13 @@ class AppState extends ChangeNotifier {
         titleScore: (r['titleScore'] as num?)?.toInt(),
         descriptionScore: (r['descriptionScore'] as num?)?.toInt(),
         categoryScore: (r['categoryScore'] as num?)?.toInt(),
+        // locationScore/timeScore are null when the data was unavailable —
+        // the Worker omits them rather than sending a misleading 0.
         locationScore: (r['locationScore'] as num?)?.toInt(),
         timeScore: (r['timeScore'] as num?)?.toInt(),
         confidence: (r['confidence'] as num?)?.toInt(),
         reason: r['reason']?.toString(),
+        evidence: _evidenceFromWorkerResult(r),
       );
 
       final createdMatch = await _lfWorkflow.createAiMatchIfAvailable(match);
@@ -1209,7 +1249,9 @@ class AppState extends ChangeNotifier {
         created++;
         debugPrint('[AI MATCH] INVENTORY→LOST MATCH CREATED '
             'anchor=${invItem.id} cand=${lostReport.id} '
-            'score=$overallScore id=${createdMatch.id}');
+            'score=$overallScore id=${createdMatch.id} '
+            'evidence=${match.evidence?.matchingFeatures.length ?? 0}m/'
+            '${match.evidence?.conflictingFeatures.length ?? 0}c');
         _createAiMatchNotification(createdMatch).catchError((_) => 0);
       } else {
         debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
@@ -1238,10 +1280,46 @@ class AppState extends ChangeNotifier {
         'title': inv.title,
         'description': inv.description,
         'category': inv.category,
-        'location': '', // Inventory items don't have a location field
+        // Inventory items carry no location field. The empty string is the
+        // honest "not recorded" signal: the Worker drops the location weight
+        // from the denominator instead of scoring it 0, so this no longer
+        // caps every inventory comparison at 90.
+        'location': '',
         'dateTime': inv.createdAt?.toIso8601String() ?? '',
         'imageUrls': inv.imageUrls,
       };
+
+  /// Builds a [MatchEvidence] from one Worker result entry.
+  ///
+  /// The Worker always returns `evidence` as
+  /// `{ matchingFeatures: [...], conflictingFeatures: [...] }` with both keys
+  /// present (possibly empty). Returns null when the payload carries no
+  /// evidence at all, so `LfMatch.evidence` stays null and `toCreateMap()`
+  /// omits the field — exactly as it did before evidence existed. Old matches
+  /// with a null evidence field therefore keep loading unchanged.
+  static MatchEvidence? _evidenceFromWorkerResult(Map<String, dynamic> r) {
+    final raw = r['evidence'];
+    if (raw is! Map) return null;
+    final map = Map<String, dynamic>.from(raw);
+
+    List<String> readList(String key) {
+      final value = map[key];
+      if (value is! List) return const <String>[];
+      return value
+          .whereType<Object>()
+          .map((e) => e.toString().trim())
+          .where((e) => e.isNotEmpty)
+          .toList(growable: false);
+    }
+
+    final matching = readList('matchingFeatures');
+    final conflicting = readList('conflictingFeatures');
+    if (matching.isEmpty && conflicting.isEmpty) return null;
+    return MatchEvidence(
+      matchingFeatures: matching,
+      conflictingFeatures: conflicting,
+    );
+  }
 
   /// Calls POST /ai/batch-match on the Worker. Returns the results list
   /// or null on failure.
@@ -1437,6 +1515,31 @@ class AppState extends ChangeNotifier {
   /// first.
   Stream<List<LockerNotification>> watchMyLockerNotifications() =>
       _lockers.watchMyLockerNotifications(userId ?? '');
+
+  /// Live feed of every locker notification, for the admin screens.
+  Stream<List<LockerNotification>> watchAllLockerNotifications() =>
+      _lockers.watchAllLockerNotifications();
+
+  /// Live count of unread locker notifications for the signed-in user —
+  /// a student's own, or every notification for an admin. Contributes to the
+  /// bell badge alongside [watchUnreadLfNotifications].
+  Stream<int> watchUnreadLockerNotifications() {
+    final Stream<List<LockerNotification>> stream = isAdmin
+        ? _lockers.watchAllLockerNotifications()
+        : _lockers.watchMyLockerNotifications(userId ?? '');
+    return stream.map((list) => list.where((n) => !n.read).length);
+  }
+
+  /// Marks all of the signed-in user's own locker notifications as read.
+  /// Returns `true` on success.
+  Future<bool> markAllLockerNotificationsRead() async {
+    try {
+      await _lockers.markAllRead(userId ?? '');
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
 
   /// Marks a locker notification as read. Returns `true` on success.
   Future<bool> markLockerNotificationRead(String notificationId) async {

@@ -1,3 +1,34 @@
+// ---------------------------------------------------------------------------
+// Deterministic scoring — imported from the single source of truth.
+// ---------------------------------------------------------------------------
+// `src/scoring.js` holds every pure scoring function. The Worker and the test
+// suites both import from it, so there is no hand-synced duplicate to drift.
+import {
+	computeImageSimilarity,
+	computeTitleSimilarity,
+	computeDescriptionSimilarity,
+	computeCategoryScore,
+	computeLocationScore,
+	computeTimeScore,
+	computeOverallScore,
+	hasValue,
+	parseDateTime,
+	scorePair,
+	MATCH_THRESHOLD,
+} from './scoring.js';
+
+// The batch-match request contract. These live in their own module because
+// Cloudflare treats every NAMED export of the entry module as a Worker
+// entrypoint, which must be a function or an ExportedHandler — a plain
+// `export const BATCH_MAX_CANDIDATES = 10` here stops workerd from starting
+// the Worker at all. This entry module therefore exposes `export default` only.
+import {
+	validateGeminiItem,
+	buildGeminiContent,
+	candidateFilter,
+	BATCH_MAX_CANDIDATES,
+} from './batch.js';
+
 const responses = {
 	'/': {
 		success: true,
@@ -27,14 +58,78 @@ function jsonError(message, status = 400) {
 	return Response.json({ success: false, error: message }, { status });
 }
 
+// ---------------------------------------------------------------------------
+// TEMPORARY diagnostic logging (production 500 audit)
+// ---------------------------------------------------------------------------
+// Remove these two helpers and their call sites once the 500 is resolved.
+//
+// SAFETY CONTRACT — these must never receive or emit:
+//   • API keys or any part of them (only Boolean presence + integer length)
+//   • Authorization headers
+//   • base64 image data or data: URIs
+//   • request/response payload bodies
+//   • any other secret
+// Only counts, lengths, booleans, scores, stage names and error name/message.
+
+/** Fields that must never be echoed, even if a caller passes them by mistake. */
+const REDACT_KEYS = /key|token|secret|auth|password|bearer|credential|datauri|base64/i;
+
+/** Strip anything sensitive or oversized from a detail object. */
+function safeDetail(detail) {
+	if (!detail || typeof detail !== 'object') return '';
+	const parts = [];
+	for (const [k, v] of Object.entries(detail)) {
+		// Allow the explicit presence/length probes; block everything else
+		// whose name looks sensitive.
+		const isSafeProbe = k === 'hasOpenRouterKey' || k === 'keyLength';
+		if (!isSafeProbe && REDACT_KEYS.test(k)) {
+			parts.push(`${k}=<redacted>`);
+			continue;
+		}
+		if (v === null || v === undefined) {
+			parts.push(`${k}=null`);
+		} else if (typeof v === 'number' || typeof v === 'boolean') {
+			parts.push(`${k}=${v}`);
+		} else {
+			// Strings are truncated hard and stripped of any data: URI.
+			const s = String(v).replace(/data:[^;]+;base64,[A-Za-z0-9+/=]*/g, '<base64>');
+			parts.push(`${k}=${s.slice(0, 120)}`);
+		}
+	}
+	return parts.length ? ' ' + parts.join(' ') : '';
+}
+
+/** `[AI WORKER DEBUG] <stage>` plus safe key=value detail. */
+function debugStage(stage, detail) {
+	console.log(`[AI WORKER DEBUG] ${stage}${safeDetail(detail)}`);
+}
+
+/** `[AI WORKER ERROR] stage= / name= / message=` on three lines. */
+function debugError(stage, error, detail) {
+	const name = error && error.name ? error.name : 'Error';
+	const rawMessage = error && error.message ? error.message : String(error);
+	// Defensive: never let a key or base64 blob ride along in a message.
+	const message = String(rawMessage)
+		.replace(/data:[^;]+;base64,[A-Za-z0-9+/=]*/g, '<base64>')
+		.replace(/sk-[A-Za-z0-9-_]+/g, '<redacted-key>')
+		.replace(/Bearer\s+\S+/gi, 'Bearer <redacted>')
+		.slice(0, 400);
+	console.error(`[AI WORKER ERROR] stage=${stage}${safeDetail(detail)}`);
+	console.error(`[AI WORKER ERROR] name=${name}`);
+	console.error(`[AI WORKER ERROR] message=${message}`);
+}
+
 /** Extract a JSON object from an AI text response that may be wrapped in
  *  markdown fences or have extra text before/after.  Also handles the case
  *  where the AI binding already returns a parsed object. */
 function extractJson(text) {
 	// If the AI already returned a parsed object, use it.
 	if (text && typeof text === 'object' && !Array.isArray(text)) {
-		// Recognise both scoring output (titleScore) and vision attributes (objectType).
-		if ('titleScore' in text || 'objectType' in text) return text;
+		// Recognise the visual-only scoring output (visualScore), the legacy
+		// scoring output (titleScore) and vision attributes (objectType).
+		if ('visualScore' in text || 'titleScore' in text || 'objectType' in text) {
+			return text;
+		}
 		return null;
 	}
 	if (typeof text !== 'string') text = String(text || '');
@@ -61,398 +156,6 @@ function validateItem(obj, label) {
 		}
 	}
 	return null;
-}
-
-/** Clamp a value between 0 and 100. */
-function clampScore(v) {
-	const n = Number(v);
-	if (!Number.isFinite(n)) return 0;
-	return Math.max(0, Math.min(100, Math.round(n)));
-}
-
-// ---------------------------------------------------------------------------
-// Text normalisation helpers — reduce vision-model wording variation
-// ---------------------------------------------------------------------------
-
-/**
- * Normalise a single word or short phrase for fuzzy comparison.
- * - lowercase & trim
- * - strip punctuation
- * - collapse whitespace
- * - strip common suffixes that cause false mismatches ("pointy" vs "pointed")
- */
-const NORMALISE_RE = /[.,;:!?'"()]+/g;
-const TRAILING_SUFFIX = /(ed|ing|ly|s|es)$/i;
-
-function normaliseWord(s) {
-	let t = String(s || '').trim().toLowerCase();
-	t = t.replace(NORMALISE_RE, '');
-	t = t.replace(/\s+/g, ' ');
-	// Strip common suffixes ONLY when the remaining stem is at least 2 chars.
-	t = t.replace(TRAILING_SUFFIX, (match) => {
-		const stem = t.slice(0, -match.length);
-		return stem.length >= 2 ? '' : match;
-	});
-	t = t.trim();
-	return t;
-}
-
-/**
- * Normalise an array of strings: trim, lowercase, strip punctuation,
- * remove empty / duplicate entries, and apply suffix stripping.
- */
-function normaliseArray(arr) {
-	if (!Array.isArray(arr)) return [];
-	const seen = new Set();
-	const out = [];
-	for (const item of arr) {
-		const n = normaliseWord(item);
-		if (n && !seen.has(n)) {
-			seen.add(n);
-			out.push(n);
-		}
-	}
-	return out;
-}
-
-// ---------------------------------------------------------------------------
-// Deterministic image-similarity scoring
-// ---------------------------------------------------------------------------
-
-/**
- * Deterministic image-similarity score (0-100) comparing two structured
- * attribute objects from the vision model.
- *
- * Field weights are tuned so that GENERIC matches (both are black bags)
- * alone cannot produce a high score.  IDENTIFYING fields (brand, model,
- * logos, visible text, distinctive features, damage/marks) carry most
- * of the weight.
- *
- * Points breakdown (total ≤ 100):
- *   objectType           5   (generic — easy to match)
- *   brand               18   (identifying — strong)
- *   model               12   (identifying)
- *   primaryColor         8   (moderately useful)
- *   secondaryColors      3   (minor)
- *   shape                2   (too generic)
- *   material             2   (too generic)
- *   visibleText         15   (identifying — very strong)
- *   logos               15   (identifying — very strong)
- *   distinctiveFeatures 12   (identifying)
- *   damageOrMarks        8   (identifying)
- *   accessories          5   (sometimes useful)
- *   confidence boost    up to +20% bonus for high-confidence ID details
- */
-function computeImageSimilarity(lost, found) {
-	// Normalise both attribute sets first.
-	const L = normalizeAttrs(lost);
-	const F = normalizeAttrs(found);
-
-	let points = 0;
-
-	// Fuzzy single-string comparison.  Empty strings never match — an unknown
-	// value is not evidence of similarity.
-	const eq = (a, b) => {
-		const na = normaliseWord(a);
-		const nb = normaliseWord(b);
-		if (!na || !nb) return false;
-		return na === nb;
-	};
-
-	// Overlap ratio for normalised arrays.
-	const overlap = (arrA, arrB) => {
-		const a = normaliseArray(arrA);
-		const b = normaliseArray(arrB);
-		// NEITHER has items → no evidence either way → give partial credit
-		// so the absence of details doesn't inflate the score.
-		if (a.length === 0 && b.length === 0) return 0.5;
-		if (a.length === 0 || b.length === 0) return 0;
-		const setA = new Set(a);
-		const setB = new Set(b);
-		let common = 0;
-		for (const item of setA) { if (setB.has(item)) common++; }
-		return common / Math.max(setA.size, setB.size);
-	};
-
-	// --- Field-by-field scoring with rebalanced weights ---
-	if (eq(L.objectType, F.objectType))         points += 5;
-	if (L.brand && F.brand && eq(L.brand, F.brand))         points += 18;
-	if (L.model && F.model && eq(L.model, F.model))         points += 12;
-	if (eq(L.primaryColor, F.primaryColor))     points += 8;
-	points += Math.round(overlap(L.secondaryColors,   F.secondaryColors)   * 3);
-	if (eq(L.shape, F.shape))                   points += 2;
-	if (eq(L.material, F.material))             points += 2;
-	if (L.visibleText && F.visibleText && eq(L.visibleText, F.visibleText)) points += 15;
-	points += Math.round(overlap(L.logos,               F.logos)               * 15);
-	points += Math.round(overlap(L.distinctiveFeatures,  F.distinctiveFeatures)  * 12);
-	points += Math.round(overlap(L.damageOrMarks,        F.damageOrMarks)        * 8);
-	points += Math.round(overlap(L.accessories,          F.accessories)          * 5);
-
-	// Cap raw points at 100.
-	points = Math.min(100, points);
-
-	// --- Confidence adjustment ---
-	// High confidence with identifying details → bonus.
-	// Low confidence → penalty.
-	// Confidence should reflect how many IDENTIFYING details were found,
-	// not just how recognisable the object type is.
-	const cLost  = clampScore(L.confidence);
-	const cFound = clampScore(F.confidence);
-	const avgConf = (cLost + cFound) / 2;
-
-	if (avgConf >= 70) {
-		// Both vision calls found strong identifying details — boost.
-		const boost = 1 + ((avgConf - 70) / 100) * 0.2; // up to +20%
-		points = Math.round(Math.min(100, points * boost));
-	} else if (avgConf < 40) {
-		// Very low confidence — penalty.
-		const penalty = 0.5 + (avgConf / 40) * 0.5; // 0.5–1.0 multiplier
-		points = Math.round(points * penalty);
-	}
-	// 40–69: neutral — no adjustment.
-
-	return points;
-}
-
-/**
- * Normalise a structured-attribute object for comparison.
- * Deduplicates arrays, removes empty strings, strips trailing suffixes,
- * and ensures all expected fields exist with safe defaults.
- */
-function normalizeAttrs(attrs) {
-	if (!attrs || typeof attrs !== 'object') return {};
-	return {
-		objectType:          normaliseWord(attrs.objectType),
-		brand:               normaliseWord(attrs.brand),
-		model:               normaliseWord(attrs.model),
-		primaryColor:        normaliseWord(attrs.primaryColor),
-		secondaryColors:     normaliseArray(attrs.secondaryColors),
-		shape:               normaliseWord(attrs.shape),
-		material:            normaliseWord(attrs.material),
-		visibleText:         normaliseWord(attrs.visibleText),
-		logos:               normaliseArray(attrs.logos),
-		distinctiveFeatures: normaliseArray(attrs.distinctiveFeatures),
-		condition:           normaliseWord(attrs.condition),
-		damageOrMarks:       normaliseArray(attrs.damageOrMarks),
-		accessories:         normaliseArray(attrs.accessories),
-		sizeOrFormFactor:    normaliseWord(attrs.sizeOrFormFactor),
-		confidence:          clampScore(attrs.confidence),
-	};
-}
-
-// ---------------------------------------------------------------------------
-// Deterministic metadata scoring
-// ---------------------------------------------------------------------------
-// These replace the previous LLM-based Step 3.  Every function is pure:
-// same inputs → same output, no AI calls, no randomness.
-
-/** Tokenise a string: lowercase, strip punctuation, split on whitespace. */
-function tokenise(s) {
-	return String(s || '')
-		.toLowerCase()
-		.replace(/[.,;:!?'"()\[\]{}]+/g, ' ')
-		.replace(/\s+/g, ' ')
-		.trim()
-		.split(' ')
-		.filter(Boolean);
-}
-
-/**
- * Common stop-words that add noise to title/description matching.
- * "found", "lost", and "item" are stop-words here because they appear in
- * nearly every report and don't help distinguish one item from another.
- */
-const STOP_WORDS = new Set([
-	'a', 'an', 'the', 'is', 'was', 'are', 'were', 'be', 'been',
-	'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
-	'it', 'its', 'this', 'that', 'my', 'me', 'i', 'you', 'your',
-	'found', 'lost', 'item', 'has', 'have', 'had', 'not', 'no',
-	'very', 'just', 'about', 'near', 'around', 'from',
-]);
-
-/** Remove stop-words from a token array. */
-function removeStopWords(tokens) {
-	return tokens.filter(t => !STOP_WORDS.has(t) && t.length > 1);
-}
-
-/**
- * Jaccard similarity: size(intersection) / size(union).
- * Returns 0-1.  Both-empty → 0 (no evidence).
- */
-function jaccard(setA, setB) {
-	if (setA.size === 0 && setB.size === 0) return 0;
-	const intersection = new Set([...setA].filter(x => setB.has(x)));
-	const union = new Set([...setA, ...setB]);
-	return intersection.size / union.size;
-}
-
-// ---------------------------------------------------------------------------
-// Title similarity
-// ---------------------------------------------------------------------------
-
-/**
- * 0-100 deterministic title similarity.
- *
- * "Dell XPS Laptop" vs "Dell Laptop Found" → high score.
- * "Water bottle" vs "Backpack" → near zero.
- */
-function computeTitleSimilarity(titleA, titleB) {
-	const a = removeStopWords(tokenise(titleA));
-	const b = removeStopWords(tokenise(titleB));
-	if (a.length === 0 && b.length === 0) return 0;
-
-	const setA = new Set(a);
-	const setB = new Set(b);
-
-	// Base Jaccard score.
-	const base = jaccard(setA, setB);
-	let score = base * 100;
-
-	// Bonus: check for multi-word phrase overlap (stronger signal).
-	const phraseA = a.join(' ');
-	const phraseB = b.join(' ');
-	if (phraseA.includes(phraseB) || phraseB.includes(phraseA)) {
-		score = Math.min(100, score + 20);
-	}
-
-	// Penalty: if shared tokens are only very common/generic words, cap lower.
-	const commonTokens = [...setA].filter(x => setB.has(x));
-	const genericSet = new Set(['black', 'white', 'blue', 'red', 'green',
-		'small', 'large', 'big', 'new', 'old', 'phone', 'bag', 'laptop', 'case']);
-	const specificTokens = commonTokens.filter(t => !genericSet.has(t));
-	if (specificTokens.length === 0 && commonTokens.length > 0) {
-		// Only generic words matched — cap at 40.
-		score = Math.min(40, score);
-	}
-
-	return clampScore(score);
-}
-
-// ---------------------------------------------------------------------------
-// Description similarity
-// ---------------------------------------------------------------------------
-
-/**
- * 0-100 deterministic description similarity.
- *
- * Compares meaningful tokens.  High-frequency descriptive words (colors,
- * objects) carry standard weight; rare/specific words carry more.
- */
-function computeDescriptionSimilarity(descA, descB) {
-	const a = removeStopWords(tokenise(descA));
-	const b = removeStopWords(tokenise(descB));
-	if (a.length === 0 && b.length === 0) return 0;
-
-	const setA = new Set(a);
-	const setB = new Set(b);
-
-	const base = jaccard(setA, setB);
-
-	// Weighted overlap: count occurrences for stronger signal.
-	const freqA = {};
-	const freqB = {};
-	for (const t of a) freqA[t] = (freqA[t] || 0) + 1;
-	for (const t of b) freqB[t] = (freqB[t] || 0) + 1;
-	let weightedOverlap = 0;
-	let weightedTotal = 0;
-	const allTokens = new Set([...Object.keys(freqA), ...Object.keys(freqB)]);
-	for (const t of allTokens) {
-		const ca = freqA[t] || 0;
-		const cb = freqB[t] || 0;
-		weightedOverlap += Math.min(ca, cb);
-		weightedTotal += Math.max(ca, cb);
-	}
-	const weighted = weightedTotal > 0 ? weightedOverlap / weightedTotal : 0;
-
-	// Blend Jaccard (structural) and weighted (content) → 0-100.
-	const raw = (base * 0.4 + weighted * 0.6) * 100;
-
-	return clampScore(raw);
-}
-
-// ---------------------------------------------------------------------------
-// Category score
-// ---------------------------------------------------------------------------
-
-/**
- * 100 if categories match exactly after normalisation, 0 otherwise.
- * Simple and deterministic.
- */
-function computeCategoryScore(catA, catB) {
-	const a = normaliseWord(catA);
-	const b = normaliseWord(catB);
-	if (!a || !b) return 0;
-	return a === b ? 100 : 0;
-}
-
-// ---------------------------------------------------------------------------
-// Location score
-// ---------------------------------------------------------------------------
-
-/**
- * 0-100 deterministic location similarity.
- *
- * "Library" vs "Main Library" → high (substring containment).
- * "Library" vs "Cafeteria" → 0.
- * "Block A Library" vs "Block B Library" → moderate (word overlap).
- */
-function computeLocationScore(locA, locB) {
-	const a = normaliseWord(locA);
-	const b = normaliseWord(locB);
-	if (!a || !b) return 0;
-
-	// Substring containment → strong signal.
-	if (a.includes(b) || b.includes(a)) return 100;
-
-	// Token-level overlap.
-	const tokensA = tokenise(a);
-	const tokensB = tokenise(b);
-	const setA = new Set(tokensA);
-	const setB = new Set(tokensB);
-	const j = jaccard(setA, setB);
-
-	return clampScore(Math.round(j * 100));
-}
-
-// ---------------------------------------------------------------------------
-// Time score
-// ---------------------------------------------------------------------------
-
-/**
- * 0-100 deterministic time-proximity score.
- *
- * Parses dateTime strings in common formats (ISO, "YYYY-MM-DD HH:MM").
- * Falls back to 50 if parsing fails (neutral — no penalty, no boost).
- */
-function computeTimeScore(timeA, timeB) {
-	const parse = (s) => {
-		if (!s) return null;
-		// Try ISO / common formats.
-		const d = new Date(s);
-		if (!isNaN(d.getTime())) return d;
-		// Try "YYYY-MM-DD HH:MM" or "YYYY-MM-DD HH:MM:SS"
-		const m = String(s).match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
-		if (m) {
-			const d2 = new Date(m[1] + 'T' + m[2] + ':00');
-			if (!isNaN(d2.getTime())) return d2;
-		}
-		return null;
-	};
-
-	const dA = parse(timeA);
-	const dB = parse(timeB);
-	if (!dA || !dB) return 50; // unparseable — neutral
-
-	const diffMs = Math.abs(dA.getTime() - dB.getTime());
-	const diffHours = diffMs / (1000 * 60 * 60);
-
-	if (diffHours <= 3)       return 95;
-	if (diffHours <= 6)       return 85;
-	if (diffHours <= 24)      return 75;
-	if (diffHours <= 48)      return 60;
-	if (diffHours <= 72)      return 40;
-	if (diffHours <= 168)     return 20;  // 7 days
-	return 5;  // more than a week
 }
 
 // ---------------------------------------------------------------------------
@@ -834,8 +537,16 @@ and empty arrays for anything you cannot determine from the image:
 		const titleScore       = computeTitleSimilarity(lost.title, found.title);
 		const descriptionScore = computeDescriptionSimilarity(lost.description, found.description);
 		const categoryScore    = computeCategoryScore(lost.category, found.category);
-		const locationScore    = computeLocationScore(lost.location, found.location);
-		const timeScore        = computeTimeScore(lost.dateTime, found.dateTime);
+		// Availability is decided from the DATA; unavailable factors are
+		// dropped from the weighting rather than scored 0 (see scoring.js).
+		const locationAvailable = hasValue(lost.location) && hasValue(found.location);
+		const timeAvailable = parseDateTime(lost.dateTime) !== null
+			&& parseDateTime(found.dateTime) !== null;
+
+		const locationScore    = locationAvailable
+			? computeLocationScore(lost.location, found.location) : null;
+		const timeScore        = timeAvailable
+			? computeTimeScore(lost.dateTime, found.dateTime) : null;
 
 		// Build an explainable reason string from the scores.
 		const reasonParts = [];
@@ -850,22 +561,29 @@ and empty arrays for anything you cannot determine from the image:
 		else if (descriptionScore === 0) reasonParts.push('descriptions differ');
 		if (categoryScore === 100) reasonParts.push('same category');
 		else reasonParts.push('different categories');
-		if (locationScore >= 80) reasonParts.push('location matches');
+		if (!locationAvailable) reasonParts.push('location not recorded (not scored)');
+		else if (locationScore >= 80) reasonParts.push('location matches');
 		else if (locationScore > 0) reasonParts.push('partial location match');
-		if (timeScore >= 85) reasonParts.push('times are close');
+		else reasonParts.push('locations differ');
+		if (!timeAvailable) reasonParts.push('time not recorded (not scored)');
+		else if (timeScore >= 85) reasonParts.push('times are close');
 		else if (timeScore >= 60) reasonParts.push('times are within a day or two');
 		else reasonParts.push('times are far apart');
 		const reason = reasonParts.join('; ') + '.';
 
-		const overallScore = Math.round(
-			titleScore       * 0.10 +
-			descriptionScore * 0.30 +
-			categoryScore    * 0.15 +
-			locationScore    * 0.10 +
-			timeScore        * 0.10 +
-			imageScore       * 0.25
-		);
-		const isMatch = overallScore >= 50;
+		// Single shared formula, with renormalisation for missing factors.
+		const combined = computeOverallScore({
+			titleScore,
+			descriptionScore,
+			categoryScore,
+			visualScore: imageScore,
+			locationScore: locationScore ?? 0,
+			timeScore: timeScore ?? 0,
+			locationAvailable,
+			timeAvailable,
+		});
+		const overallScore = combined.overallScore;
+		const isMatch = overallScore >= MATCH_THRESHOLD;
 
 		return Response.json({
 			success: true,
@@ -879,6 +597,10 @@ and empty arrays for anything you cannot determine from the image:
 				imageScore,
 				isMatch,
 				reason,
+				locationAvailable,
+				timeAvailable,
+				activeFactors: combined.activeFactors,
+				activeWeightTotal: combined.activeWeightTotal,
 			},
 		});
 }
@@ -1174,48 +896,9 @@ async function handleOpenRouterMultiImageTest(request, env) {
 // POST /ai/gemini-match-test — full Lost vs Found comparison via Gemini 2.5 Flash
 // ---------------------------------------------------------------------------
 
-/**
- * Validate a single item object for the gemini-match-test endpoint.
- * Returns an error string or null.
- */
-function validateGeminiItem(obj, label) {
-		if (!obj || typeof obj !== 'object') return `${label} must be a JSON object.`;
-	for (const field of ['title', 'description', 'category']) {
-		if (typeof obj[field] !== 'string' || obj[field].trim() === '') {
-			return `${label}.${field} is required and must be a non-empty string.`;
-		}
-	}
-	// location is OPTIONAL — inventory items don't carry a location.
-	// Empty string is the honest "not observed" signal; null/absent also ok.
-	// When provided (non-null, non-empty), it must be a valid non-empty string.
-	if (obj.location != null &&
-	    obj.location !== '' &&
-	    (typeof obj.location !== 'string' || obj.location.trim() === '')) {
-		return `${label}.location must be a non-empty string when provided.`;
-	}
-	// dateTime is OPTIONAL — the report forms don't ask for a date/time.
-	// Empty string means "unknown"; null/absent also ok.
-	// When provided (non-null, non-empty), it must be a valid non-empty string.
-	if (obj.dateTime != null &&
-	    obj.dateTime !== '' &&
-	    (typeof obj.dateTime !== 'string' || obj.dateTime.trim() === '')) {
-		return `${label}.dateTime must be a non-empty string when provided.`;
-	}
-		// imageUrls is optional — items without images fall back to text-only comparison.
-		if (!Array.isArray(obj.imageUrls)) {
-			return `${label}.imageUrls must be an array.`;
-		}
-		for (let i = 0; i < obj.imageUrls.length; i++) {
-			if (typeof obj.imageUrls[i] !== 'string' || obj.imageUrls[i].trim() === '') {
-				return `${label}.imageUrls[${i}] must be a non-empty string.`;
-			}
-		}
-		return null;
-	}
 
 const GEMINI_MODEL = 'google/gemini-2.5-flash';
 const MAX_IMAGES_PER_ITEM = 3;
-const BATCH_MAX_CANDIDATES = 10;
 
 // ---------------------------------------------------------------------------
 // Reusable Gemini comparison — call this for each lost↔found pair
@@ -1242,63 +925,46 @@ async function fetchItemImages(imageUrls, label) {
 	return images;
 }
 
-/**
- * Build the content array for a Gemini multi-image comparison request.
- * Interleaves text labels with images: "LOST ITEM image 1:", image, "FOUND ITEM image 1:", image, prompt.
- */
-function buildGeminiContent(lostImages, foundImages, lost, found) {
-	const promptText = `Compare these two items to determine if they are the SAME physical object.
-
-	LOST: "${lost.title}" | ${lost.category} | Location:${lost.location ? ' ' + lost.location : ' unknown'} | Time:${lost.dateTime ? ' ' + lost.dateTime : ' unknown'}
-"${lost.description}"
-
-FOUND: "${found.title}" | ${found.category} | Location:${found.location ? ' ' + found.location : ' unknown'} | Time:${found.dateTime ? ' ' + found.dateTime : ' unknown'}
-"${found.description}"
-
-Focus on: brand, logo, model, visible text, damage, stickers, unique marks, color, shape, accessories.
-
-SCORING (all 0-100):
-- visualScore: 90+ = multiple IDENTIFYING details match. 40-60 = same type/color but NO identifying details. <20 = different objects.
-- titleScore: key word overlap level
-- descriptionScore: factual overlap level
-- categoryScore: 100 if same, 0 if different (no partial)
-- locationScore: 100 if same building, 50-70 nearby, 0 different. If EITHER item's location is unknown/empty/blank, the location was NOT observed — set locationScore = 0 (neutral; do NOT award match points and do NOT treat it as a conflict).
-- timeScore: 95 within 3h, 75 same day, 50 adjacent days, 20 same week, 5 beyond. If EITHER item's time is unknown/empty/blank, the event time was NOT observed — set timeScore = 0 (neutral; do NOT award match points and do NOT treat it as a conflict).
-- confidence: 90+ = very strong evidence, 40-70 = generic similarity only
-- reason: one sentence
-
-CRITICAL: Two generic items (e.g. both "black backpack") must get visualScore ≤50 unless you SEE matching logos/stickers/damage.
-
-Reply ONLY with this JSON:
-{"visualScore":0,"titleScore":0,"descriptionScore":0,"categoryScore":0,"locationScore":0,"timeScore":0,"confidence":0,"reason":""}`;
-
-	const content = [];
-	for (let i = 0; i < lostImages.length; i++) {
-		content.push({ type: 'text', text: i === 0 ? 'LOST ITEM image 1:' : `LOST ITEM image ${i + 1} (alternate angle):` });
-		content.push({ type: 'image_url', image_url: { url: lostImages[i].dataUri } });
-	}
-	for (let i = 0; i < foundImages.length; i++) {
-		content.push({ type: 'text', text: i === 0 ? 'FOUND ITEM image 1:' : `FOUND ITEM image ${i + 1} (alternate angle):` });
-		content.push({ type: 'image_url', image_url: { url: foundImages[i].dataUri } });
-	}
-	content.push({ type: 'text', text: promptText });
-	return content;
-}
 
 /**
- * Core Gemini pair comparison.
- * @param {object} lost — { title, description, category, location, dateTime, imageUrls }
- * @param {object} found — { title, description, category, location, dateTime, imageUrls }
- * @param {string} apiKey — OpenRouter API key
- * @returns {{ visualScore, titleScore, descriptionScore, categoryScore,
- *            locationScore, timeScore, confidence, reason, overallScore, isMatch }}
- * @throws on network errors or unparseable AI response
+ * Core lost-vs-found pair comparison.
+ *
+ * Gemini supplies the VISUAL assessment only (visualScore, structured
+ * evidence, confidence, reason). Every other factor — title, description,
+ * category, location, time — plus weight renormalisation, the generic-item
+ * visual cap, the conflict penalty and the final overall score are computed
+ * deterministically by `scorePair` in `src/scoring.js`.
+ *
+ * The request is sent with `temperature: 0` and `top_p: 1` so the visual
+ * assessment is as reproducible as the model allows.
+ *
+ * @param {object} lost   { title, description, category, location, dateTime, imageUrls }
+ * @param {object} found  { title, description, category, location, dateTime, imageUrls }
+ * @param {string} apiKey OpenRouter API key
+ * @returns {object} scorePair() result plus imagesProcessed
+ * @throws on network errors or an unparseable AI response
  */
 async function geminiComparePair(lost, found, apiKey) {
+	// TEMPORARY diagnostic stage markers — counts only, never image bytes.
+	debugStage('image-extraction-start', {
+		lostUrlCount: Array.isArray(lost.imageUrls) ? lost.imageUrls.length : 0,
+		foundUrlCount: Array.isArray(found.imageUrls) ? found.imageUrls.length : 0,
+	});
 	const lostImages = await fetchItemImages(lost.imageUrls, 'lostItem');
 	const foundImages = await fetchItemImages(found.imageUrls, 'foundItem');
+	debugStage('image-extraction-done', {
+		lostImages: lostImages.length,
+		foundImages: foundImages.length,
+	});
 
 	const content = buildGeminiContent(lostImages, foundImages, lost, found);
+
+	debugStage('gemini-request-start', {
+		model: GEMINI_MODEL,
+		contentParts: content.length,
+		temperature: 0,
+		topP: 1,
+	});
 
 	const response = await fetch(OPENROUTER_BASE, {
 		method: 'POST',
@@ -1310,49 +976,84 @@ async function geminiComparePair(lost, found, apiKey) {
 		body: JSON.stringify({
 			model: GEMINI_MODEL,
 			messages: [{ role: 'user', content }],
+			// Reproducibility: greedy decoding, no sampling randomness.
+			// temperature 0 and top_p 1 are both supported by the OpenRouter
+			// chat-completions API for this model.
+			temperature: 0,
+			top_p: 1,
 		}),
 	});
 
 	const result = await response.json();
 
+	debugStage('gemini-response-received', {
+		httpStatus: response.status,
+		ok: response.ok,
+		hasChoices: Array.isArray(result && result.choices),
+	});
+
 	if (!response.ok) {
 		const errInfo = result.error || result;
+		// The provider's error object can echo request context, so log only its
+		// message/code — never the whole object.
+		debugError('gemini-response-received', new Error(
+			`OpenRouter HTTP ${response.status}: ` +
+			`${(errInfo && (errInfo.message || errInfo.code)) || 'unknown provider error'}`));
 		throw new Error(`OpenRouter error ${response.status}: ${JSON.stringify(errInfo)}`);
 	}
 
 	const aiText = result.choices?.[0]?.message?.content || result.choices?.[0]?.text || '';
 	if (!aiText) {
+		debugError('gemini-response-received',
+			new Error('Gemini returned an empty response.'));
 		throw new Error('Gemini returned an empty response.');
 	}
 
-	const scores = extractJson(aiText);
-	if (!scores || typeof scores.visualScore === 'undefined') {
+	const visual = extractJson(aiText);
+	debugStage('json-parsed', {
+		parsed: Boolean(visual),
+		hasVisualScore: Boolean(visual && typeof visual.visualScore !== 'undefined'),
+		matchingFeatureCount: visual && Array.isArray(visual.matchingFeatures)
+			? visual.matchingFeatures.length : 0,
+		conflictingFeatureCount: visual && Array.isArray(visual.conflictingFeatures)
+			? visual.conflictingFeatures.length : 0,
+	});
+	if (!visual || typeof visual.visualScore === 'undefined') {
+		debugError('json-parsed', new Error(
+			'Gemini did not return parseable JSON with a visualScore field.'));
 		throw new Error(`Gemini did not return parseable JSON. Raw: ${aiText.substring(0, 300)}`);
 	}
 
-	const visualScore      = clampScore(scores.visualScore);
-	const titleScore       = clampScore(scores.titleScore);
-	const descriptionScore = clampScore(scores.descriptionScore);
-	const categoryScore    = clampScore(scores.categoryScore);
-	const locationScore    = clampScore(scores.locationScore);
-	const timeScore        = clampScore(scores.timeScore);
-	const confidence       = clampScore(scores.confidence);
-	const reason           = typeof scores.reason === 'string' ? scores.reason : '';
+	debugStage('scoring-start');
 
-	const overallScore = Math.round(
-		titleScore       * 0.10 +
-		descriptionScore * 0.30 +
-		categoryScore    * 0.15 +
-		locationScore    * 0.10 +
-		timeScore        * 0.10 +
-		visualScore      * 0.25
-	);
+	// Deterministic scoring. Only the visual fields are taken from the model.
+	const scored = scorePair(lost, found, {
+		visualScore: visual.visualScore,
+		confidence: visual.confidence,
+		reason: visual.reason,
+		evidence: {
+			matchingFeatures: visual.matchingFeatures,
+			conflictingFeatures: visual.conflictingFeatures,
+		},
+	});
+
+	debugStage('scoring-success', {
+		overallScore: scored.overallScore,
+		visualScore: scored.visualScore,
+		rawVisualScore: scored.rawVisualScore,
+		visualCapped: scored.visualCapped,
+		conflictPenalty: scored.conflictPenalty,
+		activeWeightTotal: scored.activeWeightTotal,
+		isMatch: scored.isMatch,
+	});
 
 	return {
-		visualScore, titleScore, descriptionScore, categoryScore,
-		locationScore, timeScore, confidence, reason,
-		overallScore, isMatch: overallScore >= 50,
-		imagesProcessed: { lost: lostImages.length, found: foundImages.length, total: lostImages.length + foundImages.length },
+		...scored,
+		imagesProcessed: {
+			lost: lostImages.length,
+			found: foundImages.length,
+			total: lostImages.length + foundImages.length,
+		},
 	};
 }
 
@@ -1388,94 +1089,173 @@ async function handleGeminiMatchTest(request, env) {
 // POST /ai/batch-match — compare one anchor item against multiple candidates
 // ---------------------------------------------------------------------------
 
-/**
- * Deterministic candidate filter: returns true if the candidate is worth
- * sending to Gemini (same category AND location is compatible).
- */
-function candidateFilter(anchor, candidate) {
-	// Same category — exact match required.
-	const anchorCat = (anchor.category || '').trim().toLowerCase();
-	const candCat = (candidate.category || '').trim().toLowerCase();
-	if (anchorCat !== candCat) return false;
-	return true;
-}
 
 /**
  * Batch-match request body:
  * {
  *   anchorItem: { title, description, category, location, dateTime, imageUrls },
  *   candidateItems: [{ id, title, description, category, location, dateTime, imageUrls }, ...],
- *   maxCandidates?: number  // default 5
+ *   maxCandidates?: number  // default BATCH_MAX_CANDIDATES (10), hard cap 10
  * }
+ *
+ * `comparedCount` in the response reports exactly how many candidates were
+ * evaluated, and `droppedCount` how many passed the filter but exceeded
+ * `maxCandidates` — so a silent reduction can never go unnoticed again.
  */
 async function handleBatchMatch(request, env) {
-	const apiKey = env.OPENROUTER_API_KEY;
-	if (!apiKey) {
-		return Response.json({ success: false, error: 'OPENROUTER_API_KEY is not set.' }, { status: 500 });
-	}
+	// ── TEMPORARY DIAGNOSTIC LOGGING ───────────────────────────────────────
+	// Stage markers for the production 500 audit. Never logs keys, headers,
+	// base64 image bytes, or full request payloads — only counts, lengths,
+	// booleans and error names/messages.
+	let stage = 'batch-start';
+	debugStage('batch-start');
 
-	let body;
-	try { body = await request.json(); } catch {
-		return jsonError('Request body must be valid JSON.');
-	}
-
-	const anchorErr = validateGeminiItem(body.anchorItem, 'anchorItem');
-	if (anchorErr) return jsonError(anchorErr);
-
-	if (!Array.isArray(body.candidateItems) || body.candidateItems.length === 0) {
-		return jsonError('candidateItems must be a non-empty array.');
-	}
-
-	const anchor = body.anchorItem;
-	const maxCandidates = Math.min(
-		typeof body.maxCandidates === 'number' ? body.maxCandidates : 5,
-		BATCH_MAX_CANDIDATES
-	);
-
-	// Validate all candidates.
-	const candidates = [];
-	for (let i = 0; i < body.candidateItems.length; i++) {
-		const c = body.candidateItems[i];
-		const err = validateGeminiItem(c, `candidateItems[${i}]`);
-		if (err) return jsonError(err);
-		if (typeof c.id !== 'string' || c.id.trim() === '') {
-			return jsonError(`candidateItems[${i}].id is required.`);
+	try {
+		const apiKey = env.OPENROUTER_API_KEY;
+		// Presence only — the value is never logged.
+		debugStage('config-checked', {
+			hasOpenRouterKey: Boolean(apiKey),
+			keyLength: apiKey ? String(apiKey).length : 0,
+		});
+		if (!apiKey) {
+			debugError('config-checked', new Error(
+				'OPENROUTER_API_KEY is not set in the Worker environment. ' +
+				'Set it with: wrangler secret put OPENROUTER_API_KEY'));
+			return Response.json({
+				success: false,
+				error: 'OPENROUTER_API_KEY is not set.',
+				stage: 'config-checked',
+				hint: 'Run: wrangler secret put OPENROUTER_API_KEY',
+			}, { status: 500 });
 		}
-		candidates.push(c);
-	}
 
-	// Deterministic candidate filtering.
-	const filtered = candidates.filter(c => candidateFilter(anchor, c));
-	const selected = filtered.slice(0, maxCandidates);
-
-	// Compare anchor against each candidate (sequentially to avoid rate limits).
-	const results = [];
-	for (const candidate of selected) {
+		stage = 'request-parsed';
+		let body;
 		try {
-			const match = await geminiComparePair(anchor, candidate, apiKey);
-			results.push({ candidateId: candidate.id, ...match });
+			body = await request.json();
 		} catch (e) {
-			results.push({ candidateId: candidate.id, error: e.message || String(e) });
+			debugError('request-parsed', e);
+			return jsonError('Request body must be valid JSON.');
 		}
+		// Guard against a JSON literal `null`/scalar body, which would make
+		// every `body.x` deref below throw a TypeError → unhandled 500.
+		if (!body || typeof body !== 'object' || Array.isArray(body)) {
+			debugError('request-parsed',
+				new Error('Request body must be a JSON object.'));
+			return jsonError('Request body must be a JSON object.');
+		}
+		debugStage('request-parsed', {
+			hasAnchorItem: Boolean(body.anchorItem),
+			candidateCount: Array.isArray(body.candidateItems)
+				? body.candidateItems.length : 0,
+			maxCandidatesRequested: typeof body.maxCandidates === 'number'
+				? body.maxCandidates : null,
+		});
+
+		stage = 'candidates-validated';
+		const anchorErr = validateGeminiItem(body.anchorItem, 'anchorItem');
+		if (anchorErr) {
+			debugError('candidates-validated', new Error(anchorErr));
+			return jsonError(anchorErr);
+		}
+
+		if (!Array.isArray(body.candidateItems) || body.candidateItems.length === 0) {
+			debugError('candidates-validated',
+				new Error('candidateItems must be a non-empty array.'));
+			return jsonError('candidateItems must be a non-empty array.');
+		}
+
+		const anchor = body.anchorItem;
+		// Default to the full batch capacity. Previously this defaulted to 5 while
+		// the client fetched 10 candidates, so half were silently dropped.
+		const requested = typeof body.maxCandidates === 'number'
+			? body.maxCandidates
+			: BATCH_MAX_CANDIDATES;
+		const maxCandidates = Math.max(1, Math.min(requested, BATCH_MAX_CANDIDATES));
+
+		// Validate all candidates.
+		const candidates = [];
+		for (let i = 0; i < body.candidateItems.length; i++) {
+			const c = body.candidateItems[i];
+			const err = validateGeminiItem(c, `candidateItems[${i}]`);
+			if (err) {
+				debugError('candidates-validated', new Error(err));
+				return jsonError(err);
+			}
+			if (typeof c.id !== 'string' || c.id.trim() === '') {
+				debugError('candidates-validated',
+					new Error(`candidateItems[${i}].id is required.`));
+				return jsonError(`candidateItems[${i}].id is required.`);
+			}
+			candidates.push(c);
+		}
+
+		// Deterministic candidate filtering.
+		const filtered = candidates.filter(c => candidateFilter(anchor, c));
+		const selected = filtered.slice(0, maxCandidates);
+		debugStage('candidates-validated', {
+			total: candidates.length,
+			filtered: filtered.length,
+			selected: selected.length,
+			maxCandidates,
+		});
+
+		// Compare anchor against each candidate (sequentially to avoid rate limits).
+		const results = [];
+		for (const candidate of selected) {
+			try {
+				const match = await geminiComparePair(anchor, candidate, apiKey);
+				results.push({ candidateId: candidate.id, ...match });
+			} catch (e) {
+				// Per-candidate failures are contained here: the batch still
+				// returns HTTP 200 with an `error` on that candidate only.
+				debugError('candidate-compare', e, { candidateId: candidate.id });
+				results.push({ candidateId: candidate.id, error: e.message || String(e) });
+			}
+		}
+
+		stage = 'response-serialized';
+		// Sort by overallScore descending (errors at bottom).
+		results.sort((a, b) => {
+			if (a.error && !b.error) return 1;
+			if (!a.error && b.error) return -1;
+			return (b.overallScore || 0) - (a.overallScore || 0);
+		});
+
+		const okCount = results.filter(r => !r.error).length;
+		debugStage('batch-success', {
+			compared: selected.length,
+			scored: okCount,
+			failed: results.length - okCount,
+			topScore: results.length && !results[0].error
+				? results[0].overallScore : null,
+		});
+
+		return Response.json({
+			success: true,
+			model: GEMINI_MODEL,
+			provider: 'openrouter',
+			anchorId: anchor.id || null,
+			totalCandidates: candidates.length,
+			filteredCount: filtered.length,
+			comparedCount: selected.length,
+			// Non-zero means eligible candidates were NOT evaluated.
+			droppedCount: filtered.length - selected.length,
+			maxCandidates,
+			threshold: MATCH_THRESHOLD,
+			results,
+		});
+	} catch (e) {
+		// Catch-all so an unexpected exception surfaces the failing stage in the
+		// response instead of an opaque Cloudflare 500 with no diagnostics.
+		debugError(stage, e);
+		return Response.json({
+			success: false,
+			error: e && e.message ? e.message : String(e),
+			errorName: e && e.name ? e.name : 'Error',
+			stage,
+		}, { status: 500 });
 	}
-
-	// Sort by overallScore descending (errors at bottom).
-	results.sort((a, b) => {
-		if (a.error && !b.error) return 1;
-		if (!a.error && b.error) return -1;
-		return (b.overallScore || 0) - (a.overallScore || 0);
-	});
-
-	return Response.json({
-		success: true,
-		model: GEMINI_MODEL,
-		provider: 'openrouter',
-		anchorId: anchor.id || null,
-		totalCandidates: candidates.length,
-		filteredCount: filtered.length,
-		comparedCount: selected.length,
-		results,
-	});
 }
 
 // ---------------------------------------------------------------------------
@@ -1484,6 +1264,24 @@ async function handleBatchMatch(request, env) {
 
 export default {
 	async fetch(request, env) {
+		try {
+			return await route(request, env);
+		} catch (e) {
+			// TEMPORARY: without this, any uncaught throw becomes an opaque
+			// Cloudflare 500 with no body, which is what made this hard to
+			// diagnose from the Flutter side.
+			debugError('router', e);
+			return Response.json({
+				success: false,
+				error: e && e.message ? e.message : String(e),
+				errorName: e && e.name ? e.name : 'Error',
+				stage: 'router',
+			}, { status: 500 });
+		}
+	},
+};
+
+async function route(request, env) {
 		const url = new URL(request.url);
 
 			// POST /ai/match-test
@@ -1530,5 +1328,4 @@ export default {
 		}
 
 		return new Response('Not Found', { status: 404 });
-	},
-};
+}

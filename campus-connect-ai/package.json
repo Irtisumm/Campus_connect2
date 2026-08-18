@@ -2,9 +2,11 @@
   "name": "campus-connect-ai",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "start": "wrangler dev"
+    "start": "wrangler dev",
+    "test": "node --test test/deterministic_scoring.test.js test/image_similarity.test.js test/validate_gemini_item.test.js test/debug_logging.test.js"
   },
   "devDependencies": {
     "wrangler": "^4.123.0"

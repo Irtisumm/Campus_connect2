@@ -1,127 +1,30 @@
-// ---------------------------------------------------------------------------
-// Unit tests for computeImageSimilarity and related helpers
+﻿// ---------------------------------------------------------------------------
+// Unit tests for computeImageSimilarity and the deterministic scorers
 // ---------------------------------------------------------------------------
 // Run with: node --test test/image_similarity.test.js
+//
+// These import the REAL implementations from ../src/scoring.js. There is no
+// hand-synced copy any more, so a change to production scoring cannot pass
+// these tests while silently altering behaviour.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-// ---------------------------------------------------------------------------
-// Replicated helpers from src/index.js (kept in sync manually — these are
-// the deterministic functions under test; no network/AI dependencies).
-// ---------------------------------------------------------------------------
-
-const clampScore = (v) => {
-	const n = Number(v);
-	if (!Number.isFinite(n)) return 0;
-	return Math.max(0, Math.min(100, Math.round(n)));
-};
-
-const NORMALISE_RE = /[.,;:!?'"()]+/g;
-const TRAILING_SUFFIX = /(ed|ing|ly|s|es)$/i;
-
-function normaliseWord(s) {
-	let t = String(s || '').trim().toLowerCase();
-	t = t.replace(NORMALISE_RE, '');
-	t = t.replace(/\s+/g, ' ');
-	// Strip common suffixes ONLY when the remaining stem is at least 2 chars.
-	t = t.replace(TRAILING_SUFFIX, (match) => {
-		const stem = t.slice(0, -match.length);
-		return stem.length >= 2 ? '' : match;
-	});
-	t = t.trim();
-	return t;
-}
-
-function normaliseArray(arr) {
-	if (!Array.isArray(arr)) return [];
-	const seen = new Set();
-	const out = [];
-	for (const item of arr) {
-		const n = normaliseWord(item);
-		if (n && !seen.has(n)) {
-			seen.add(n);
-			out.push(n);
-		}
-	}
-	return out;
-}
-
-function normalizeAttrs(attrs) {
-	if (!attrs || typeof attrs !== 'object') return {};
-	return {
-		objectType: normaliseWord(attrs.objectType),
-		brand: normaliseWord(attrs.brand),
-		model: normaliseWord(attrs.model),
-		primaryColor: normaliseWord(attrs.primaryColor),
-		secondaryColors: normaliseArray(attrs.secondaryColors),
-		shape: normaliseWord(attrs.shape),
-		material: normaliseWord(attrs.material),
-		visibleText: normaliseWord(attrs.visibleText),
-		logos: normaliseArray(attrs.logos),
-		distinctiveFeatures: normaliseArray(attrs.distinctiveFeatures),
-		condition: normaliseWord(attrs.condition),
-		damageOrMarks: normaliseArray(attrs.damageOrMarks),
-		accessories: normaliseArray(attrs.accessories),
-		sizeOrFormFactor: normaliseWord(attrs.sizeOrFormFactor),
-		confidence: clampScore(attrs.confidence),
-	};
-}
-
-function computeImageSimilarity(lost, found) {
-	const L = normalizeAttrs(lost);
-	const F = normalizeAttrs(found);
-
-	let points = 0;
-
-	const eq = (a, b) => {
-		const na = normaliseWord(a);
-		const nb = normaliseWord(b);
-		if (!na || !nb) return false;
-		return na === nb;
-	};
-
-	const overlap = (arrA, arrB) => {
-		const a = normaliseArray(arrA);
-		const b = normaliseArray(arrB);
-		if (a.length === 0 && b.length === 0) return 0.5;
-		if (a.length === 0 || b.length === 0) return 0;
-		const setA = new Set(a);
-		const setB = new Set(b);
-		let common = 0;
-		for (const item of setA) { if (setB.has(item)) common++; }
-		return common / Math.max(setA.size, setB.size);
-	};
-
-	if (eq(L.objectType, F.objectType))         points += 5;
-	if (L.brand && F.brand && eq(L.brand, F.brand))         points += 18;
-	if (L.model && F.model && eq(L.model, F.model))         points += 12;
-	if (eq(L.primaryColor, F.primaryColor))     points += 8;
-	points += Math.round(overlap(L.secondaryColors, F.secondaryColors) * 3);
-	if (eq(L.shape, F.shape))                   points += 2;
-	if (eq(L.material, F.material))             points += 2;
-	if (L.visibleText && F.visibleText && eq(L.visibleText, F.visibleText)) points += 15;
-	points += Math.round(overlap(L.logos, F.logos) * 15);
-	points += Math.round(overlap(L.distinctiveFeatures, F.distinctiveFeatures) * 12);
-	points += Math.round(overlap(L.damageOrMarks, F.damageOrMarks) * 8);
-	points += Math.round(overlap(L.accessories, F.accessories) * 5);
-
-	points = Math.min(100, points);
-
-	const cLost = clampScore(L.confidence);
-	const cFound = clampScore(F.confidence);
-	const avgConf = (cLost + cFound) / 2;
-
-	if (avgConf >= 70) {
-		const boost = 1 + ((avgConf - 70) / 100) * 0.2;
-		points = Math.round(Math.min(100, points * boost));
-	} else if (avgConf < 40) {
-		const penalty = 0.5 + (avgConf / 40) * 0.5;
-		points = Math.round(points * penalty);
-	}
-
-	return points;
-}
+import {
+	clampScore,
+	normaliseWord,
+	normaliseArray,
+	normalizeAttrs,
+	computeImageSimilarity,
+	computeTitleSimilarity,
+	computeDescriptionSimilarity,
+	computeCategoryScore,
+	computeLocationScore,
+	computeTimeScore,
+	computeOverallScore,
+	hasValue,
+	FACTOR_WEIGHTS,
+} from '../src/scoring.js';
 
 // ---------------------------------------------------------------------------
 // Test helper — make a minimal attribute object.
@@ -437,15 +340,23 @@ describe('computeImageSimilarity — edge cases', () => {
 // Overall score calculation (replicated logic)
 // ===================================================================
 
+/**
+ * Thin wrapper over the REAL computeOverallScore, for the legacy test cases
+ * below that supply all six factors. Both location and time are present in
+ * these fixtures, so the denominator is the full 1.00 and the results match
+ * the original hand-written formula exactly.
+ */
 function overallScore(scores) {
-	return Math.round(
-		scores.titleScore       * 0.10 +
-		scores.descriptionScore * 0.30 +
-		scores.categoryScore    * 0.15 +
-		scores.locationScore    * 0.10 +
-		scores.timeScore        * 0.10 +
-		scores.imageScore       * 0.25
-	);
+	return computeOverallScore({
+		titleScore: scores.titleScore,
+		descriptionScore: scores.descriptionScore,
+		categoryScore: scores.categoryScore,
+		visualScore: scores.imageScore,
+		locationScore: scores.locationScore,
+		timeScore: scores.timeScore,
+		locationAvailable: true,
+		timeAvailable: true,
+	}).overallScore;
 }
 
 describe('overallScore calculation', () => {
@@ -492,145 +403,6 @@ describe('overallScore calculation', () => {
 				assert.ok(overallScore(s) >= 50);
 			});
 	});
-
-// ===================================================================
-// Deterministic metadata scoring functions (replicated from src/index.js)
-// ===================================================================
-
-function tokenise(s) {
-	return String(s || '')
-		.toLowerCase()
-		.replace(/[.,;:!?'"()\[\]{}]+/g, ' ')
-		.replace(/\s+/g, ' ')
-		.trim()
-		.split(' ')
-		.filter(Boolean);
-}
-
-const STOP_WORDS = new Set([
-	'a', 'an', 'the', 'is', 'was', 'are', 'were', 'be', 'been',
-	'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
-	'it', 'its', 'this', 'that', 'my', 'me', 'i', 'you', 'your',
-	'found', 'lost', 'item', 'has', 'have', 'had', 'not', 'no',
-	'very', 'just', 'about', 'near', 'around', 'from',
-]);
-
-function removeStopWords(tokens) {
-	return tokens.filter(t => !STOP_WORDS.has(t) && t.length > 1);
-}
-
-function jaccard(setA, setB) {
-	if (setA.size === 0 && setB.size === 0) return 0;
-	const intersection = new Set([...setA].filter(x => setB.has(x)));
-	const union = new Set([...setA, ...setB]);
-	return intersection.size / union.size;
-}
-
-function computeTitleSimilarity(titleA, titleB) {
-	const a = removeStopWords(tokenise(titleA));
-	const b = removeStopWords(tokenise(titleB));
-	if (a.length === 0 && b.length === 0) return 0;
-
-	const setA = new Set(a);
-	const setB = new Set(b);
-
-	const base = jaccard(setA, setB);
-	let score = base * 100;
-
-	const phraseA = a.join(' ');
-	const phraseB = b.join(' ');
-	if (phraseA.includes(phraseB) || phraseB.includes(phraseA)) {
-		score = Math.min(100, score + 20);
-	}
-
-	const commonTokens = [...setA].filter(x => setB.has(x));
-	const genericSet = new Set(['black', 'white', 'blue', 'red', 'green',
-		'small', 'large', 'big', 'new', 'old', 'phone', 'bag', 'laptop', 'case']);
-	const specificTokens = commonTokens.filter(t => !genericSet.has(t));
-	if (specificTokens.length === 0 && commonTokens.length > 0) {
-		score = Math.min(40, score);
-	}
-
-	return clampScore(score);
-}
-
-function computeDescriptionSimilarity(descA, descB) {
-	const a = removeStopWords(tokenise(descA));
-	const b = removeStopWords(tokenise(descB));
-	if (a.length === 0 && b.length === 0) return 0;
-
-	const setA = new Set(a);
-	const setB = new Set(b);
-
-	const base = jaccard(setA, setB);
-
-	const freqA = {};
-	const freqB = {};
-	for (const t of a) freqA[t] = (freqA[t] || 0) + 1;
-	for (const t of b) freqB[t] = (freqB[t] || 0) + 1;
-	let weightedOverlap = 0;
-	let weightedTotal = 0;
-	const allTokens = new Set([...Object.keys(freqA), ...Object.keys(freqB)]);
-	for (const t of allTokens) {
-		const ca = freqA[t] || 0;
-		const cb = freqB[t] || 0;
-		weightedOverlap += Math.min(ca, cb);
-		weightedTotal += Math.max(ca, cb);
-	}
-	const weighted = weightedTotal > 0 ? weightedOverlap / weightedTotal : 0;
-
-	const raw = (base * 0.4 + weighted * 0.6) * 100;
-	return clampScore(raw);
-}
-
-function computeCategoryScore(catA, catB) {
-	const a = normaliseWord(catA);
-	const b = normaliseWord(catB);
-	if (!a || !b) return 0;
-	return a === b ? 100 : 0;
-}
-
-function computeLocationScore(locA, locB) {
-	const a = normaliseWord(locA);
-	const b = normaliseWord(locB);
-	if (!a || !b) return 0;
-	if (a.includes(b) || b.includes(a)) return 100;
-	const tokensA = tokenise(a);
-	const tokensB = tokenise(b);
-	const setA = new Set(tokensA);
-	const setB = new Set(tokensB);
-	const j = jaccard(setA, setB);
-	return clampScore(Math.round(j * 100));
-}
-
-function computeTimeScore(timeA, timeB) {
-	const parse = (s) => {
-		if (!s) return null;
-		const d = new Date(s);
-		if (!isNaN(d.getTime())) return d;
-		const m = String(s).match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
-		if (m) {
-			const d2 = new Date(m[1] + 'T' + m[2] + ':00');
-			if (!isNaN(d2.getTime())) return d2;
-		}
-		return null;
-	};
-
-	const dA = parse(timeA);
-	const dB = parse(timeB);
-	if (!dA || !dB) return 50;
-
-	const diffMs = Math.abs(dA.getTime() - dB.getTime());
-	const diffHours = diffMs / (1000 * 60 * 60);
-
-	if (diffHours <= 3)       return 95;
-	if (diffHours <= 6)       return 85;
-	if (diffHours <= 24)      return 75;
-	if (diffHours <= 48)      return 60;
-	if (diffHours <= 72)      return 40;
-	if (diffHours <= 168)     return 20;
-	return 5;
-}
 
 // ===================================================================
 // Title similarity tests
@@ -783,8 +555,18 @@ describe('computeTimeScore', () => {
 		assert.equal(computeTimeScore('2026-08-01', '2026-08-17'), 5);
 	});
 
-	it('returns 50 for unparseable dates', () => {
-		assert.equal(computeTimeScore('yesterday', 'today'), 50);
+	// Behaviour change: the old code returned a fake "neutral" 50 for
+	// unparseable dates, which silently invented evidence. It now returns 0
+	// and callers must drop the time factor from the weighting instead —
+	// see the renormalisation suite in deterministic_scoring.test.js.
+	it('returns 0 for unparseable dates (caller must drop the factor)', () => {
+		assert.equal(computeTimeScore('yesterday', 'today'), 0);
+	});
+
+	it('returns 0 when either side is missing', () => {
+		assert.equal(computeTimeScore('', '2026-08-16 14:00'), 0);
+		assert.equal(computeTimeScore('2026-08-16 14:00', ''), 0);
+		assert.equal(computeTimeScore(null, null), 0);
 	});
 });
 
