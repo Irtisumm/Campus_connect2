@@ -4,10 +4,12 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/app_notification.dart';
+import '../models/campus_notification.dart';
 import '../models/auth_result.dart';
 import '../models/candidate.dart';
 import '../models/election_meta.dart';
@@ -37,11 +39,13 @@ import 'event_service.dart';
 import 'issue_service.dart';
 import 'lf_workflow_service.dart';
 import 'locker_service.dart';
+import 'notification_adapter.dart';
 import 'locker_pricing.dart';
 import 'lost_found_service.dart';
 import 'payment_service.dart';
 import 'push_service.dart';
 import 'onesignal_service.dart';
+import 'notification_service.dart';
 import 'user_service.dart';
 
 // Re-exported so screens keep importing a single file for session types.
@@ -95,6 +99,7 @@ class AppState extends ChangeNotifier {
   final OneSignalService _oneSignal;
   final CloudinaryService _cloudinary;
   final CloudinaryService _lostFoundCloudinary;
+  late final NotificationService _notifications;
 
   /// Fixed `closeReason` values written by the two authorized admin closure
   /// paths. Never sourced from client input — the Firestore rules accept only
@@ -126,6 +131,7 @@ class AppState extends ChangeNotifier {
     OneSignalService? oneSignalService,
     CloudinaryService? cloudinaryService,
     CloudinaryService? lostFoundCloudinaryService,
+    NotificationService? notificationService,
   })  : _auth = authService ?? AuthService(),
         _users = userService ?? UserService(),
         _admin = adminService ?? AdminService(),
@@ -154,6 +160,18 @@ class AppState extends ChangeNotifier {
     // Firebase auth state can change without a UI action (token refresh,
     // cold-start session restore), so mirror it into the widget tree.
     _authSub = _auth.uidChanges().listen(_onUidChanged);
+
+    // Centralized notification service — emits to the correct Firestore
+    // collection based on source, handles dedupe/preferences/push.
+    // Tests can inject a capturing fake via notificationService.
+    _notifications = notificationService ??
+        NotificationService(
+          lfWorkflow: _lfWorkflow,
+          lockers: _lockers,
+          users: _users,
+          adminNotificationsRef: () =>
+              FirebaseFirestore.instance.collection('adminNotifications'),
+        );
   }
 
   /// Test-only constructor that seeds a known profile (and optional load
@@ -677,6 +695,41 @@ class AppState extends ChangeNotifier {
           'handover (QR scan or admin confirm) to create inventory + trigger AI');
     }
 
+    // Admin work-queue notification (fire-and-forget). The student who
+    // created the report must NOT receive a self-notification; only
+    // administrators see new reports land in the queue.  When the actor is
+    // already an admin (e.g. admin creates a found inventory entry) the
+    // notification is skipped — the admin is inside the workflow.
+    if (!isAdmin) {
+      unawaited(() async {
+        try {
+          final isLost = created.isLost;
+          await _notifications.emitAdmin(CampusNotification(
+            source: NotificationSource.lostFound,
+            type: isLost ? 'lost_report_submitted' : 'found_report_submitted',
+            studentId: created.reportedByStudentId,
+            recipientUid: '',
+            title: isLost ? 'New Lost Report' : 'New Found Report',
+            body: '${created.reportedByName.isNotEmpty ? created.reportedByName : created.reportedByStudentId} '
+                'reported a${isLost ? ' lost' : ' found'} "${created.title}" '
+                '(${created.category}).',
+            relatedEntityId: created.id,
+            relatedScreen: isLost
+                ? '/lost-found/lost/${created.id}'
+                : '/lost-found/found/${created.id}',
+            dedupeKey: CampusNotification.buildDedupeKey(
+              source: NotificationSource.lostFound,
+              type: isLost ? 'lost_report_submitted' : 'found_report_submitted',
+              relatedEntityId: created.id,
+              recipientUid: 'admin',
+            ),
+          ));
+        } catch (e) {
+          debugPrint('[Notification] admin report notification failed: $e');
+        }
+      }());
+    }
+
     return created;
   }
 
@@ -686,8 +739,15 @@ class AppState extends ChangeNotifier {
   /// A student can no longer close a lost report directly: they request
   /// closure ([requestClose]) and an admin approves it ([approveCloseRequest]).
   /// The Firestore rules reject a student's lost Active → Closed transition.
-  Future<void> closeReport(String id) =>
-      _lostFound.updateStatus(id, ItemStatus.closed);
+  Future<void> closeReport(String id) async {
+    await _lostFound.updateStatus(id, ItemStatus.closed);
+    unawaited(_notifyReportOwner(
+      itemId: id,
+      type: 'report_closed',
+      title: 'Report Closed',
+      body: 'Your found report has been closed by an administrator.',
+    ));
+  }
 
   /// Student request to close their own lost report.
   ///
@@ -695,8 +755,35 @@ class AppState extends ChangeNotifier {
   /// rules reject every other student transition (including a direct
   /// Active → Closed), and a duplicate request on an already-requested report
   /// is a no-op at the database level.
-  Future<void> requestClose(String id) =>
-      _lostFound.updateStatus(id, ItemStatus.requestedClose);
+  Future<void> requestClose(String id) async {
+    await _lostFound.updateStatus(id, ItemStatus.requestedClose);
+    // Fire-and-forget admin work-queue notification.
+    unawaited(() async {
+      try {
+        final item = await _lfWorkflow.fetchItem(id);
+        if (item == null) return;
+        await _notifications.emitAdmin(CampusNotification(
+          source: NotificationSource.lostFound,
+          type: 'close_request_submitted',
+          studentId: item.reportedByStudentId,
+          recipientUid: '',
+          title: 'Close Request',
+          body: '${item.reportedByName.isNotEmpty ? item.reportedByName : item.reportedByStudentId} '
+              'requests to close "${item.title}".',
+          relatedEntityId: id,
+          relatedScreen: '/lost-found/lost/$id',
+          dedupeKey: CampusNotification.buildDedupeKey(
+            source: NotificationSource.lostFound,
+            type: 'close_request_submitted',
+            relatedEntityId: id,
+            recipientUid: 'admin',
+          ),
+        ));
+      } catch (e) {
+        debugPrint('[Notification] close-request admin notify failed: $e');
+      }
+    }());
+  }
 
   /// Admin approves a student's closure request.
   ///
@@ -708,6 +795,13 @@ class AppState extends ChangeNotifier {
     await _lostFound.updateStatusWithReason(
         id, ItemStatus.closed, closeReasonStudentRequestApproved);
     await _lfWorkflow.rejectActiveMatchesForReport(id);
+    unawaited(_notifyReportOwner(
+      itemId: id,
+      type: 'close_request_approved',
+      title: 'Request Approved',
+      body:
+          'Your closure request has been approved and the report is now closed.',
+    ));
   }
 
   /// Admin marks an eligible open report as resolved.
@@ -718,6 +812,12 @@ class AppState extends ChangeNotifier {
     await _lostFound.updateStatusWithReason(
         id, ItemStatus.closed, closeReasonAdminResolved);
     await _lfWorkflow.rejectActiveMatchesForReport(id);
+    unawaited(_notifyReportOwner(
+      itemId: id,
+      type: 'report_closed',
+      title: 'Report Resolved',
+      body: 'Your report has been resolved and closed.',
+    ));
   }
 
   /// Resolves a reporter's display name for a legacy report that predates
@@ -830,14 +930,15 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Live count of unread Lost & Found notifications for the signed-in user —
-  /// a student's own, or every notification for an admin. Drives the bell
-  /// badge's unread dot, which clears only once every notification is read.
+  /// Live count of unread Lost & Found notifications for the signed-in user.
+  /// For admins, always 0 — admin-specific notification triggers will be
+  /// added in later phases.  New code should prefer
+  /// [watchUnreadCampusNotifications] for a source-unified badge.
   Stream<int> watchUnreadLfNotifications() {
-    final Stream<List<LfNotification>> stream = isAdmin
-        ? _lfWorkflow.watchAllLfNotifications()
-        : _lfWorkflow.watchMyLfNotifications(userId ?? '');
-    return stream.map((list) => list.where((n) => !n.read).length);
+    if (isAdmin) return Stream.value(0);
+    return _lfWorkflow
+        .watchMyLfNotifications(userId ?? '')
+        .map((list) => list.where((n) => !n.read).length);
   }
 
   /// Marks all of the signed-in user's own L&F notifications as read.
@@ -851,16 +952,209 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Merged, sorted stream of every notification the current user should
+  /// see in the unified Notifications screen.  Includes Lost & Found and
+  /// Locker notifications today; Event / Issue / System are added in
+  /// future phases.
+  ///
+  /// For admins, returns the admin work queue (from `adminNotifications`,
+  /// keyed on the current admin's UID for read tracking).  The queue is
+  /// cross-module — Phase 5A adds Lost & Found items; future phases will
+  /// add Event, Issue, Locker, and System items using the same collection.
+  Stream<List<CampusNotification>> watchMyCampusNotifications() {
+    if (isAdmin) {
+      final uid = firebaseUid ?? '';
+      if (uid.isEmpty) return Stream.value(const <CampusNotification>[]);
+      return _notifications
+          .watchAdminNotifications()
+          .map((list) => list
+              .map((a) => adaptAdminNotification(a, uid))
+              .toList(growable: false));
+    }
+
+    final uid = firebaseUid ?? '';
+    if (uid.isEmpty) return Stream.value(const <CampusNotification>[]);
+
+    final lfStream = _lfWorkflow
+        .watchMyLfNotifications(userId ?? '')
+        .map((list) => list
+            .map((lf) => adaptLfNotification(lf, uid))
+            .toList(growable: false));
+
+    final lockerStream = _lockers
+        .watchMyLockerNotifications(userId ?? '')
+        .map((list) => list
+            .map((lock) => adaptLockerNotification(lock, uid))
+            .toList(growable: false));
+
+    final mergedController = StreamController<List<CampusNotification>>();
+
+    void emitMerged() {
+      List<CampusNotification> latestLf = const [];
+      List<CampusNotification> latestLocker = const [];
+      bool hasLf = false;
+      bool hasLocker = false;
+
+      void _combine() {
+        if (!hasLf && !hasLocker) return;
+        final merged = <CampusNotification>[
+          ...latestLf,
+          ...latestLocker,
+        ];
+        merged.sort(_newestCampusNotificationFirst);
+        mergedController.add(merged);
+      }
+
+      lfStream.listen((lf) {
+        latestLf = lf;
+        hasLf = true;
+        _combine();
+      });
+
+      lockerStream.listen((locker) {
+        latestLocker = locker;
+        hasLocker = true;
+        _combine();
+      });
+    }
+
+    emitMerged();
+    return mergedController.stream;
+  }
+
+  /// Live count of unread notifications for the bell badge.
+  ///
+  /// Uses the same [watchMyCampusNotifications] stream as the
+  /// NotificationsScreen so the badge always matches what the screen
+  /// can actually display and manage.
+  Stream<int> watchUnreadCampusNotifications() {
+    return watchMyCampusNotifications()
+        .map((list) => list.where((n) => !n.read).length);
+  }
+
+  /// Marks every notification that the NotificationsScreen can display
+  /// as read — Lost & Found + Locker for students; the admin work queue
+  /// for administrators.
+  Future<void> markAllCampusNotificationsRead() async {
+    if (isAdmin) {
+      final uid = firebaseUid ?? '';
+      if (uid.isEmpty) return;
+      try {
+        await _notifications.markAllAdminNotificationsRead(uid);
+      } on AuthFailure { /* best-effort */ }
+      return;
+    }
+    final id = userId ?? '';
+    if (id.isEmpty) return;
+    try {
+      await _lfWorkflow.markAllRead(id);
+    } on AuthFailure { /* best-effort */ }
+    try {
+      await _lockers.markAllRead(id);
+    } on AuthFailure { /* best-effort */ }
+  }
+
+  /// Acknowledges a single admin work-queue item for the current admin.
+  Future<bool> markAdminNotificationRead(String id) async {
+    final uid = firebaseUid ?? '';
+    if (uid.isEmpty) return false;
+    try {
+      await _notifications.markAdminNotificationRead(id, uid);
+      return true;
+    } on AuthFailure {
+      return false;
+    }
+  }
+
+  /// Best-effort helper: fetches [itemId] from Firestore, derives the
+  /// owner's UID and studentId, emits a student notification of [type],
+  /// and dispatches push.  Failures are logged, never propagated.
+  Future<void> _notifyReportOwner({
+    required String itemId,
+    required String type,
+    required String title,
+    required String body,
+  }) async {
+    try {
+      final item = await _lfWorkflow.fetchItem(itemId);
+      if (item == null || item.reportedByUid.isEmpty) return;
+      final relatedScreen =
+          item.isLost ? '/lost-found/lost/$itemId' : '/lost-found/found/$itemId';
+      final notification = CampusNotification(
+        source: NotificationSource.lostFound,
+        type: type,
+        studentId: item.reportedByStudentId,
+        recipientUid: item.reportedByUid,
+        title: title,
+        body: body,
+        relatedEntityId: itemId,
+        relatedScreen: relatedScreen,
+        preferenceCategory:
+            preferenceCategoryForSource(NotificationSource.lostFound),
+        dedupeKey: CampusNotification.buildDedupeKey(
+          source: NotificationSource.lostFound,
+          type: type,
+          relatedEntityId: itemId,
+          recipientUid: item.reportedByUid,
+        ),
+      );
+      final notifId = await _notifications.emit(notification);
+      if (notifId.isNotEmpty) {
+        debugPrint(
+            '[Notification] notify id=$notifId type=$type item=$itemId');
+      }
+    } catch (e) {
+      debugPrint('[Notification] notify-owner failed: $e');
+    }
+  }
+
+  static int _newestCampusNotificationFirst(
+      CampusNotification a, CampusNotification b) {
+    final ta = a.createdAt?.millisecondsSinceEpoch ?? 0;
+    final tb = b.createdAt?.millisecondsSinceEpoch ?? 0;
+    return tb.compareTo(ta);
+  }
+
   /// Issues a Handover QR for a found report awaiting handover
   /// (admin-only). The returned transaction carries the [QrTransaction.token]
   /// to encode in the QR image.
-  Future<QrTransaction> issueHandoverQr(Item foundReport) =>
-      _lfWorkflow.issueQr(QrTransaction.issue(
-        kind: QrKind.handover,
-        intendedStudentUid: foundReport.reportedByUid,
-        intendedStudentId: foundReport.reportedByStudentId,
-        foundReportId: foundReport.id,
-      ));
+  Future<QrTransaction> issueHandoverQr(Item foundReport) async {
+    final txn = await _lfWorkflow.issueQr(QrTransaction.issue(
+      kind: QrKind.handover,
+      intendedStudentUid: foundReport.reportedByUid,
+      intendedStudentId: foundReport.reportedByStudentId,
+      foundReportId: foundReport.id,
+    ));
+    // Notify the finder that a QR is ready for scanning — they need to act.
+    unawaited(() async {
+      try {
+        final notification = CampusNotification(
+          source: NotificationSource.lostFound,
+          type: 'handover_qr',
+          studentId: foundReport.reportedByStudentId,
+          recipientUid: foundReport.reportedByUid,
+          title: 'Handover QR Ready',
+          body:
+              'A handover code has been issued for your found "${foundReport.title}". '
+                  'Scan it at the Inventory Office when you hand over the item.',
+          relatedEntityId: foundReport.id,
+          relatedScreen: '/lost-found/found/${foundReport.id}',
+          preferenceCategory:
+              preferenceCategoryForSource(NotificationSource.lostFound),
+          dedupeKey: CampusNotification.buildDedupeKey(
+            source: NotificationSource.lostFound,
+            type: 'handover_qr',
+            relatedEntityId: txn.id,
+            recipientUid: foundReport.reportedByUid,
+          ),
+        );
+        await _notifications.emit(notification);
+      } catch (e) {
+        debugPrint('[Notification] handover QR notify failed: $e');
+      }
+    }());
+    return txn;
+  }
 
   /// Issues a Return QR for an approved match (admin-only). Bound to the
   /// match's ID, lost report, the inventory item, and the lost report's owner.
@@ -964,26 +1258,124 @@ class AppState extends ChangeNotifier {
       });
     }
 
+    // Notify the finder (QR's intended student) that the item has been
+    // handed over and is now in inventory.
+    unawaited(() async {
+      try {
+        final qrTxn = await _lfWorkflow.fetchQrTransaction(txnId);
+        if (qrTxn == null) return;
+        await _notifications.emit(CampusNotification(
+          source: NotificationSource.lostFound,
+          type: 'handover_confirmed',
+          studentId: qrTxn.intendedStudentId,
+          recipientUid: qrTxn.intendedStudentUid,
+          title: 'Handover Confirmed',
+          body:
+              'Your found item has been handed over and is now in the inventory office.',
+          relatedEntityId: qrTxn.foundReportId,
+          relatedScreen: '/lost-found/found/${qrTxn.foundReportId}',
+          preferenceCategory:
+              preferenceCategoryForSource(NotificationSource.lostFound),
+          dedupeKey: CampusNotification.buildDedupeKey(
+            source: NotificationSource.lostFound,
+            type: 'handover_confirmed',
+            relatedEntityId: txnId,
+            recipientUid: qrTxn.intendedStudentUid,
+          ),
+        ));
+      } catch (e) {
+        debugPrint('[Notification] handover confirmed notify failed: $e');
+      }
+    }());
+
     return invId;
   }
 
   /// Workflow 3 — admin confirms the physical return. One transaction:
   /// inventory → Returned, found report → Returned, lost report → Resolved,
   /// match → Completed, QR → Confirmed.
-  Future<void> confirmReturn(String txnId) =>
-      _lfWorkflow.confirmReturn(txnId: txnId, adminUid: firebaseUid ?? '');
+  Future<void> confirmReturn(String txnId) async {
+    await _lfWorkflow.confirmReturn(txnId: txnId, adminUid: firebaseUid ?? '');
+    // Notify the lost owner (QR's intended student) that the item has been
+    // returned and their report resolved.
+    unawaited(() async {
+      try {
+        final qrTxn = await _lfWorkflow.fetchQrTransaction(txnId);
+        if (qrTxn == null) return;
+        await _notifications.emit(CampusNotification(
+          source: NotificationSource.lostFound,
+          type: 'return_confirmed',
+          studentId: qrTxn.intendedStudentId,
+          recipientUid: qrTxn.intendedStudentUid,
+          title: 'Item Returned',
+          body:
+              'Your lost item has been returned. Thank you for using Campus Connect.',
+          relatedEntityId: qrTxn.lostReportId,
+          relatedScreen: '/lost-found/lost/${qrTxn.lostReportId}',
+          preferenceCategory:
+              preferenceCategoryForSource(NotificationSource.lostFound),
+          dedupeKey: CampusNotification.buildDedupeKey(
+            source: NotificationSource.lostFound,
+            type: 'return_confirmed',
+            relatedEntityId: txnId,
+            recipientUid: qrTxn.intendedStudentUid,
+          ),
+        ));
+      } catch (e) {
+        debugPrint('[Notification] return confirmed notify failed: $e');
+      }
+    }());
+  }
 
   /// Creates a match (admin-only). Pass [MatchStatus.proposed] for a draft
   /// or [MatchStatus.approved] to create it already approved.
   Future<LfMatch> createMatch(LfMatch match) => _lfWorkflow.createMatch(match);
 
-  /// Approves a match and delivers the owner's notification atomically.
-  Future<String> approveMatchWithNotification(String matchId) =>
-      _lfWorkflow.approveMatchWithNotification(
-        matchId: matchId,
-        lostReportTitle: '',
-        inventoryTitle: '',
-      );
+  /// Approves a match (tx writes the notification doc atomically) and
+  /// dispatches the push via the canonical NotificationService so the
+  /// student actually receives it.
+  Future<String> approveMatchWithNotification(String matchId) async {
+    final notificationId = await _lfWorkflow.approveMatchWithNotification(
+      matchId: matchId,
+      lostReportTitle: '',
+      inventoryTitle: '',
+    );
+    // Push leg: the document is already durable from the transaction.
+    if (notificationId.isNotEmpty) {
+      unawaited(() async {
+        try {
+          final match = await _lfWorkflow.fetchMatch(matchId);
+          if (match == null) return;
+          await _notifications.dispatchPush(
+            CampusNotification(
+              source: NotificationSource.lostFound,
+              type: 'match_approved',
+              studentId: match.lostOwnerStudentId,
+              recipientUid: match.lostOwnerUid,
+              title: 'Match Approved',
+              body:
+                  'An inventory item may match your lost report. Visit the office '
+                  'to verify ownership.',
+              relatedEntityId: match.lostReportId,
+              relatedScreen: '/lost-found/lost/${match.lostReportId}',
+              preferenceCategory:
+                  preferenceCategoryForSource(NotificationSource.lostFound),
+              dedupeKey: CampusNotification.buildDedupeKey(
+                source: NotificationSource.lostFound,
+                type: 'match_approved',
+                relatedEntityId: matchId,
+                recipientUid: match.lostOwnerUid,
+              ),
+            ),
+            notificationId,
+          );
+        } catch (e) {
+          debugPrint('[Notification] approve push failed: $e');
+        }
+      }());
+    }
+    return notificationId;
+  }
 
   /// Reserves an inventory item while an admin links it to a lost report.
   Future<void> reserveInventoryItem(String inventoryItemId) =>
@@ -993,8 +1385,51 @@ class AppState extends ChangeNotifier {
   Future<void> releaseInventoryItem(String inventoryItemId) =>
       _lfWorkflow.releaseInventoryItem(inventoryItemId);
 
-  /// Rejects a match and releases its inventory item atomically.
-  Future<void> rejectMatch(String matchId) => _lfWorkflow.rejectMatch(matchId);
+  /// Rejects a match, releases its inventory, and notifies the lost owner.
+  /// Skips the notification when the match was already final.
+  Future<void> rejectMatch(String matchId) async {
+    // Guard: fetch first; if already Rejected/Completed, skip the tx call
+    // entirely (the workflow tx also guards, but we need the pre-read for
+    // the notification decision).
+    final before = await _lfWorkflow.fetchMatch(matchId);
+    if (before != null &&
+        (before.status == MatchStatus.rejected ||
+            before.status == MatchStatus.completed)) {
+      debugPrint(
+          '[Notification] reject skipped — match $matchId already ${before.status.wireValue}');
+      return;
+    }
+    await _lfWorkflow.rejectMatch(matchId);
+    // Student notification + push (fire-and-forget).
+    if (before != null && before.lostOwnerUid.isNotEmpty) {
+      unawaited(() async {
+        try {
+          await _notifications.emit(CampusNotification(
+            source: NotificationSource.lostFound,
+            type: 'match_rejected',
+            studentId: before.lostOwnerStudentId,
+            recipientUid: before.lostOwnerUid,
+            title: 'Match Rejected',
+            body:
+                'An inventory item previously matched to your lost report has been '
+                'reviewed and was not a match.',
+            relatedEntityId: before.lostReportId,
+            relatedScreen: '/lost-found/lost/${before.lostReportId}',
+            preferenceCategory:
+                preferenceCategoryForSource(NotificationSource.lostFound),
+            dedupeKey: CampusNotification.buildDedupeKey(
+              source: NotificationSource.lostFound,
+              type: 'match_rejected',
+              relatedEntityId: matchId,
+              recipientUid: before.lostOwnerUid,
+            ),
+          ));
+        } catch (e) {
+          debugPrint('[Notification] reject notify failed: $e');
+        }
+      }());
+    }
+  }
 
   // ── AI Matching orchestration ──────────────────────────────────
 
@@ -1179,6 +1614,15 @@ class AppState extends ChangeNotifier {
             'score=$overallScore id=${createdMatch.id} '
             'evidence=${match.evidence?.matchingFeatures.length ?? 0}m/'
             '${match.evidence?.conflictingFeatures.length ?? 0}c');
+
+        // Create an in-app notification for the lost-report owner and
+        // dispatch a OneSignal push via the Cloudflare Worker.  Both are
+        // best-effort — a failure here does not roll back the match.
+        _notifyAiMatchOwner(
+          match: createdMatch,
+          lostTitle: lostReport.title,
+          invTitle: invItem.title,
+        );
       } else {
         debugPrint('[AI MATCH] LOST→INVENTORY anchor=${lostReport.id} '
             'cand=$candidateId CREATE_REJECTED (null)');
@@ -1186,6 +1630,81 @@ class AppState extends ChangeNotifier {
     }
 
     return created;
+  }
+
+  /// Creates a Firestore L&F notification for the owner of a newly created
+  /// AI match and dispatches a OneSignal push via the Cloudflare Worker.
+  ///
+  /// Delegates to [NotificationService.emit] which handles:
+  ///   • Deduplication (same match + same owner = one notification)
+  ///   • Firestore write to `lfNotifications/{id}`
+  ///   • Preference resolution (`lostFoundMatches`)
+  ///   • Push dispatch via the Cloudflare Worker
+  ///
+  /// Both operations are best-effort: a failure is logged but never
+  /// propagated to the caller.  The match is already durable in Firestore.
+  void _notifyAiMatchOwner({
+    required LfMatch match,
+    required String lostTitle,
+    required String invTitle,
+    bool callingAsAdmin = false,
+  }) {
+    // Fire-and-forget so the match loop is not blocked.
+    unawaited(() async {
+      try {
+        final body = invTitle.isNotEmpty && lostTitle.isNotEmpty
+            ? 'A "$invTitle" handed in at the Inventory Office may match '
+                'your lost "$lostTitle". Please visit the office to verify '
+                'ownership.'
+            : 'A possible match was found for your lost item. Review it '
+                'under My Lost Reports.';
+
+        final notification = CampusNotification(
+          source: NotificationSource.lostFound,
+          type: 'match',
+          studentId: match.lostOwnerStudentId,
+          recipientUid: match.lostOwnerUid,
+          title: 'Possible Match Found',
+          body: body,
+          relatedEntityId: match.lostReportId,
+          relatedScreen: defaultScreenForSource(
+              NotificationSource.lostFound, match.lostReportId),
+          preferenceCategory:
+              preferenceCategoryForSource(NotificationSource.lostFound),
+          dedupeKey: CampusNotification.buildDedupeKey(
+            source: NotificationSource.lostFound,
+            type: 'match',
+            relatedEntityId: match.lostReportId,
+            recipientUid: match.lostOwnerUid,
+          ),
+        );
+
+        // Cross-process spam guard: if an unread AI-match notification
+        // already exists for this report + owner (from a previous app
+        // session or a different candidate that already notified the
+        // student), skip creating another one.  The student hasn't seen
+        // the first yet — a second is noise, not new information.
+        final hasExisting = await _lfWorkflow.hasUnreadMatchNotification(
+            match.lostOwnerStudentId, match.lostReportId);
+        if (hasExisting) {
+          debugPrint('[AI MATCH] notification SKIPPED — unread match '
+              'notification already exists for '
+              'studentId=${match.lostOwnerStudentId} '
+              'report=${match.lostReportId}');
+          return;
+        }
+
+        final notifId = await _notifications.emit(notification);
+        if (notifId.isNotEmpty) {
+          debugPrint('[AI MATCH] notification created id=$notifId '
+              'studentId=${match.lostOwnerStudentId}');
+        }
+      } on AuthFailure catch (e) {
+        debugPrint('[AI MATCH] notification FAILED: ${e.message}');
+      } catch (e) {
+        debugPrint('[AI MATCH] notification FAILED: $e');
+      }
+    }());
   }
 
   /// Runs AI matching for a newly created **Found Inventory item** (Flow B).
@@ -1305,6 +1824,15 @@ class AppState extends ChangeNotifier {
             'score=$overallScore id=${createdMatch.id} '
             'evidence=${match.evidence?.matchingFeatures.length ?? 0}m/'
             '${match.evidence?.conflictingFeatures.length ?? 0}c');
+
+        // Notify the lost-report owner (Flow B: admin is the caller,
+        // dispatching on behalf of the student who owns the lost report).
+        _notifyAiMatchOwner(
+          match: createdMatch,
+          lostTitle: lostReport.title,
+          invTitle: invItem.title,
+          callingAsAdmin: true,
+        );
       } else {
         debugPrint('[AI MATCH] INVENTORY→LOST anchor=${invItem.id} '
             'cand=${lostReport.id} CREATE_REJECTED (null)');
@@ -1550,14 +2078,15 @@ class AppState extends ChangeNotifier {
   Stream<List<LockerNotification>> watchAllLockerNotifications() =>
       _lockers.watchAllLockerNotifications();
 
-  /// Live count of unread locker notifications for the signed-in user —
-  /// a student's own, or every notification for an admin. Contributes to the
-  /// bell badge alongside [watchUnreadLfNotifications].
+  /// Live count of unread locker notifications for the signed-in user.
+  /// For admins, always 0 — admin-specific notification triggers will be
+  /// added in later phases.  New code should prefer
+  /// [watchUnreadCampusNotifications] for a source-unified badge.
   Stream<int> watchUnreadLockerNotifications() {
-    final Stream<List<LockerNotification>> stream = isAdmin
-        ? _lockers.watchAllLockerNotifications()
-        : _lockers.watchMyLockerNotifications(userId ?? '');
-    return stream.map((list) => list.where((n) => !n.read).length);
+    if (isAdmin) return Stream.value(0);
+    return _lockers
+        .watchMyLockerNotifications(userId ?? '')
+        .map((list) => list.where((n) => !n.read).length);
   }
 
   /// Marks all of the signed-in user's own locker notifications as read.
@@ -2887,6 +3416,10 @@ class AppState extends ChangeNotifier {
   Future<bool> updateEvent(Event event) => _eventWrite(
         () => _eventsService.updateEvent(event),
       );
+
+  /// Removes an event's optional cover-image references.
+  Future<bool> clearEventCoverImage(String id) =>
+      _eventWrite(() => _eventsService.clearCoverImage(id));
 
   /// Withdraws a submission that has not been published.
   Future<bool> deleteEvent(String id) =>

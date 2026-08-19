@@ -26,6 +26,13 @@ AppBar _appBar(String t, BuildContext ctx) => AppBar(
         icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white),
         onPressed: () => ctx.pop()));
 
+/// The dashboard's "In Progress" card represents the active-work portion of
+/// the issue pipeline, not only the literal `In Progress` wire value.
+bool _isIssueInProgress(Issue issue) =>
+    issue.status == 'Triaged' ||
+    issue.status == 'Assigned' ||
+    issue.status == 'In Progress';
+
 // ── Screen 15: Issues Hub ────────────────────────────────────────
 class IssuesHubScreen extends StatefulWidget {
   const IssuesHubScreen({super.key});
@@ -48,7 +55,7 @@ class _IssuesHubScreenState extends State<IssuesHubScreen> {
       stream: _issues,
       builder: (context, snapshot) {
         final issues = snapshot.data ?? const <Issue>[];
-        final inProg = issues.where((i) => i.status == 'In Progress').length;
+        final inProg = issues.where(_isIssueInProgress).length;
         final res = issues.where((i) => i.status == 'Resolved').length;
         final newC = issues.where((i) => i.status == 'New').length;
         final count = issues.length;
@@ -607,26 +614,39 @@ class _IssueDetailScreenState extends State<IssueDetailScreen> {
 }
 
 // ── Screen 19: Issues Dashboard (Admin) ─────────────────────────
-class AdminIssuesDashboardScreen extends StatelessWidget {
+class AdminIssuesDashboardScreen extends StatefulWidget {
   const AdminIssuesDashboardScreen({super.key});
 
-  /// Held in a field so the widget is const-constructible while still
-  /// subscribing once per AppState instance.
-  static Stream<List<Issue>> _stream(BuildContext ctx) =>
-      ctx.read<AppState>().watchAllIssues();
+  @override
+  State<AdminIssuesDashboardScreen> createState() =>
+      _AdminIssuesDashboardScreenState();
+}
+
+class _AdminIssuesDashboardScreenState
+    extends State<AdminIssuesDashboardScreen> {
+  /// Keep one subscription for the lifetime of the dashboard. Rebuilding the
+  /// parent must not replace the Firestore stream and briefly reset the
+  /// dashboard to its loading state.
+  late final Stream<List<Issue>> _issues;
+
+  @override
+  void initState() {
+    super.initState();
+    _issues = context.read<AppState>().watchAllIssues();
+  }
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<Issue>>(
-      stream: _stream(context),
+      stream: _issues,
       builder: (context, snapshot) {
         final all = snapshot.data ?? const <Issue>[];
         final ready = snapshot.hasData && !snapshot.hasError;
         final error = snapshot.error;
         final newCount = all.where((i) => i.status == 'New').length;
-        final inProgressCount = all
-            .where((i) => i.status == 'In Progress' || i.status == 'Assigned')
-            .length;
+        // The card is the active-work bucket for the documented pipeline:
+        // New -> Triaged -> Assigned -> In Progress -> Resolved.
+        final inProgressCount = all.where(_isIssueInProgress).length;
         final resolvedCount = all.where((i) => i.status == 'Resolved').length;
         final categoryData = <_AdminIssueCategoryData>[
           _AdminIssueCategoryData(
@@ -809,12 +829,6 @@ class _AdminIssuesIdentityRow extends StatelessWidget {
           padding: EdgeInsets.only(top: tiny ? 3 : 7, bottom: 5),
           child: Row(
             children: [
-              _AdminIssuesIconButton(
-                size: controlSize,
-                icon: Icons.menu_rounded,
-                onTap: () => Scaffold.of(context).openDrawer(),
-              ),
-              SizedBox(width: gap),
               Container(
                 width: logoSize,
                 height: logoSize,
@@ -1011,21 +1025,17 @@ class _AdminIssuesNotificationButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final appState = context.read<AppState>();
     return StreamBuilder<int>(
-      stream: appState.watchUnreadLfNotifications(),
+      stream: appState.watchUnreadCampusNotifications(),
       initialData: 0,
-      builder: (context, lfSnapshot) {
-        return StreamBuilder<int>(
-          stream: appState.watchUnreadLockerNotifications(),
-          initialData: 0,
-          builder: (context, lockerSnapshot) {
-            final unread = (lfSnapshot.data ?? 0) + (lockerSnapshot.data ?? 0);
+      builder: (context, snapshot) {
+        final unread = snapshot.data ?? 0;
             return Stack(
               clipBehavior: Clip.none,
               children: [
                 _AdminIssuesIconButton(
                   size: size,
                   icon: Icons.notifications_none_rounded,
-                  onTap: () => context.push('/lost-found/notifications'),
+                  onTap: () => context.push('/notifications'),
                 ),
                 if (unread > 0)
                   Positioned(
@@ -1054,9 +1064,7 @@ class _AdminIssuesNotificationButton extends StatelessWidget {
                       ),
                     ),
                   ),
-              ],
-            );
-          },
+          ],
         );
       },
     );
@@ -1140,68 +1148,106 @@ class _AdminIssueStatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 14, 10, 13),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(21),
-        border: Border(
-          top: BorderSide(color: color.withValues(alpha: .08)),
-          left: BorderSide(color: color.withValues(alpha: .08)),
-          right: BorderSide(color: color.withValues(alpha: .08)),
-          bottom: BorderSide(color: color, width: 3),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: color.withValues(alpha: .11),
-            blurRadius: 16,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 42,
-            height: 42,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Each card receives the same finite width from the parent Row. Keep
+        // the height fixed as well so a wrapped status label cannot make one
+        // card taller than its neighbours on a narrow phone.
+        final compact = constraints.maxWidth < 112;
+        final cardHeight = compact ? 94.0 : 100.0;
+        final iconBoxSize = compact ? 38.0 : 42.0;
+        final iconSize = compact ? 21.0 : 24.0;
+        final valueSize = compact ? 27.0 : 29.0;
+        final labelSize = compact ? 11.0 : 12.0;
+
+        return SizedBox(
+          height: cardHeight,
+          child: Container(
             decoration: BoxDecoration(
-              color: tint,
-              borderRadius: BorderRadius.circular(13),
-            ),
-            child: Icon(icon, color: color, size: 24),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  value,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 29,
-                    height: .98,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  label,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: _AdminIssuesPalette.ink,
-                    fontSize: 12,
-                    height: 1.15,
-                    fontWeight: FontWeight.w700,
-                  ),
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(21),
+              // Rounded borders must use one color on every side. The
+              // stronger status accent is painted as a clipped strip below.
+              border: Border.all(color: color.withValues(alpha: .08)),
+              boxShadow: [
+                BoxShadow(
+                  color: color.withValues(alpha: .11),
+                  blurRadius: 16,
+                  offset: const Offset(0, 5),
                 ),
               ],
             ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(21),
+              child: Stack(
+                children: [
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      compact ? 8 : 12,
+                      compact ? 12 : 14,
+                      compact ? 6 : 10,
+                      compact ? 11 : 13,
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: iconBoxSize,
+                          height: iconBoxSize,
+                          decoration: BoxDecoration(
+                            color: tint,
+                            borderRadius: BorderRadius.circular(13),
+                          ),
+                          child: Icon(icon, color: color, size: iconSize),
+                        ),
+                        SizedBox(width: compact ? 7 : 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                value,
+                                maxLines: 1,
+                                style: TextStyle(
+                                  color: color,
+                                  fontSize: valueSize,
+                                  height: .98,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 5),
+                              Text(
+                                label,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: _AdminIssuesPalette.ink,
+                                  fontSize: labelSize,
+                                  height: 1.15,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: SizedBox(
+                      height: 3,
+                      child: ColoredBox(color: color),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

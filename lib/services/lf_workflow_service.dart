@@ -401,6 +401,14 @@ class LfWorkflowService {
         }
         final match = LfMatch.fromMap(matchDoc.id, matchDoc.data()!);
 
+        // Idempotency guard: only a Proposed match may be approved.  A
+        // second approval (double tap, race, retry) aborts here instead of
+        // writing a duplicate notification for the same match.
+        if (match.status != MatchStatus.proposed) {
+          throw const AuthFailure(
+              'This match has already been actioned.');
+        }
+
         // Re-read the linked documents so the notification text reflects
         // what is actually stored.
         final lostDoc = await tx.get(_itemsDoc(match.lostReportId));
@@ -432,7 +440,7 @@ class LfWorkflowService {
           body: 'A "$invTitle" handed in at the Inventory Office may match '
               'your lost "$lostTitle". Please visit the office to verify '
               'ownership.',
-          type: 'match',
+          type: 'match_approved',
           relatedReportId: match.lostReportId,
         );
         // Create the notification as part of the same atomic transaction —
@@ -489,6 +497,11 @@ class LfWorkflowService {
           throw const AuthFailure('This match no longer exists.');
         }
         final match = LfMatch.fromMap(matchDoc.id, matchDoc.data()!);
+        if (match.status == MatchStatus.rejected ||
+            match.status == MatchStatus.completed) {
+          throw const AuthFailure(
+              'This match has already been finalised.');
+        }
         tx.update(matchRef, {
           'status': MatchStatus.rejected.wireValue,
           'updatedAt': FieldValue.serverTimestamp(),
@@ -950,6 +963,71 @@ class LfWorkflowService {
       });
     } on FirebaseException catch (e) {
       throw AuthFailure.fromCode(e.code);
+    }
+  }
+
+  // ── Shared read helpers ────────────────────────────────────────
+
+  /// Fetches a single QR transaction by document ID.
+  Future<QrTransaction?> fetchQrTransaction(String txnId) async {
+    if (!isAvailable || txnId.isEmpty) return null;
+    try {
+      final doc = await _qr.doc(txnId).get();
+      if (!doc.exists) return null;
+      return QrTransaction.fromMap(doc.id, doc.data()!);
+    } on FirebaseException {
+      return null;
+    }
+  }
+
+  /// Fetches a single match by document ID.
+  Future<LfMatch?> fetchMatch(String matchId) async {
+    if (!isAvailable || matchId.isEmpty) return null;
+    try {
+      final doc = await _matches.doc(matchId).get();
+      if (!doc.exists) return null;
+      return LfMatch.fromMap(doc.id, doc.data()!);
+    } on FirebaseException {
+      return null;
+    }
+  }
+
+  /// Fetches a single L&F report (`items/{id}`) by document ID.
+  Future<Item?> fetchItem(String itemId) async {
+    if (!isAvailable || itemId.isEmpty) return null;
+    try {
+      final doc = await _itemsDoc(itemId).get();
+      if (!doc.exists) return null;
+      return Item.fromMap(doc.id, doc.data()!);
+    } on FirebaseException {
+      return null;
+    }
+  }
+
+  /// True when [studentId] already has an *unread* AI `match` notification
+  /// for [relatedReportId].  Guards against cross-process notification spam
+  /// when AI matching runs again (new app session, new candidate) for a
+  /// report the owner has not yet seen.
+  Future<bool> hasUnreadMatchNotification(
+      String studentId, String relatedReportId) async {
+    if (!isAvailable || studentId.isEmpty || relatedReportId.isEmpty) {
+      return false;
+    }
+    try {
+      final snapshot = await _notifications
+          .where('studentId', isEqualTo: studentId)
+          .where('type', isEqualTo: 'match')
+          .where('relatedReportId', isEqualTo: relatedReportId)
+          .where('read', isEqualTo: false)
+          .limit(1)
+          .get();
+      return snapshot.docs.isNotEmpty;
+    } on FirebaseException catch (e) {
+      // A permission query failure must not block legitimate notification
+      // creation — the notification itself is best-effort.
+      debugPrint('[AI MATCH] hasUnreadMatchNotification '
+          'query failed (${e.code}) — returning false');
+      return false;
     }
   }
 

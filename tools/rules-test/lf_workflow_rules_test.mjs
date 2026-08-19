@@ -13,8 +13,9 @@
 //   - inventory: admin-only create/update; finder reads own; status moves
 //     In Inventory -> Returned only
 //   - matches: admin-only create/update; lost owner reads own safe summary
-//   - lfNotifications: admin creates; recipient reads own and flips `read`
-//     only
+//   - lfNotifications: admin or student (own match) creates; recipient
+//     reads own and flips `read` only; student self-creation restricted to
+//     type=='match' with a relatedReportId the student owns
 //
 // Run:  (cd tools/rules-test && npm install && npm test)
 
@@ -293,35 +294,109 @@ await it('denies deletion of a match', async () => {
   await assertFails(admin.firestore().collection('matches').doc('match1').delete());
 });
 
-// ── lfNotifications ───────────────────────────────────────────────
+	// ── lfNotifications ───────────────────────────────────────────────
 
-await it('allows admin to create a notification', async () => {
-  await assertSucceeds(admin.firestore().collection('lfNotifications').doc('notifNew').set({ studentId: 'S001', title: 'Match found', body: 'Visit the office', type: 'match', read: false, relatedReportId: 'itemA1', createdAt: new Date() }));
-});
+	await it('allows admin to create a notification', async () => {
+	  await assertSucceeds(admin.firestore().collection('lfNotifications').doc('notifNew').set({ studentId: 'S001', title: 'Match found', body: 'Visit the office', type: 'match', read: false, relatedReportId: 'itemA1', createdAt: new Date() }));
+	});
 
-await it('denies a student from creating a notification', async () => {
-  await assertFails(studentA.firestore().collection('lfNotifications').doc('notifEvil').set({ studentId: 'S001', title: 'x', body: 'y', type: 'match', read: false, createdAt: new Date() }));
-});
+	await it('allows a student to create a self-addressed AI-match '
+	    + 'notification with their own lost report', async () => {
+	  // Flow A: studentA creates an AI-match notification for their
+	  // own lost report itemA1.  selfLfNotification() validates:
+	  //   • type == 'match'
+	  //   • relatedReportId points to a real item owned by the caller
+	  await assertSucceeds(studentA.firestore().collection('lfNotifications').doc('notifSelf').set({
+	    studentId: 'S001',
+	    title: 'Possible Match Found',
+	    body: 'A match was found for your item.',
+	    type: 'match',
+	    relatedReportId: 'itemA1',
+	    read: false,
+	    createdAt: new Date(),
+	  }));
+	});
 
-await it('allows the recipient to read their own notification', async () => {
-  await assertSucceeds(studentA.firestore().collection('lfNotifications').doc('notif1').get());
-});
+	await it('denies a student from creating a notification without '
+	    + 'relatedReportId', async () => {
+	  // selfLfNotification() now requires relatedReportId to be a
+	  // non-empty string that references a real item the student owns.
+	  await assertFails(studentA.firestore().collection('lfNotifications').doc('notifNoRel').set({
+	    studentId: 'S001',
+	    title: 'Fake alert',
+	    body: 'No related report.',
+	    type: 'match',
+	    read: false,
+	    createdAt: new Date(),
+	  }));
+	});
 
-await it('denies another student from reading the notification', async () => {
-  await assertFails(studentB.firestore().collection('lfNotifications').doc('notif1').get());
-});
+	await it('denies a student from creating a notification with a '
+	    + 'non-match type', async () => {
+	  // selfLfNotification() restricts self-created notifications to
+	  // type == 'match'.  A student cannot forge an admin-approval
+	  // notification, event notification, etc.
+	  await assertFails(studentA.firestore().collection('lfNotifications').doc('notifFake').set({
+	    studentId: 'S001',
+	    title: 'Your account was approved!',
+	    body: 'Please pay at the counter.',
+	    type: 'admin_announcement',
+	    relatedReportId: 'itemA1',
+	    read: false,
+	    createdAt: new Date(),
+	  }));
+	});
 
-await it('allows the recipient to mark their notification read', async () => {
-  await assertSucceeds(studentA.firestore().collection('lfNotifications').doc('notif1').update({ read: true }));
-});
+	await it('denies a student from creating a notification referencing '
+	    + 'another student\'s lost report', async () => {
+	  // itemB1 is owned by studentB (uidB).  studentA cannot use it as
+	  // the relatedReportId because selfLfNotification() checks
+	  //   reportedByUid == request.auth.uid
+	  await assertFails(studentA.firestore().collection('lfNotifications').doc('notifOtherItem').set({
+	    studentId: 'S001',
+	    title: 'Possible Match Found',
+	    body: 'Trying to use another student\'s report.',
+	    type: 'match',
+	    relatedReportId: 'itemB1',
+	    read: false,
+	    createdAt: new Date(),
+	  }));
+	});
 
-await it('denies the recipient from changing the notification title', async () => {
-  await assertFails(studentA.firestore().collection('lfNotifications').doc('notif1').update({ title: 'Hijacked' }));
-});
+	await it('denies a student from creating a notification with a '
+	    + 'non-existent relatedReportId', async () => {
+	  // selfLfNotification() requires the relatedReportId to exist in
+	  // the items collection.
+	  await assertFails(studentA.firestore().collection('lfNotifications').doc('notifGhost').set({
+	    studentId: 'S001',
+	    title: 'Possible Match Found',
+	    body: 'A match was found.',
+	    type: 'match',
+	    relatedReportId: 'nonexistentItem',
+	    read: false,
+	    createdAt: new Date(),
+	  }));
+	});
 
-await it('denies deletion of a notification', async () => {
-  await assertFails(admin.firestore().collection('lfNotifications').doc('notif1').delete());
-});
+	await it('allows the recipient to read their own notification', async () => {
+	  await assertSucceeds(studentA.firestore().collection('lfNotifications').doc('notif1').get());
+	});
+
+	await it('denies another student from reading the notification', async () => {
+	  await assertFails(studentB.firestore().collection('lfNotifications').doc('notif1').get());
+	});
+
+	await it('allows the recipient to mark their notification read', async () => {
+	  await assertSucceeds(studentA.firestore().collection('lfNotifications').doc('notif1').update({ read: true }));
+	});
+
+	await it('denies the recipient from changing the notification title', async () => {
+	  await assertFails(studentA.firestore().collection('lfNotifications').doc('notif1').update({ title: 'Hijacked' }));
+	});
+
+	await it('denies deletion of a notification', async () => {
+	  await assertFails(admin.firestore().collection('lfNotifications').doc('notif1').delete());
+	});
 
 await env.cleanup();
 console.log(`\n${passed} passed, ${failed} failed`);

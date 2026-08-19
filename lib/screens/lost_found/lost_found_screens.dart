@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../models/campus_notification.dart';
 import '../../models/item.dart';
 import '../../widgets/common.dart';
 import '../../theme/app_theme.dart';
@@ -16,6 +17,7 @@ import '../../theme/luxe.dart';
 import '../../services/lost_found_service.dart';
 import '../../services/app_state.dart';
 import '../../services/cloudinary_service.dart';
+import '../../services/notification_service.dart';
 import '../auth/login_screen.dart';
 
 void _toast(BuildContext context, String msg) {
@@ -475,16 +477,11 @@ class _LostFoundIdentityRow extends StatelessWidget {
               Consumer<AppState>(
                 builder: (context, appState, child) {
                   return StreamBuilder<int>(
-                    stream: appState.watchUnreadLfNotifications(),
+                    stream: appState.watchUnreadCampusNotifications(),
                     initialData: 0,
-                    builder: (context, lfSnap) {
-                      return StreamBuilder<int>(
-                        stream: appState.watchUnreadLockerNotifications(),
-                        initialData: 0,
-                        builder: (context, lockerSnap) {
-                          final unreadCount =
-                              (lfSnap.data ?? 0) + (lockerSnap.data ?? 0);
-                          return Stack(
+                    builder: (context, snap) {
+                      final unreadCount = snap.data ?? 0;
+                      return Stack(
                             clipBehavior: Clip.none,
                             children: [
                               _IdentityIconButton(
@@ -525,8 +522,6 @@ class _LostFoundIdentityRow extends StatelessWidget {
                           );
                         },
                       );
-                    },
-                  );
                 },
               ),
             ],
@@ -3897,70 +3892,33 @@ class NotificationsScreen extends StatefulWidget {
   State<NotificationsScreen> createState() => _NotificationsScreenState();
 }
 
-/// One row in the notifications list, backed by a Firestore
-/// `lfNotifications` document.
-class _NotifRow {
-  final bool isLf;
-  final String title;
-  final String body;
-  final DateTime? at;
-  final bool read;
-  final String lfId;
-  final String relatedReportId;
-
-  const _NotifRow({
-    required this.isLf,
-    required this.title,
-    required this.body,
-    required this.at,
-    required this.read,
-    this.lfId = '',
-    this.relatedReportId = '',
-  });
-}
-
 class _NotificationsScreenState extends State<NotificationsScreen> {
   /// Held in a field so rebuilds do not re-subscribe to Firestore.
-  late final Stream<List<LfNotification>> _lfNotifications;
+  late final Stream<List<CampusNotification>> _notifications;
 
   @override
   void initState() {
     super.initState();
-    _lfNotifications = context.read<AppState>().watchMyLfNotifications();
+    _notifications = context.read<AppState>().watchMyCampusNotifications();
   }
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<LfNotification>>(
-      stream: _lfNotifications,
-      builder: (context, lfSnap) {
-        final lfNs = lfSnap.data ?? const <LfNotification>[];
+    return StreamBuilder<List<CampusNotification>>(
+      stream: _notifications,
+      builder: (context, snap) {
+        final list = snap.data ?? const <CampusNotification>[];
         final isLoading =
-            lfSnap.connectionState == ConnectionState.waiting && lfNs.isEmpty;
-        final error = lfSnap.error;
-
-        final rows = <_NotifRow>[
-          for (final lf in lfNs)
-            _NotifRow(
-              isLf: true,
-              title: lf.title,
-              body: lf.body,
-              at: lf.createdAt,
-              read: lf.read,
-              lfId: lf.id,
-              relatedReportId: lf.relatedReportId,
-            ),
-        ]..sort((a, b) => (b.at ?? DateTime.fromMillisecondsSinceEpoch(0))
-            .compareTo(a.at ?? DateTime.fromMillisecondsSinceEpoch(0)));
-
-        final hasUnread = rows.any((r) => !r.read);
+            snap.connectionState == ConnectionState.waiting && list.isEmpty;
+        final error = snap.error;
+        final hasUnread = list.any((n) => !n.read);
 
         return Scaffold(
           appBar: _gradientAppBar('Notifications', context, actions: [
             if (hasUnread)
               TextButton(
                 onPressed: () =>
-                    context.read<AppState>().markAllLfNotificationsRead(),
+                    context.read<AppState>().markAllCampusNotificationsRead(),
                 child: const Text('Mark all read',
                     style: TextStyle(
                         color: Colors.white,
@@ -3979,53 +3937,79 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           : 'Something went wrong. Please try again.',
                       icon: Icons.cloud_off_rounded,
                     )
-                  : rows.isEmpty
+                  : list.isEmpty
                       ? const EmptyState(
                           title: 'No Notifications',
                           icon: Icons.notifications_off_rounded)
                       : ListView.builder(
                           padding: const EdgeInsets.all(16),
-                          itemCount: rows.length,
+                          itemCount: list.length,
                           itemBuilder: (ctx, i) {
-                            final row = rows[i];
+                            final n = list[i];
                             return GestureDetector(
-                              onTap: () => _onRowTap(context, row),
+                              onTap: () => _onRowTap(context, n),
                               child: Container(
                                 margin: const EdgeInsets.only(bottom: 10),
                                 decoration: BoxDecoration(
-                                  color: row.read
+                                  color: n.read
                                       ? AppTheme.bgCard
-                                      : AppTheme.red.withOpacity(0.05),
+                                      : _sourceColor(n.source)
+                                          .withOpacity(0.05),
                                   borderRadius: BorderRadius.circular(14),
                                   border: Border.all(
-                                      color: row.read
-                                          ? AppTheme.red.withOpacity(0.1)
-                                          : AppTheme.red.withOpacity(0.25)),
+                                      color: n.read
+                                          ? _sourceColor(n.source)
+                                              .withOpacity(0.1)
+                                          : _sourceColor(n.source)
+                                              .withOpacity(0.25)),
                                 ),
                                 child: ListTile(
                                   contentPadding: const EdgeInsets.symmetric(
                                       horizontal: 14, vertical: 6),
                                   leading: CircleAvatar(
-                                      backgroundColor: row.isLf
-                                          ? AppTheme.red.withOpacity(0.12)
-                                          : AppTheme.gold.withOpacity(0.2),
-                                      child: Icon(
-                                          row.isLf
-                                              ? Icons.link_rounded
-                                              : Icons.campaign_rounded,
-                                          color: row.isLf
-                                              ? AppTheme.red
-                                              : AppTheme.goldDark,
+                                      backgroundColor: _sourceColor(n.source)
+                                          .withOpacity(0.12),
+                                      child: Icon(_sourceIcon(n.source),
+                                          color: _sourceColor(n.source),
                                           size: 20)),
-                                  title: Text(row.title,
-                                      style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: row.read
-                                              ? FontWeight.w500
-                                              : FontWeight.w700,
-                                          color: AppTheme.textPrimary)),
-                                  subtitle: row.body.isEmpty
-                                      ? Text(_rowTime(row),
+                                  title: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Flexible(
+                                            child: Text(n.title,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                    fontSize: 13,
+                                                    fontWeight: n.read
+                                                        ? FontWeight.w500
+                                                        : FontWeight.w700,
+                                                    color:
+                                                        AppTheme.textPrimary)),
+                                          ),
+                                          if (n.adminWorkItem) ...[
+                                            const SizedBox(width: 6),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(
+                                                  horizontal: 5, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: AppTheme.goldDark
+                                                    .withOpacity(0.15),
+                                                borderRadius:
+                                                    BorderRadius.circular(4),
+                                              ),
+                                              child: const Text('ADMIN',
+                                                  style: TextStyle(
+                                                      fontSize: 9,
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                      color:
+                                                          AppTheme.goldDark)),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                  subtitle: n.body.isEmpty
+                                      ? Text(_rowTime(n),
                                           style: const TextStyle(
                                               fontSize: 11,
                                               color: AppTheme.textMuted))
@@ -4033,20 +4017,20 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                           crossAxisAlignment:
                                               CrossAxisAlignment.start,
                                           children: [
-                                            Text(row.body,
+                                            Text(n.body,
                                                 maxLines: 2,
                                                 overflow: TextOverflow.ellipsis,
                                                 style: const TextStyle(
                                                     fontSize: 11,
                                                     color: AppTheme
                                                         .textSecondary)),
-                                            Text(_rowTime(row),
+                                            Text(_rowTime(n),
                                                 style: const TextStyle(
                                                     fontSize: 11,
                                                     color: AppTheme.textMuted)),
                                           ],
                                         ),
-                                  trailing: row.read
+                                  trailing: n.read
                                       ? null
                                       : Container(
                                           width: 8,
@@ -4066,23 +4050,63 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     );
   }
 
-  Future<void> _onRowTap(BuildContext context, _NotifRow row) async {
-    // Match alerts persist read state in Firestore; tapping also opens the
-    // linked lost report when one is attached.
-    if (!row.read) {
-      await context.read<AppState>().markLfNotificationRead(row.lfId);
+  Future<void> _onRowTap(BuildContext context, CampusNotification n) async {
+    if (!n.read) {
+      if (n.adminWorkItem) {
+        await context.read<AppState>().markAdminNotificationRead(n.id);
+      } else {
+        switch (n.source) {
+          case NotificationSource.lostFound:
+            await context.read<AppState>().markLfNotificationRead(n.id);
+          case NotificationSource.locker:
+            await context.read<AppState>().markLockerNotificationRead(n.id);
+          case NotificationSource.event:
+          case NotificationSource.issue:
+          case NotificationSource.system:
+            break; // not yet implemented
+        }
+      }
     }
     if (!mounted) return;
-    if (row.relatedReportId.isNotEmpty) {
-      context.push('/lost-found/lost/${row.relatedReportId}');
+    final route = n.relatedScreen.isNotEmpty
+        ? n.relatedScreen
+        : defaultScreenForSource(n.source, n.relatedEntityId);
+    context.push(route);
+  }
+
+  static String _rowTime(CampusNotification n) => n.createdAt == null
+      ? '—'
+      : relativeTime(n.createdAt!.toIso8601String());
+
+  static IconData _sourceIcon(NotificationSource source) {
+    switch (source) {
+      case NotificationSource.lostFound:
+        return Icons.link_rounded;
+      case NotificationSource.locker:
+        return Icons.lock_rounded;
+      case NotificationSource.event:
+        return Icons.event_rounded;
+      case NotificationSource.issue:
+        return Icons.report_problem_rounded;
+      case NotificationSource.system:
+        return Icons.campaign_rounded;
     }
   }
 
-  /// Same wording as every other Lost & Found list ('Today' / 'Yesterday' /
-  /// 'N days ago'). A row whose server timestamp has not resolved yet has no
-  /// date to show.
-  static String _rowTime(_NotifRow row) =>
-      row.at == null ? '—' : relativeTime(row.at!.toIso8601String());
+  static Color _sourceColor(NotificationSource source) {
+    switch (source) {
+      case NotificationSource.lostFound:
+        return AppTheme.red;
+      case NotificationSource.locker:
+        return AppTheme.goldDark;
+      case NotificationSource.event:
+        return const Color(0xFF2563EB); // blue
+      case NotificationSource.issue:
+        return const Color(0xFFD97706); // amber
+      case NotificationSource.system:
+        return AppTheme.textSecondary;
+    }
+  }
 }
 
 // ── Screen 9: Admin L&F Dashboard ───────────────────────────────
@@ -4394,7 +4418,7 @@ class _AdminDashboardBody extends StatelessWidget {
                   children: [
                     const _LostFoundIdentityRow(
                       includeTopSafeArea: false,
-                      showMenu: true,
+                      showMenu: false,
                     ),
                     const SizedBox(height: 12),
                     const _AdminModeBanner(),

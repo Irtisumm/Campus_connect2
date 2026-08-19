@@ -11,7 +11,9 @@ import 'package:provider/provider.dart';
 import 'theme/app_theme.dart';
 import 'theme/luxe.dart';
 import 'services/app_state.dart';
+import 'models/campus_notification.dart';
 import 'services/data_service.dart';
+import 'services/notification_service.dart';
 import 'services/push_service.dart';
 import 'services/onesignal_service.dart';
 import 'services/lost_found_service.dart';
@@ -21,6 +23,7 @@ import 'screens/auth/login_screen.dart';
 import 'screens/lost_found/lost_found_screens.dart';
 import 'screens/issues/issues_screens.dart';
 import 'screens/events/events_screens.dart';
+import 'screens/events/admin_create_event_screen.dart';
 import 'screens/events/my_events_screen.dart';
 import 'screens/events/admin_election_detail_screen.dart';
 import 'screens/events/admin_election_editor_screen.dart';
@@ -50,6 +53,10 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 /// Called when the user taps a OneSignal push notification (background
 /// or terminated).  Marks the notification read in Firestore and navigates
 /// to the relevant screen.
+///
+/// If the router has not been initialised yet (cold-start tap arriving
+/// before [main] completes), the tap is queued and replayed once the
+/// router is ready so no notification is ever lost.
 void _handleOneSignalTap(Map<String, dynamic> data, AppState appState) {
   final tap = OneSignalService.parseTap(data);
   if (tap == null) return;
@@ -61,10 +68,28 @@ void _handleOneSignalTap(Map<String, dynamic> data, AppState appState) {
     appState.markLockerNotificationRead(tap.notificationId);
   }
 
-  // Deep-link when a valid report is attached.
-  if (tap.relatedReportId.isNotEmpty) {
-    _router.push('/lost-found/lost/${tap.relatedReportId}');
+  // Source-aware deep-link using the canonical navigation mapping from
+  // Phase 3.  Falls back to the notifications screen when no entity is
+  // attached or the type is unknown.
+  final router = _router;
+  if (router == null) {
+    // Cold-start tap arrived before the router was built.
+    _pendingNotificationTaps.add(data);
+    return;
   }
+
+  final source = tap.type == 'lfNotification'
+      ? NotificationSource.lostFound
+      : tap.type == 'lockerNotification'
+          ? NotificationSource.locker
+          : null;
+
+  final route = source != null
+      ? defaultScreenForSource(
+          source, tap.relatedReportId.isNotEmpty ? tap.relatedReportId : null)
+      : '/notifications';
+
+  router.push(route);
 }
 
 // ── Main ─────────────────────────────────────────────────────────
@@ -93,12 +118,22 @@ Future<void> main() async {
   // Build the router with the auth guard wired to AppState.
   _buildRouter(appState);
 
+  // Replay any notification taps that arrived during cold-start before
+  // the router was ready.  These taps were queued by _handleOneSignalTap.
+  if (_pendingNotificationTaps.isNotEmpty) {
+    final pending = List<Map<String, dynamic>>.from(_pendingNotificationTaps);
+    _pendingNotificationTaps.clear();
+    for (final data in pending) {
+      _handleOneSignalTap(data, appState);
+    }
+  }
+
   // ── OneSignal push notification delivery ─────────────────────────
   // OneSignal replaces FCM as the push delivery layer. The existing
   // PushService / firebase_messaging code is kept intact but will be
   // removed once OneSignal is verified on a real device.
   final oneSignal = OneSignalService();
-  oneSignal.initialize(
+  await oneSignal.initialize(
     onClick: (data) => _handleOneSignalTap(data, appState),
   );
 
@@ -132,7 +167,8 @@ Future<void> main() async {
 }
 
 // ── Router ────────────────────────────────────────────────────────
-late final GoRouter _router;
+GoRouter? _router;
+final List<Map<String, dynamic>> _pendingNotificationTaps = [];
 
 void _buildRouter(AppState appState) {
   _router = GoRouter(
@@ -186,6 +222,9 @@ void _buildRouter(AppState appState) {
       GoRoute(
           path: '/lost-found/found/:id',
           builder: (_, s) => FoundDetailScreen(id: s.pathParameters['id']!)),
+      GoRoute(
+          path: '/notifications',
+          builder: (_, __) => const NotificationsScreen()),
       GoRoute(
           path: '/lost-found/notifications',
           builder: (_, __) => const NotificationsScreen()),
@@ -271,11 +310,11 @@ void _buildRouter(AppState appState) {
               AdminPendingEventDetailScreen(id: s.pathParameters['id']!)),
       GoRoute(
           path: '/admin/events/editor',
-          builder: (_, __) => const AdminEventEditorScreen()),
+          builder: (_, __) => const AdminCreateEventScreen()),
       GoRoute(
           path: '/admin/events/editor/:id',
           builder: (_, s) =>
-              AdminEventEditorScreen(id: s.pathParameters['id']!)),
+              AdminCreateEventScreen(id: s.pathParameters['id']!)),
       GoRoute(
           path: '/admin/events/elections',
           builder: (_, __) => const AdminElectionsMgmtScreen()),
@@ -326,7 +365,7 @@ class CampusConnectApp extends StatelessWidget {
     return MaterialApp.router(
       title: 'Campus Connect',
       theme: AppTheme.theme,
-      routerConfig: _router,
+      routerConfig: _router!,
       debugShowCheckedModeBanner: false,
     );
   }
@@ -367,8 +406,13 @@ class AppShell extends StatelessWidget {
     final idx = _activeIndex(context);
     final lightHeader = idx == 0;
     final narrowHeader = lightHeader && MediaQuery.sizeOf(context).width < 430;
+    final isAdminMode = context.watch<AppState>().isAdmin;
+    // The admin locker dashboard owns the same identity header as the other
+    // admin dashboards. The shell continues to own the shared bottom nav.
+    final isAdminDashboard = isAdminMode && (idx == 1 || idx == 2 || idx == 3);
+    final lightChrome = lightHeader || isAdminDashboard;
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: lightHeader
+      value: lightChrome
           ? SystemUiOverlayStyle.dark
               .copyWith(statusBarColor: Colors.transparent)
           : SystemUiOverlayStyle.light
@@ -376,7 +420,9 @@ class AppShell extends StatelessWidget {
       child: Scaffold(
         backgroundColor: Luxe.bg,
         // ── Hero Header ───────────────────────────────────────────
-        appBar: idx == 0
+        // The admin Issues dashboard owns the reference-style identity row.
+        // Do not stack the shared shell header above it.
+        appBar: idx == 0 || isAdminDashboard
             ? null
             : PreferredSize(
                 preferredSize:
@@ -729,123 +775,104 @@ class AppShell extends StatelessWidget {
                               Consumer<AppState>(
                                 builder: (context, appState, child) {
                                   return StreamBuilder<int>(
-                                    stream:
-                                        appState.watchUnreadLfNotifications(),
+                                    stream: appState
+                                        .watchUnreadCampusNotifications(),
                                     initialData: 0,
-                                    builder: (context, lfSnap) {
-                                      return StreamBuilder<int>(
-                                        stream: appState
-                                            .watchUnreadLockerNotifications(),
-                                        initialData: 0,
-                                        builder: (context, lockerSnap) {
-                                          final unreadCount =
-                                              (lfSnap.data ?? 0) +
-                                                  (lockerSnap.data ?? 0);
-                                          return Stack(
-                                            clipBehavior: Clip.none,
-                                            children: [
-                                              lightHeader
-                                                  ? Container(
-                                                      decoration: BoxDecoration(
-                                                        color: Luxe.surface,
-                                                        shape: BoxShape.circle,
-                                                        border: Border.all(
-                                                            color: Luxe.primary
-                                                                .withValues(
-                                                                    alpha:
-                                                                        .12)),
-                                                      ),
-                                                      child: IconButton(
-                                                        onPressed: () =>
-                                                            context.push(
-                                                                '/lost-found/notifications'),
-                                                        icon: Icon(
-                                                            Icons
-                                                                .notifications_none_rounded,
-                                                            color: Luxe.ink,
-                                                            size: narrowHeader
-                                                                ? 20
-                                                                : 24),
-                                                        padding: EdgeInsets.all(
-                                                            narrowHeader
-                                                                ? 6
-                                                                : 10),
-                                                        constraints:
-                                                            const BoxConstraints(),
-                                                      ),
-                                                    )
-                                                  : GlassSurface(
-                                                      radius: Luxe.rChip,
-                                                      padding:
-                                                          const EdgeInsets.all(
-                                                              9),
-                                                      onTap: () => context.push(
-                                                          '/lost-found/notifications'),
-                                                      child: const Icon(
-                                                          Icons
-                                                              .notifications_rounded,
-                                                          color: Colors.white,
-                                                          size: 19),
-                                                    ),
-                                              if (unreadCount > 0)
-                                                Positioned(
-                                                  top: -3,
-                                                  right: -3,
-                                                  child: IgnorePointer(
-                                                    child: Container(
-                                                      padding:
-                                                          const EdgeInsets.all(
-                                                              3),
-                                                      constraints:
-                                                          const BoxConstraints(
-                                                              minWidth: 18,
-                                                              minHeight: 18),
-                                                      decoration: BoxDecoration(
-                                                        color: Luxe.accent,
-                                                        shape: BoxShape.circle,
-                                                        border: Border.all(
-                                                            color: Colors.white
-                                                                .withValues(
-                                                                    alpha: 0.9),
-                                                            width: 1.5),
-                                                        boxShadow: [
-                                                          BoxShadow(
-                                                            color: Luxe.accent
-                                                                .withValues(
-                                                                    alpha: 0.6),
-                                                            blurRadius: 8,
-                                                          ),
-                                                        ],
-                                                      ),
-                                                      child: Text(
-                                                          '$unreadCount',
-                                                          textAlign:
-                                                              TextAlign.center,
-                                                          style: const TextStyle(
-                                                              fontSize: 9,
-                                                              height: 1.15,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w800,
-                                                              color: Color(
-                                                                  0xFF7A4B00))),
-                                                    )
-                                                        .animate(
-                                                            onPlay: (c) =>
-                                                                c.repeat(
-                                                                    reverse:
-                                                                        true))
-                                                        .scaleXY(
-                                                            begin: 1.0,
-                                                            end: 1.14,
-                                                            duration: 1100.ms,
-                                                            curve: Curves
-                                                                .easeInOut),
+                                    builder: (context, snap) {
+                                      final unreadCount = snap.data ?? 0;
+                                      return Stack(
+                                        clipBehavior: Clip.none,
+                                        children: [
+                                          lightHeader
+                                              ? Container(
+                                                  decoration: BoxDecoration(
+                                                    color: Luxe.surface,
+                                                    shape: BoxShape.circle,
+                                                    border: Border.all(
+                                                        color: Luxe.primary
+                                                            .withValues(
+                                                                alpha: .12)),
                                                   ),
+                                                  child: IconButton(
+                                                    onPressed: () => context
+                                                        .push('/notifications'),
+                                                    icon: Icon(
+                                                        Icons
+                                                            .notifications_none_rounded,
+                                                        color: Luxe.ink,
+                                                        size: narrowHeader
+                                                            ? 20
+                                                            : 24),
+                                                    padding: EdgeInsets.all(
+                                                        narrowHeader ? 6 : 10),
+                                                    constraints:
+                                                        const BoxConstraints(),
+                                                  ),
+                                                )
+                                              : GlassSurface(
+                                                  radius: Luxe.rChip,
+                                                  padding:
+                                                      const EdgeInsets.all(9),
+                                                  onTap: () => context
+                                                      .push('/notifications'),
+                                                  child: const Icon(
+                                                      Icons
+                                                          .notifications_rounded,
+                                                      color: Colors.white,
+                                                      size: 19),
                                                 ),
-                                            ],
-                                          );
-                                        },
+                                          if (unreadCount > 0)
+                                            Positioned(
+                                              top: -3,
+                                              right: -3,
+                                              child: IgnorePointer(
+                                                child: Container(
+                                                  padding:
+                                                      const EdgeInsets.all(3),
+                                                  constraints:
+                                                      const BoxConstraints(
+                                                          minWidth: 18,
+                                                          minHeight: 18),
+                                                  decoration: BoxDecoration(
+                                                    color: Luxe.accent,
+                                                    shape: BoxShape.circle,
+                                                    border: Border.all(
+                                                        color: Colors.white
+                                                            .withValues(
+                                                                alpha: 0.9),
+                                                        width: 1.5),
+                                                    boxShadow: [
+                                                      BoxShadow(
+                                                        color: Luxe.accent
+                                                            .withValues(
+                                                                alpha: 0.6),
+                                                        blurRadius: 8,
+                                                      ),
+                                                    ],
+                                                  ),
+                                                  child: Text('$unreadCount',
+                                                      textAlign:
+                                                          TextAlign.center,
+                                                      style: const TextStyle(
+                                                          fontSize: 9,
+                                                          height: 1.15,
+                                                          fontWeight:
+                                                              FontWeight.w800,
+                                                          color: Color(
+                                                              0xFF7A4B00))),
+                                                )
+                                                    .animate(
+                                                        onPlay: (c) => c.repeat(
+                                                            reverse: true))
+                                                    .scaleXY(
+                                                        begin: 1.0,
+                                                        end: 1.14,
+                                                        duration: 1100.ms,
+                                                        curve:
+                                                            Curves.easeInOut),
+                                              ),
+                                            ),
+                                        ],
                                       );
                                     },
                                   );

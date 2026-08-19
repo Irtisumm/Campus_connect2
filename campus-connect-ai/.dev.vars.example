@@ -1,3 +1,18 @@
+# Copy this file to .dev.vars and fill in your keys.
+# .dev.vars is git-ignored — NEVER commit real secrets.
+
+# OpenRouter API key (for AI matching via Gemini / other models)
 OPENROUTER_API_KEY=sk-or-v1-your-openrouter-key
+
+# Cloudflare account credentials
 CF_ACCOUNT_ID=your-cloudflare-account-id
 CF_API_TOKEN=your-cloudflare-api-token
+
+# OneSignal REST API Key (for push notification dispatch)
+# From: OneSignal Dashboard → Settings → Keys & IDs → REST API Key
+ONESIGNAL_REST_API_KEY=your-onesignal-rest-api-key
+
+# Firebase Web API Key (public — used in the Worker to verify ID tokens)
+# From: Firebase Console → Project Settings → Web API Key
+# Already hard-coded in src/index.js; override here for dev if needed.
+# FIREBASE_WEB_API_KEY=AIzaSy...

@@ -5,7 +5,7 @@
   "description": "Firestore security-rule tests for the users/{uid} profile collection. Runs under firebase emulators:exec which starts the Firestore emulator automatically.",
   "type": "module",
   "scripts": {
-    "test": "firebase emulators:exec \"node rules_test.mjs && node items_rules_test.mjs && node lf_workflow_rules_test.mjs && node lf_workflow_e2e_test.mjs\" --only firestore"
+    "test": "firebase emulators:exec \"node rules_test.mjs && node items_rules_test.mjs && node lf_workflow_rules_test.mjs && node lf_workflow_e2e_test.mjs && node admin_notifications_rules_test.mjs\" --only firestore"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.1",

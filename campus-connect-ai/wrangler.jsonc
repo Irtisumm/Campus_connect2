@@ -7,9 +7,25 @@
 		"binding": "AI",
 		"remote": true
 	},
+	// Environment variables — public identifiers, not secrets.
+	// The project ID is needed for Firestore REST API calls
+	// (e.g. admin-role verification in /notifications/ai-match).
+	"vars": {
+		"FIREBASE_PROJECT_ID": "campus-connect-ce3e8"
+	},
 	"dev": {
 		"ip": "127.0.0.1",
 		"port": 8787,
 		"local_protocol": "http"
 	}
+	// ── Secrets (set via `wrangler secret put`, NEVER committed) ──
+	//
+	//   ONESIGNAL_REST_API_KEY  — OneSignal REST API Key
+	//     From: OneSignal Dashboard → Settings → Keys & IDs → REST API Key
+	//     Set:  npx wrangler secret put ONESIGNAL_REST_API_KEY
+	//
+	//   OPENROUTER_API_KEY      — OpenRouter API key (for AI matching)
+	//     Set:  npx wrangler secret put OPENROUTER_API_KEY
+	//
+	// For local dev, add these to .dev.vars (NEVER commit .dev.vars).
 }

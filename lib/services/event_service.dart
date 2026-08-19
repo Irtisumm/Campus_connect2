@@ -170,6 +170,21 @@ class EventService {
     }
   }
 
+  /// Clears the optional cover-image fields without changing the rest of the
+  /// event document. Firestore needs an explicit delete sentinel because
+  /// [Event.toMap] omits empty optional image fields.
+  Future<void> clearCoverImage(String id) async {
+    _assertAvailable();
+    try {
+      await _events.doc(id).update({
+        'coverImageUrl': FieldValue.delete(),
+        'coverImagePublicId': FieldValue.delete(),
+      });
+    } on FirebaseException catch (e) {
+      throw AuthFailure.fromCode(e.code);
+    }
+  }
+
   /// Partial update of an event document — used for status transitions and
   /// single-field edits where a full overwrite would be wasteful.
   Future<void> patchEvent(String id, Map<String, dynamic> fields) async {

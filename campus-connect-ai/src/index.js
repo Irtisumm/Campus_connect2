@@ -1281,8 +1281,242 @@ export default {
 	},
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// AI-Match → OneSignal push dispatch
+// ─────────────────────────────────────────────────────────────────────────
+
+const FIREBASE_API_KEY = 'AIzaSyDKG2xNTCW0i7dfc9xiHuo6a-r8f9h9pKA';
+const ONESIGNAL_APP_ID = '031d61a8-0a3a-4de8-9d88-d3e739896da5';
+
+/**
+ * Verifies a Firebase Auth ID token by calling the `getAccountInfo`
+ * endpoint.  Returns the decoded user record or null on failure.
+ */
+async function verifyFirebaseToken(idToken) {
+	try {
+		const resp = await fetch(
+			`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FIREBASE_API_KEY}`,
+			{
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ idToken }),
+			},
+		);
+		if (!resp.ok) return null;
+		const data = await resp.json();
+		return data.users?.[0] || null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Verifies that the caller has the `admin` role by reading their
+ * Firestore user profile.  Uses the caller's own ID token, so the
+ * caller can only read their own `users/{uid}` document (enforced by
+ * Firestore rules `isSelf(uid)`).
+ *
+ * Returns true only when the profile document exists and its `role`
+ * field is the string `"admin"`.
+ */
+async function isAdminUser(uid, idToken, projectId) {
+	try {
+		const resp = await fetch(
+			`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/users/${uid}`,
+			{
+				headers: { Authorization: `Bearer ${idToken}` },
+			},
+		);
+		if (!resp.ok) return false;
+		const data = await resp.json();
+		return data.fields?.role?.stringValue === 'admin';
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * POST /notifications/ai-match
+ *
+ * Called by the Flutter client after an AI match is created.  The Worker
+ * verifies the caller's identity, then sends a OneSignal push to the
+ * lost-report owner.
+ *
+ * Authorization:
+ *   • Self-notify (Flow A): caller.localId === studentUid → allowed.
+ *   • Admin-notify (Flow B): caller.localId !== studentUid →
+ *       the Worker reads the caller's Firestore profile to verify
+ *       the `role` field is `"admin"`.  The client-supplied
+ *       `adminCall` flag is ignored for security decisions — the
+ *       Worker determines admin status independently.
+ *
+ * Body:
+ * {
+ *   firebaseIdToken: string,   // Firebase Auth ID token of the caller
+ *   studentUid:      string,   // Firebase UID of the push recipient
+ *   notificationId:  string,   // Firestore lfNotifications doc ID
+ *   relatedReportId: string,   // Lost Report ID for deep-link navigation
+ *   title:           string,   // Notification title
+ *   body:            string,   // Notification body
+ *   adminCall:       bool,     // (accepted but not trusted — see above)
+ * }
+ */
+async function handleAiMatchNotification(request, env) {
+	// Only accept POST.
+	if (request.method !== 'POST') {
+		return new Response('Method Not Allowed', { status: 405 });
+	}
+
+	let payload;
+	try {
+		payload = await request.json();
+	} catch {
+		return new Response(JSON.stringify({ error: 'invalid json' }), {
+			status: 400,
+			headers: { 'Content-Type': 'application/json' },
+		});
+	}
+
+	const {
+		firebaseIdToken,
+		studentUid,
+		notificationId,
+		relatedReportId,
+		title,
+		body,
+	} = payload;
+
+	// ── Validate required fields ──────────────────────────────
+	if (!firebaseIdToken || !studentUid || !notificationId || !title || !body) {
+		return new Response(
+			JSON.stringify({
+				error: 'missing required fields',
+				required: [
+					'firebaseIdToken',
+					'studentUid',
+					'notificationId',
+					'title',
+					'body',
+				],
+			}),
+			{ status: 400, headers: { 'Content-Type': 'application/json' } },
+		);
+	}
+
+	// ── Verify the caller's Firebase identity ──────────────────
+	const caller = await verifyFirebaseToken(firebaseIdToken);
+	if (!caller) {
+		return new Response(
+			JSON.stringify({ error: 'invalid or expired token' }),
+			{ status: 401, headers: { 'Content-Type': 'application/json' } },
+		);
+	}
+
+	// ── Authorize the caller ───────────────────────────────────
+	//
+	// Self-notify (Flow A: student → their own match):
+	//   The caller's verified UID matches the target studentUid.
+	//
+	// Admin-notify (Flow B: admin triggers for a student):
+	//   The Worker reads the caller's Firestore profile to verify
+	//   the `role` field is `"admin"`.  The client-supplied
+	//   `adminCall` flag is NOT trusted — the Worker determines
+	//   admin status independently via Firestore.
+	const isSelfNotify = caller.localId === studentUid;
+
+	if (!isSelfNotify) {
+		const isAdmin = await isAdminUser(caller.localId, firebaseIdToken,
+			env.FIREBASE_PROJECT_ID);
+		if (!isAdmin) {
+			return new Response(
+				JSON.stringify({
+					error: 'not authorized to send on behalf of another user',
+				}),
+				{ status: 403, headers: { 'Content-Type': 'application/json' } },
+			);
+		}
+	}
+
+	// ── Send OneSignal push ────────────────────────────────────
+	const oneSignalKey = env.ONESIGNAL_REST_API_KEY;
+	if (!oneSignalKey) {
+		console.error('[ai-match] ONESIGNAL_REST_API_KEY secret is not set');
+		return new Response(
+			JSON.stringify({ error: 'server configuration' }),
+			{ status: 500, headers: { 'Content-Type': 'application/json' } },
+		);
+	}
+
+	try {
+		const osResp = await fetch('https://onesignal.com/api/v1/notifications', {
+			method: 'POST',
+			headers: {
+				Authorization: `Basic ${oneSignalKey}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				app_id: ONESIGNAL_APP_ID,
+				include_external_user_ids: [studentUid],
+				headings: { en: title },
+				contents: { en: body },
+				data: {
+					type: 'lfNotification',
+					notificationId: notificationId,
+					relatedReportId: relatedReportId || '',
+				},
+				channel_for_external_user_ids: 'push',
+			}),
+		});
+
+		const osBody = await osResp.json();
+
+		if (!osResp.ok) {
+			console.error(
+				'[ai-match] OneSignal error',
+				osResp.status,
+				JSON.stringify(osBody),
+			);
+			return new Response(
+				JSON.stringify({
+					error: 'onesignal_api_error',
+					details: osBody,
+				}),
+				{ status: 502, headers: { 'Content-Type': 'application/json' } },
+			);
+		}
+
+		console.log('[ai-match] push sent', {
+				notificationId,
+				onesignalId: osBody.id,
+				recipients: osBody.recipients,
+				delivered: (osBody.recipients || 0) > 0,
+			});
+
+			return new Response(
+				JSON.stringify({
+					success: true,
+					onesignalId: osBody.id,
+					recipients: osBody.recipients || 0,
+					delivered: (osBody.recipients || 0) > 0,
+				}),
+			{ status: 200, headers: { 'Content-Type': 'application/json' } },
+		);
+	} catch (e) {
+		console.error('[ai-match] OneSignal request failed', e.message || e);
+		return new Response(
+			JSON.stringify({ error: 'onesignal_unreachable' }),
+			{ status: 502, headers: { 'Content-Type': 'application/json' } },
+		);
+	}
+}
+
 async function route(request, env) {
 		const url = new URL(request.url);
+
+			// POST /notifications/ai-match — dispatch OneSignal push for AI match
+			if (request.method === 'POST' && url.pathname === '/notifications/ai-match') {
+				return handleAiMatchNotification(request, env);
+			}
 
 			// POST /ai/match-test
 			if (request.method === 'POST' && url.pathname === '/ai/match-test') {

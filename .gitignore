@@ -48,3 +48,12 @@ app.*.map.json
 tools/serviceAccount.json
 .env*
 !.env.example
+
+# Local scratch / non-repo artifacts
+Project-2/
+test/failures/
+device_screen.png
+ui.xml
+*.bak-preRebuild
+.zcode/
+.github/java-upgrade/

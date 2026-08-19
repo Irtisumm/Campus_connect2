@@ -49,7 +49,11 @@ class Issue {
       title: data['title']?.toString() ?? '',
       category: data['category']?.toString() ?? '',
       location: data['location']?.toString() ?? '',
-      status: data['status']?.toString() ?? 'New',
+      // A missing status is malformed data, not a newly submitted issue.
+      // Keeping it empty prevents the dashboard from silently counting a
+      // broken document as `New`; valid creates are pinned to `New` by the
+      // Firestore rules and by AppState.createIssue().
+      status: data['status']?.toString() ?? '',
       createdDate: _asIso(data['createdDate']),
       updatedDate: _asIso(data['updatedDate']),
       description: data['description']?.toString() ?? '',
