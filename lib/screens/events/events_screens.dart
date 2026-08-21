@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -2329,6 +2331,14 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
   String _category = 'Academic';
   bool _loaded = false;
 
+  // Cover image state.
+  File? _coverImageFile;
+  String? _coverImageUrl;
+  String? _coverImagePublicId;
+  bool _removeCoverImage = false;
+  double? _uploadProgress;
+  bool _saving = false;
+
   @override
   void initState() {
     super.initState();
@@ -2385,6 +2395,158 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
     );
   }
 
+  Future<void> _pickCoverImage(AppState appState) async {
+    try {
+      final File? file = await appState.pickEventCoverImage();
+      if (file == null || !mounted) return;
+      if (await file.length() > 5 * 1024 * 1024) {
+        _toast(context, 'Please choose an image smaller than 5 MB');
+        return;
+      }
+      setState(() {
+        _coverImageFile = file;
+        _removeCoverImage = false;
+      });
+    } catch (_) {
+      if (mounted) _toast(context, 'Unable to select image');
+    }
+  }
+
+  void _removeCover() {
+    setState(() {
+      _coverImageFile = null;
+      _removeCoverImage = true;
+    });
+  }
+
+  Future<String?> _uploadAndGetUrl(AppState appState) async {
+    if (_coverImageFile == null) {
+      return _removeCoverImage ? null : _coverImageUrl;
+    }
+    try {
+      final upload = await appState.uploadEventCoverToCloudinary(
+        _coverImageFile!,
+        onProgress: (int sent, int total) {
+          if (!mounted || total <= 0) return;
+          setState(() => _uploadProgress = sent / total);
+        },
+      );
+      _coverImagePublicId = upload.publicId;
+      return upload.url;
+    } catch (_) {
+      if (mounted) _toast(context, 'Unable to upload cover image');
+      return null;
+    }
+  }
+
+  Widget _buildCoverImageCard(AppState appState) {
+    final bool hasPreview = _coverImageFile != null ||
+        (!_removeCoverImage &&
+            _coverImageUrl != null &&
+            _coverImageUrl!.isNotEmpty);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: CustomPaint(
+        painter: _AdminEditorDashedPainter(),
+        child: Material(
+          color: const Color(0xFFFFF7FA),
+          child: InkWell(
+            onTap: _saving ? null : () => _pickCoverImage(appState),
+            child: SizedBox(
+              height: 156,
+              child: hasPreview ? _buildCoverPreview() : _buildCoverEmpty(),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCoverEmpty() {
+    return const Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(Icons.image_outlined,
+            color: AppTheme.red, size: 38),
+        SizedBox(height: 8),
+        Text('Upload Cover Image',
+            style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 15,
+                fontWeight: FontWeight.w700)),
+        SizedBox(height: 3),
+        Text('PNG, JPG or WEBP (Max 5 MB)',
+            style: TextStyle(
+                color: AppTheme.textMuted,
+                fontSize: 12,
+                fontWeight: FontWeight.w500)),
+      ],
+    );
+  }
+
+  Widget _buildCoverPreview() {
+    final Widget image = _coverImageFile != null
+        ? Image.file(_coverImageFile!, fit: BoxFit.cover, width: double.infinity)
+        : Image.network(
+            _coverImageUrl!,
+            fit: BoxFit.cover,
+            width: double.infinity,
+            errorBuilder: (_, __, ___) => const Center(
+              child: Icon(Icons.broken_image_outlined,
+                  color: AppTheme.textMuted, size: 34),
+            ),
+          );
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        image,
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.transparent,
+                Colors.black.withValues(alpha: 0.55),
+              ],
+            ),
+          ),
+        ),
+        Positioned(
+          left: 14,
+          bottom: 12,
+          child: Text(
+            _saving
+                ? 'Uploading${_uploadProgress == null ? '' : ' ${(_uploadProgress! * 100).round()}%'}'
+                : 'Tap to replace image',
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w700),
+          ),
+        ),
+        Positioned(
+          top: 8,
+          right: 8,
+          child: Material(
+            color: Colors.black.withValues(alpha: 0.38),
+            shape: const CircleBorder(),
+            child: InkWell(
+              onTap: _saving ? null : _removeCover,
+              customBorder: const CircleBorder(),
+              child: const SizedBox(
+                width: 36,
+                height: 36,
+                child: Icon(Icons.close_rounded,
+                    color: Colors.white, size: 19),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Consumer<AppState>(
@@ -2428,6 +2590,8 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
               _category = ev.category;
               _maxParticipantsCtrl.text =
                   ev.maxParticipants > 0 ? ev.maxParticipants.toString() : '';
+              _coverImageUrl = ev.coverImageUrl;
+              _coverImagePublicId = ev.coverImagePublicId;
               _loaded = true;
             }
 
@@ -2522,6 +2686,12 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
                     ),
                     const SizedBox(height: 18),
 
+                    // ── Cover Image ────────────────────────────────────
+                    const SectionLabel('Cover Image'),
+                    const SizedBox(height: 8),
+                    _buildCoverImageCard(appState),
+                    const SizedBox(height: 18),
+
                     // ── Primary Actions ─────────────────────────────────
                     if (isEditing) ...[
                       // Publish / Update Status button
@@ -2530,26 +2700,46 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
                             ? 'Update Event'
                             : 'Publish Event',
                         onPressed: () async {
-                          if (_titleCtrl.text.isNotEmpty) {
-                            final updated = ev.copyWith(
-                              title: _titleCtrl.text,
-                              description: _descCtrl.text,
-                              date: _dateCtrl.text,
-                              time: _timeCtrl.text,
-                              location: _locCtrl.text,
-                              organizer: _orgCtrl.text,
-                              category: _category,
-                              status: ev.status == 'Published'
-                                  ? ev.status
-                                  : 'Published',
-                              maxParticipants: int.tryParse(
-                                      _maxParticipantsCtrl.text.trim()) ??
-                                  0,
-                            );
-                            await appState.updateEvent(updated);
-                            _toast(context, 'Event updated');
-                          } else {
+                          if (_saving) return;
+                          if (_titleCtrl.text.isEmpty) {
                             _toast(context, 'Title is required');
+                            return;
+                          }
+                          setState(() {
+                            _saving = true;
+                            _uploadProgress = null;
+                          });
+                          final coverUrl = await _uploadAndGetUrl(appState);
+                          if (!mounted) return;
+                          final updated = ev.copyWith(
+                            title: _titleCtrl.text,
+                            description: _descCtrl.text,
+                            date: _dateCtrl.text,
+                            time: _timeCtrl.text,
+                            location: _locCtrl.text,
+                            organizer: _orgCtrl.text,
+                            category: _category,
+                            status: ev.status == 'Published'
+                                ? ev.status
+                                : 'Published',
+                            maxParticipants: int.tryParse(
+                                    _maxParticipantsCtrl.text.trim()) ??
+                                0,
+                            coverImageUrl: coverUrl,
+                            coverImagePublicId: _coverImagePublicId,
+                          );
+                          await appState.updateEvent(updated);
+                          if (_removeCoverImage && _coverImageFile == null) {
+                            await appState.clearEventCoverImage(ev.id);
+                          }
+                          if (mounted) {
+                            _toast(context, 'Event updated');
+                            setState(() {
+                              _saving = false;
+                              _uploadProgress = null;
+                              _coverImageFile = null;
+                              _removeCoverImage = false;
+                            });
                           }
                         },
                       ),
@@ -2607,28 +2797,39 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
                       GradientButton(
                         label: 'Publish',
                         onPressed: () async {
-                          if (_titleCtrl.text.isNotEmpty) {
-                            final newEvent = Event(
-                              id: '',
-                              title: _titleCtrl.text,
-                              category: _category,
-                              date: _dateCtrl.text,
-                              time: _timeCtrl.text,
-                              location: _locCtrl.text,
-                              organizer: _orgCtrl.text,
-                              description: _descCtrl.text,
-                              status: 'Published',
-                              hostStudentId: appState.userId,
-                            );
-                            final created =
-                                await appState.createEvent(newEvent);
-                            if (created != null) {
-                              await appState.approveEvent(created.id);
-                            }
+                          if (_saving) return;
+                          if (_titleCtrl.text.isEmpty) {
+                            _toast(context, 'Title is required');
+                            return;
+                          }
+                          setState(() {
+                            _saving = true;
+                            _uploadProgress = null;
+                          });
+                          final coverUrl = await _uploadAndGetUrl(appState);
+                          if (!mounted) return;
+                          final newEvent = Event(
+                            id: '',
+                            title: _titleCtrl.text,
+                            category: _category,
+                            date: _dateCtrl.text,
+                            time: _timeCtrl.text,
+                            location: _locCtrl.text,
+                            organizer: _orgCtrl.text,
+                            description: _descCtrl.text,
+                            status: 'Published',
+                            hostStudentId: appState.userId,
+                            coverImageUrl: coverUrl,
+                            coverImagePublicId: _coverImagePublicId,
+                          );
+                          final created =
+                              await appState.createEvent(newEvent);
+                          if (created != null) {
+                            await appState.approveEvent(created.id);
+                          }
+                          if (mounted) {
                             _toast(context, 'Event published');
                             context.pop();
-                          } else {
-                            _toast(context, 'Title is required');
                           }
                         },
                       ),
@@ -2644,6 +2845,35 @@ class _AdminEventEditorScreenState extends State<AdminEventEditorScreen> {
       },
     );
   }
+}
+
+class _AdminEditorDashedPainter extends CustomPainter {
+  const _AdminEditorDashedPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint paint = Paint()
+      ..color = AppTheme.red.withValues(alpha: 0.45)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4;
+    final Path path = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+        Offset.zero & size,
+        const Radius.circular(14),
+      ));
+    for (final metric in path.computeMetrics()) {
+      double distance = 0;
+      while (distance < metric.length) {
+        final double end =
+            (distance + 7) < metric.length ? distance + 7 : metric.length;
+        canvas.drawPath(metric.extractPath(distance, end), paint);
+        distance += 12;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 // ── Screen 27: Admin Elections Management ────────────────────────

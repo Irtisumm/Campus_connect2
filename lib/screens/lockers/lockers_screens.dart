@@ -229,113 +229,437 @@ class _LockerHubScreenState extends State<LockerHubScreen> {
           stream: _lockers,
           builder: (context, lockersSnap) {
             final lockers = lockersSnap.data ?? const <Locker>[];
+            final availableCount =
+                lockers.where((l) => l.status == 'Available').length;
             return Scaffold(
+              backgroundColor: Luxe.bg,
               body: SafeArea(
-                  child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (booking != null) ...[
-                              const SectionLabel('Active Booking'),
-                              Container(
-                                      padding: const EdgeInsets.all(16),
-                                      decoration:
-                                          BoxDecoration(
-                                              gradient: AppTheme.primaryGradient,
-                                              borderRadius:
-                                                  BorderRadius.circular(18),
-                                              boxShadow: [
-                                            BoxShadow(
-                                                color: AppTheme.red
-                                                    .withOpacity(0.3),
-                                                blurRadius: 18,
-                                                offset: const Offset(0, 5))
-                                          ]),
-                                      child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Row(children: [
-                                              const Icon(Icons.lock_rounded,
-                                                  color: Colors.white,
-                                                  size: 24),
-                                              const SizedBox(width: 10),
-                                              Text(booking.lockerId,
-                                                  style: const TextStyle(
-                                                      fontSize: 18,
-                                                      fontWeight:
-                                                          FontWeight.w800,
-                                                      color: Colors.white))
-                                            ]),
-                                            const SizedBox(height: 6),
-                                            Text(booking.location,
-                                                style: TextStyle(
-                                                    color: Colors.white
-                                                        .withOpacity(0.85),
-                                                    fontSize: 13)),
-                                            const SizedBox(height: 8),
-                                            Row(children: [
-                                              _PricePill(
-                                                  '${booking.durationMonths} months'),
-                                              const SizedBox(width: 8),
-                                              _PricePill(
-                                                  'RM${LockerPricing.fromBooking(booking).amountDueToday.toStringAsFixed(0)} paid'),
-                                            ]),
-                                            const SizedBox(height: 12),
-                                            Row(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment
-                                                        .spaceBetween,
-                                                children: [
-                                                  _StatW(
-                                                      'Start',
-                                                      fmtDate(
-                                                          booking.startDate)),
-                                                  _StatW('End',
-                                                      fmtDate(booking.endDate)),
-                                                  CountdownBadge(
-                                                      booking.daysLeft),
-                                                ]),
-                                          ]))
-                                  .animate()
-                                  .fadeIn(delay: 50.ms)
-                                  .slideY(begin: 0.15),
-                              const SizedBox(height: 6),
-                              OutlineBtn(
-                                  label: 'Manage My Locker',
-                                  onPressed: () =>
-                                      context.push('/lockers/my-locker')),
-                            ] else ...[
-                              const NoticeBox(
-                                  message:
-                                      'You don\'t have an active locker. You can browse and book one below.'),
-                            ],
-                            const SectionLabel('Services'),
-                            HubButton(
-                              icon: Icons.grid_view_rounded,
-                              label: 'Browse Available Lockers',
-                              subtitle: hasActiveBooking
-                                  ? 'You already have a locker (max 1)'
-                                  : '${lockers.where((l) => l.status == "Available").length} available now',
-                              isPrimary: !hasActiveBooking,
-                              onTap: () => context.push('/lockers/browse'),
-                            ).animate().fadeIn(delay: 100.ms),
-                            HubButton(
-                                    icon: Icons.manage_accounts_rounded,
-                                    label: 'My Locker',
-                                    subtitle: booking != null
-                                        ? 'Booking ${booking.id}'
-                                        : 'No active booking',
-                                    onTap: () =>
-                                        context.push('/lockers/my-locker'))
-                                .animate()
-                                .fadeIn(delay: 150.ms),
-                          ]))),
+                top: false,
+                bottom: false,
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 22, 20, 28),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _LockerStatusCard(
+                        booking: booking,
+                        hasActiveBooking: hasActiveBooking,
+                      ),
+                      const SizedBox(height: 22),
+                      Text(
+                        'SERVICES',
+                        style: Luxe.sectionLabel.copyWith(
+                          color: Luxe.inkSoft,
+                          fontSize: 13,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      _LockerServiceCard(
+                        icon: Icons.grid_view_rounded,
+                        title: 'Browse Available Lockers',
+                        subtitle: hasActiveBooking
+                            ? 'You already have a locker'
+                            : '$availableCount available now',
+                        isPrimary: true,
+                        onTap: () => context.push('/lockers/browse'),
+                      ),
+                      const SizedBox(height: 12),
+                      _LockerServiceCard(
+                        icon: Icons.manage_accounts_rounded,
+                        title: 'My Locker',
+                        subtitle: booking == null
+                            ? 'No active booking'
+                            : '${booking.lockerId} - ${booking.location}',
+                        onTap: () => context.push('/lockers/my-locker'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             );
           },
         );
       },
+    );
+  }
+}
+
+class _LockerStatusCard extends StatelessWidget {
+  final LockerBooking? booking;
+  final bool hasActiveBooking;
+
+  const _LockerStatusCard({
+    required this.booking,
+    required this.hasActiveBooking,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final copy = _LockerStatusCopy.fromBooking(
+      booking,
+      hasActiveBooking: hasActiveBooking,
+    );
+
+    return Container(
+      height: 104,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBFC),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Luxe.primary.withValues(alpha: 0.16)),
+        boxShadow: Luxe.lift(tint: Luxe.primary, strength: 0.7),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: Luxe.primary.withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(copy.icon, color: Luxe.primary, size: 25),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  copy.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 15.5,
+                    height: 1.2,
+                    fontWeight: FontWeight.w800,
+                    color: Luxe.ink,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  copy.subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 12.5,
+                    height: 1.3,
+                    fontWeight: FontWeight.w500,
+                    color: Luxe.inkSoft,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          const _LockerMiniIllustration(),
+        ],
+      ),
+    );
+  }
+}
+
+class _LockerStatusCopy {
+  final String title;
+  final String subtitle;
+  final IconData icon;
+
+  const _LockerStatusCopy({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+  });
+
+  factory _LockerStatusCopy.fromBooking(
+    LockerBooking? booking, {
+    required bool hasActiveBooking,
+  }) {
+    if (booking == null) {
+      return const _LockerStatusCopy(
+        title: 'You don\'t have an active locker.',
+        subtitle: 'You can browse and book one below.',
+        icon: Icons.info_outline_rounded,
+      );
+    }
+
+    if (booking.status == 'Waiting Approval') {
+      return _LockerStatusCopy(
+        title: 'Your locker request is pending.',
+        subtitle:
+            'We are reviewing ${booking.lockerId}. Check My Locker for updates.',
+        icon: Icons.hourglass_top_rounded,
+      );
+    }
+
+    if (booking.status == 'Pending Pickup') {
+      return _LockerStatusCopy(
+        title: 'Your locker is ready for pickup.',
+        subtitle: '${booking.lockerId} - ${booking.location}',
+        icon: Icons.key_rounded,
+      );
+    }
+
+    if (hasActiveBooking || booking.status == 'Active') {
+      return _LockerStatusCopy(
+        title: 'You have an active locker.',
+        subtitle:
+            '${booking.lockerId} is assigned to you. Manage it in My Locker.',
+        icon: Icons.check_circle_outline_rounded,
+      );
+    }
+
+    return _LockerStatusCopy(
+      title: 'Your locker booking is in progress.',
+      subtitle: 'Check My Locker for the latest update on ${booking.lockerId}.',
+      icon: Icons.sync_rounded,
+    );
+  }
+}
+
+class _LockerServiceCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool isPrimary;
+  final VoidCallback onTap;
+
+  const _LockerServiceCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.isPrimary = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(24);
+    final titleColor = isPrimary ? Colors.white : Luxe.ink;
+    final subtitleColor =
+        isPrimary ? Colors.white.withValues(alpha: 0.88) : Luxe.inkSoft;
+
+    return Material(
+      color: Colors.transparent,
+      borderRadius: radius,
+      clipBehavior: Clip.antiAlias,
+      child: Ink(
+        height: 116,
+        decoration: BoxDecoration(
+          gradient: isPrimary ? Luxe.lostGradient : null,
+          color: isPrimary ? null : Luxe.surface,
+          borderRadius: radius,
+          border: isPrimary
+              ? null
+              : Border.all(color: Luxe.primary.withValues(alpha: 0.06)),
+          boxShadow: isPrimary
+              ? Luxe.liftStrong(tint: Luxe.primary)
+              : Luxe.lift(tint: Luxe.primary, strength: 0.8),
+        ),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: radius,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (isPrimary)
+                const Positioned(
+                  right: -4,
+                  bottom: -20,
+                  child: Opacity(
+                    opacity: 0.18,
+                    child: _LockerBackdrop(color: Colors.white),
+                  ),
+                ),
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: isPrimary
+                            ? Colors.white.withValues(alpha: 0.18)
+                            : Luxe.primary.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(17),
+                      ),
+                      child: Icon(
+                        icon,
+                        size: 26,
+                        color: isPrimary ? Colors.white : Luxe.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: double.infinity,
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                title,
+                                maxLines: 1,
+                                style: TextStyle(
+                                  fontFamily: 'Inter',
+                                  fontSize: 16.5,
+                                  height: 1.18,
+                                  fontWeight: FontWeight.w800,
+                                  color: titleColor,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 5),
+                          Text(
+                            subtitle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 12.5,
+                              height: 1.2,
+                              fontWeight: FontWeight.w500,
+                              color: subtitleColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: isPrimary
+                            ? Colors.white.withValues(alpha: 0.94)
+                            : Luxe.primary.withValues(alpha: 0.08),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.chevron_right_rounded,
+                        size: 25,
+                        color: Luxe.primary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LockerMiniIllustration extends StatelessWidget {
+  const _LockerMiniIllustration();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 34,
+      height: 48,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Positioned(
+            right: 0,
+            top: 3,
+            child: _LockerDoor(
+              width: 20,
+              height: 42,
+              color: Luxe.primary.withValues(alpha: 0.14),
+              stroke: Luxe.primary.withValues(alpha: 0.28),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            bottom: 0,
+            child: _LockerDoor(
+              width: 20,
+              height: 42,
+              color: Luxe.primary.withValues(alpha: 0.08),
+              stroke: Luxe.primary.withValues(alpha: 0.22),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LockerBackdrop extends StatelessWidget {
+  final Color color;
+
+  const _LockerBackdrop({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        _LockerDoor(
+          width: 50,
+          height: 96,
+          color: color.withValues(alpha: 0.10),
+          stroke: color.withValues(alpha: 0.24),
+        ),
+        const SizedBox(width: 5),
+        _LockerDoor(
+          width: 50,
+          height: 96,
+          color: color.withValues(alpha: 0.07),
+          stroke: color.withValues(alpha: 0.20),
+        ),
+      ],
+    );
+  }
+}
+
+class _LockerDoor extends StatelessWidget {
+  final double width;
+  final double height;
+  final Color color;
+  final Color stroke;
+
+  const _LockerDoor({
+    required this.width,
+    required this.height,
+    required this.color,
+    required this.stroke,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: color,
+        border: Border.all(color: stroke, width: 1.2),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Center(
+        child: Container(
+          width: 6,
+          height: 11,
+          decoration: BoxDecoration(
+            color: stroke,
+            borderRadius: BorderRadius.circular(3),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -369,145 +693,484 @@ class _BrowseLockersScreenState extends State<BrowseLockersScreen> {
             b.status == 'Active' ||
             b.status == 'Pending Pickup' ||
             b.status == 'Waiting Approval');
-        final blocks = {
-          'Block A, Level 1': 'LK-A',
-          'Block B, Level 2': 'LK-B',
-          'Block C, Level 1': 'LK-C'
-        };
         return StreamBuilder<List<Locker>>(
           stream: _lockers,
           builder: (context, lockersSnap) {
             final lockers = lockersSnap.data ?? const <Locker>[];
+            final groupedLockers = <String, List<Locker>>{};
+            for (final locker in lockers) {
+              groupedLockers
+                  .putIfAbsent(locker.location, () => <Locker>[])
+                  .add(locker);
+            }
+            final blockEntries = groupedLockers.entries.toList()
+              ..sort((a, b) => a.key.compareTo(b.key));
+            final monthlyRent =
+                lockers.isNotEmpty ? lockers.first.monthlyRent : 10.0;
+            final deposit = lockers.isNotEmpty ? lockers.first.deposit : 100.0;
             return Scaffold(
-              appBar: _appBar('Available Lockers', context),
-              body: SingleChildScrollView(
-                  padding: const EdgeInsets.all(16),
+              backgroundColor: Luxe.bg,
+              body: SafeArea(
+                top: false,
+                bottom: false,
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 22, 20, 28),
                   child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (hasActiveBooking)
-                          NoticeBox(
-                            message:
-                                'You already have an active locker. Only 1 locker per student is allowed. Release your current locker to book a new one.',
-                            borderColor: AppTheme.goldDark,
-                            bgColor: AppTheme.gold.withOpacity(0.12),
-                            textColor: const Color(0xFF7A5B00),
-                            icon: Icons.warning_rounded,
-                          )
-                        else
-                          NoticeBox(
-                            message: LockerPricing(
-                              deposit: lockers.isNotEmpty
-                                  ? lockers.first.deposit
-                                  : 100.0,
-                              monthlyRent: lockers.isNotEmpty
-                                  ? lockers.first.monthlyRent
-                                  : 10.0,
-                              durationMonths: 6,
-                            ).rentalInfoText,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _AvailableLockerInfoCard(
+                        isWarning: hasActiveBooking,
+                        title: hasActiveBooking
+                            ? 'You already have an active locker.'
+                            : 'Locker rentals: 2-12 months,',
+                        subtitle: hasActiveBooking
+                            ? 'Release your current locker before booking another.'
+                            : 'RM${monthlyRent.toStringAsFixed(0)}/month + RM${deposit.toStringAsFixed(0)} refundable deposit.',
+                        footer: hasActiveBooking
+                            ? 'Only one locker per student is allowed.'
+                            : 'Tap an available locker to book.',
+                      ),
+                      const SizedBox(height: 22),
+                      if (blockEntries.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 32),
+                          child: Center(
+                            child: Text(
+                              'No lockers are available right now.',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Luxe.inkSoft,
+                              ),
+                            ),
                           ),
-                        ...blocks.entries.map((entry) {
-                          final lks = lockers
-                              .where((l) => l.location == entry.key)
-                              .toList();
-                          return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                SectionLabel(entry.key),
-                                GridView.count(
-                                    crossAxisCount: 4,
-                                    childAspectRatio: 1.1,
-                                    shrinkWrap: true,
-                                    physics:
-                                        const NeverScrollableScrollPhysics(),
-                                    mainAxisSpacing: 8,
-                                    crossAxisSpacing: 8,
-                                    children: lks.map((lk) {
-                                      // Browse view: only two states — Available or Booked.
-                                      // Any non-Available locker is shown as Booked (red,
-                                      // tap disabled).
-                                      final isAvailable =
-                                          lk.status == 'Available';
-                                      Color c;
-                                      Color tc;
-                                      if (isAvailable) {
-                                        c = AppTheme.red.withOpacity(0.12);
-                                        tc = AppTheme.redDark;
-                                      } else {
-                                        c = AppTheme.redLight.withOpacity(0.12);
-                                        tc = AppTheme.red;
-                                      }
-                                      final canBook =
-                                          isAvailable && !hasActiveBooking;
-                                      return GestureDetector(
-                                          onTap: canBook
-                                              ? () => context.push(
-                                                  '/lockers/detail/${lk.id}')
-                                              : (isAvailable && hasActiveBooking
-                                                  ? () => _toast(context,
-                                                      'You already have a locker. Max 1 per student.')
-                                                  : null),
-                                          child: Container(
-                                              decoration: BoxDecoration(
-                                                  color: c,
-                                                  borderRadius:
-                                                      BorderRadius.circular(10),
-                                                  border: Border.all(
-                                                      color:
-                                                          tc.withOpacity(0.3))),
-                                              child: Column(
-                                                  mainAxisAlignment:
-                                                      MainAxisAlignment.center,
-                                                  children: [
-                                                    Icon(
-                                                        isAvailable
-                                                            ? Icons
-                                                                .lock_open_rounded
-                                                            : Icons
-                                                                .lock_rounded,
-                                                        color: tc,
-                                                        size: 20),
-                                                    const SizedBox(height: 4),
-                                                    Text(lk.id.split('-').last,
-                                                        style: TextStyle(
-                                                            fontSize: 10,
-                                                            fontWeight:
-                                                                FontWeight.w800,
-                                                            color: tc)),
-                                                    Text(
-                                                        lk.lockType == 'digital'
-                                                            ? 'D'
-                                                            : 'K',
-                                                        style: TextStyle(
-                                                            fontSize: 8,
-                                                            fontWeight:
-                                                                FontWeight.w600,
-                                                            color:
-                                                                tc.withOpacity(
-                                                                    0.6))),
-                                                  ])));
-                                    }).toList()),
-                                const SizedBox(height: 8),
-                                Row(children: [
-                                  _Key(AppTheme.red.withOpacity(0.15),
-                                      AppTheme.redDark, 'Available'),
-                                  const SizedBox(width: 10),
-                                  _Key(AppTheme.redLight.withOpacity(0.15),
-                                      AppTheme.red, 'Booked'),
-                                  const SizedBox(width: 14),
-                                  const Text('D = Digital Lock  K = Key Lock',
-                                      style: TextStyle(
-                                          fontSize: 9,
-                                          color: AppTheme.textMuted,
-                                          fontWeight: FontWeight.w600)),
-                                ]),
-                              ]);
-                        }),
-                      ])),
+                        ),
+                      ...blockEntries.map((entry) {
+                        final blockLockers = [...entry.value]
+                          ..sort((a, b) => a.id.compareTo(b.id));
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 22),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _AvailableLockerBlockHeader(entry.key),
+                              const SizedBox(height: 10),
+                              GridView.builder(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                itemCount: blockLockers.length,
+                                gridDelegate:
+                                    const SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: 4,
+                                  mainAxisSpacing: 8,
+                                  crossAxisSpacing: 8,
+                                  mainAxisExtent: 116,
+                                ),
+                                itemBuilder: (context, index) {
+                                  final locker = blockLockers[index];
+                                  final isAvailable =
+                                      locker.status == 'Available';
+                                  final canBook =
+                                      isAvailable && !hasActiveBooking;
+                                  final onTap = canBook
+                                      ? () => context
+                                          .push('/lockers/detail/${locker.id}')
+                                      : (isAvailable && hasActiveBooking
+                                          ? () => _toast(
+                                                context,
+                                                'You already have a locker. Max 1 per student.',
+                                              )
+                                          : null);
+                                  return _AvailableLockerCard(
+                                    code: locker.id.split('-').last,
+                                    lockType: locker.lockType == 'digital'
+                                        ? 'D'
+                                        : 'K',
+                                    isAvailable: isAvailable,
+                                    onTap: onTap,
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              const _AvailableLockerLegend(),
+                            ],
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
+                ),
+              ),
             );
           },
         );
       },
+    );
+  }
+}
+
+class _AvailableLockerInfoCard extends StatelessWidget {
+  final bool isWarning;
+  final String title;
+  final String subtitle;
+  final String footer;
+
+  const _AvailableLockerInfoCard({
+    required this.isWarning,
+    required this.title,
+    required this.subtitle,
+    required this.footer,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = isWarning ? const Color(0xFFE38A22) : Luxe.primary;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 136),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBFC),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: accent.withValues(alpha: 0.16)),
+        boxShadow: Luxe.lift(tint: accent, strength: 0.7),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: accent,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isWarning ? Icons.warning_amber_rounded : Icons.info_rounded,
+              color: Colors.white,
+              size: 24,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 15.5,
+                    height: 1.25,
+                    fontWeight: FontWeight.w700,
+                    color: Luxe.ink,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 14,
+                    height: 1.3,
+                    fontWeight: FontWeight.w500,
+                    color: Luxe.ink,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  footer,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 12.5,
+                    height: 1.2,
+                    fontWeight: FontWeight.w500,
+                    color: Luxe.inkSoft,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (!isWarning) const _AvailableLockerIllustration(),
+        ],
+      ),
+    );
+  }
+}
+
+class _AvailableLockerIllustration extends StatelessWidget {
+  const _AvailableLockerIllustration();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 58,
+      height: 78,
+      child: Stack(
+        alignment: Alignment.bottomRight,
+        children: [
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                _LockerDoor(
+                  width: 24,
+                  height: 68,
+                  color: Luxe.primary.withValues(alpha: 0.08),
+                  stroke: Luxe.primary.withValues(alpha: 0.22),
+                ),
+                const SizedBox(width: 3),
+                _LockerDoor(
+                  width: 24,
+                  height: 68,
+                  color: Luxe.primary.withValues(alpha: 0.12),
+                  stroke: Luxe.primary.withValues(alpha: 0.28),
+                ),
+              ],
+            ),
+          ),
+          const Positioned(
+            left: 0,
+            bottom: 0,
+            child: Icon(
+              Icons.local_florist_outlined,
+              color: Color(0xFFE9899C),
+              size: 25,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AvailableLockerBlockHeader extends StatelessWidget {
+  final String title;
+
+  const _AvailableLockerBlockHeader(this.title);
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: Luxe.primary.withValues(alpha: 0.08),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(
+            Icons.apartment_rounded,
+            color: Luxe.primary,
+            size: 19,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            title.toUpperCase(),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontFamily: 'Inter',
+              fontSize: 16.5,
+              height: 1.15,
+              fontWeight: FontWeight.w800,
+              color: Luxe.ink,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AvailableLockerCard extends StatelessWidget {
+  final String code;
+  final String lockType;
+  final bool isAvailable;
+  final VoidCallback? onTap;
+
+  const _AvailableLockerCard({
+    required this.code,
+    required this.lockType,
+    required this.isAvailable,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final statusColor = isAvailable ? const Color(0xFF3FAE52) : Luxe.primary;
+    final radius = BorderRadius.circular(18);
+    return Material(
+      color: Colors.transparent,
+      borderRadius: radius,
+      clipBehavior: Clip.antiAlias,
+      child: Ink(
+        decoration: BoxDecoration(
+          color: Luxe.surface,
+          borderRadius: radius,
+          border: Border.all(color: statusColor.withValues(alpha: 0.08)),
+          boxShadow: Luxe.lift(tint: statusColor, strength: 0.7),
+        ),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: radius,
+          child: Stack(
+            children: [
+              Positioned(
+                top: 10,
+                right: 10,
+                child: Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: statusColor,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: statusColor.withValues(alpha: 0.28),
+                        blurRadius: 7,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(6, 16, 6, 10),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      isAvailable
+                          ? Icons.lock_open_rounded
+                          : Icons.lock_rounded,
+                      color: Luxe.primary,
+                      size: 24,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      code,
+                      maxLines: 1,
+                      style: const TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 17,
+                        height: 1.1,
+                        fontWeight: FontWeight.w800,
+                        color: Luxe.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      lockType,
+                      style: const TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 12.5,
+                        height: 1.1,
+                        fontWeight: FontWeight.w700,
+                        color: Luxe.inkSoft,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AvailableLockerLegend extends StatelessWidget {
+  const _AvailableLockerLegend();
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: const [
+        _AvailableLockerLegendItem(
+          color: Color(0xFF3FAE52),
+          label: 'Available',
+        ),
+        _AvailableLockerLegendItem(
+          color: Luxe.primary,
+          label: 'Booked',
+        ),
+        Text(
+          'D = Digital Lock',
+          style: TextStyle(
+            fontFamily: 'Inter',
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+            color: Luxe.inkSoft,
+          ),
+        ),
+        Text(
+          'K = Key Lock',
+          style: TextStyle(
+            fontFamily: 'Inter',
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+            color: Luxe.inkSoft,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AvailableLockerLegendItem extends StatelessWidget {
+  final Color color;
+  final String label;
+
+  const _AvailableLockerLegendItem({
+    required this.color,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 2),
+            boxShadow: [
+              BoxShadow(color: color.withValues(alpha: 0.25), blurRadius: 5),
+            ],
+          ),
+        ),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: const TextStyle(
+            fontFamily: 'Inter',
+            fontSize: 11.5,
+            fontWeight: FontWeight.w600,
+            color: Luxe.inkSoft,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -6278,27 +6941,6 @@ class _StatW extends StatelessWidget {
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
                 color: Colors.white)),
-      ]);
-}
-
-class _Key extends StatelessWidget {
-  final Color bg, fg;
-  final String label;
-  const _Key(this.bg, this.fg, this.label);
-  @override
-  Widget build(BuildContext context) =>
-      Row(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-            width: 12,
-            height: 12,
-            decoration: BoxDecoration(
-                color: bg,
-                borderRadius: BorderRadius.circular(3),
-                border: Border.all(color: fg.withOpacity(0.4)))),
-        const SizedBox(width: 5),
-        Text(label,
-            style: TextStyle(
-                fontSize: 10, color: fg, fontWeight: FontWeight.w600)),
       ]);
 }
 

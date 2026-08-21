@@ -456,9 +456,16 @@ class CreateEventFormModel extends ChangeNotifier {
   ///
   /// Security: [Event.approvalLetterPath] carries the local device path —
   /// never log it, display it, or write it anywhere except the payload.
+  ///
+  /// [coverImageUrl] and [coverImagePublicId] are optional: when the screen
+  /// has uploaded a cover image to Cloudinary before calling this, it passes
+  /// the result here; otherwise both stay `null` and are omitted from the
+  /// wire payload.
   Event buildDraftEvent({
     required String hostStudentId,
     required DateTime today,
+    String? coverImageUrl,
+    String? coverImagePublicId,
   }) {
     // Fails loudly on contract misuse (evaluateSubmit gates this path).
     final pdf = approvalPdf!;
@@ -493,10 +500,11 @@ class CreateEventFormModel extends ChangeNotifier {
       attendeeIds: const <String>[],
       pendingJoiningIds: const <String>[],
       qrTicketPath: null,
-      // Cover-image UI removed (lead decision #3); `Event.toMap` omits
-      // null cover fields, keeping the wire payload on the frozen keys.
-      coverImageUrl: null,
-      coverImagePublicId: null,
+      // Cover image: passed in by the screen after Cloudinary upload, or
+      // `null` when no image was selected. `Event.toMap` omits nulls, so
+      // the wire payload stays on the frozen key set when none is provided.
+      coverImageUrl: coverImageUrl,
+      coverImagePublicId: coverImagePublicId,
     );
   }
 }

@@ -60,54 +60,381 @@ class _IssuesHubScreenState extends State<IssuesHubScreen> {
         final newC = issues.where((i) => i.status == 'New').length;
         final count = issues.length;
         return Scaffold(
+          backgroundColor: Luxe.bg,
           body: SafeArea(
-              child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const NoticeBox(
-                            message:
-                                'Use this to report facility, safety, IT, or other campus problems. Max 5 reports per day.'),
-                        HubButton(
-                                icon: Icons.warning_amber_rounded,
-                                label: 'Report an Issue',
-                                subtitle: 'Submit a new campus issue',
-                                isPrimary: true,
-                                onTap: () => context.push('/issues/report'))
-                            .animate()
-                            .fadeIn(delay: 50.ms)
-                            .slideY(begin: 0.2),
-                        HubButton(
-                                icon: Icons.description_rounded,
-                                label: 'My Issues',
-                                subtitle: '$count submitted',
-                                onTap: () => context.push('/issues/my-issues'))
-                            .animate()
-                            .fadeIn(delay: 100.ms)
-                            .slideY(begin: 0.2),
-                        const SectionLabel('My Stats'),
-                        Row(children: [
-                          Expanded(
-                              child: StatCard(
-                                  value: '$inProg',
-                                  label: 'In Progress',
-                                  valueColor: AppTheme.red,
-                                  bgColor: AppTheme.red.withOpacity(0.06))),
-                          const SizedBox(width: 10),
-                          Expanded(
-                              child: StatCard(
-                                  value: '$res',
-                                  label: 'Resolved',
-                                  valueColor: AppTheme.redDark,
-                                  bgColor: AppTheme.red.withOpacity(0.07))),
-                          const SizedBox(width: 10),
-                          Expanded(
-                              child: StatCard(value: '$newC', label: 'New')),
-                        ]).animate().fadeIn(delay: 150.ms),
-                      ]))),
+            top: false,
+            bottom: false,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 22, 20, 28),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _IssueInfoCard(),
+                  const SizedBox(height: 14),
+                  _IssueActionCard(
+                    icon: Icons.warning_amber_rounded,
+                    title: 'Report an Issue',
+                    subtitle: 'Submit a new campus issue',
+                    isPrimary: true,
+                    onTap: () => context.push('/issues/report'),
+                  ),
+                  const SizedBox(height: 10),
+                  _IssueActionCard(
+                    icon: Icons.description_rounded,
+                    title: 'My Issues',
+                    subtitle: '$count submitted',
+                    onTap: () => context.push('/issues/my-issues'),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'MY STATS',
+                    style: Luxe.sectionLabel.copyWith(
+                      color: Luxe.inkSoft,
+                      fontSize: 12,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _IssueStatCard(
+                          value: '$inProg',
+                          label: 'In Progress',
+                          icon: Icons.schedule_rounded,
+                          valueColor: Luxe.primary,
+                          backgroundColor:
+                              Luxe.primary.withValues(alpha: 0.045),
+                          iconBackground: Luxe.primary.withValues(alpha: 0.08),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _IssueStatCard(
+                          value: '$res',
+                          label: 'Resolved',
+                          icon: Icons.check_circle_outline_rounded,
+                          valueColor: const Color(0xFFF08A24),
+                          backgroundColor: const Color(0xFFFFF8F0),
+                          iconBackground: const Color(0xFFFFEBD9),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _IssueStatCard(
+                          value: '$newC',
+                          label: 'New',
+                          icon: Icons.add_rounded,
+                          valueColor: const Color(0xFF3FA65A),
+                          backgroundColor: const Color(0xFFF5FBF5),
+                          iconBackground: const Color(0xFFE4F4E5),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
         );
       },
+    );
+  }
+}
+
+class _IssueInfoCard extends StatelessWidget {
+  const _IssueInfoCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 112,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBFC),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Luxe.primary.withValues(alpha: 0.16)),
+        boxShadow: Luxe.lift(tint: Luxe.primary, strength: 0.7),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: Luxe.primary.withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.info_outline_rounded,
+              color: Luxe.primary,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Use this to report facility, safety, IT, or other campus problems. Max 5 reports per day.',
+              style: TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 12.5,
+                height: 1.35,
+                fontWeight: FontWeight.w500,
+                color: Luxe.inkSoft,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          const _IssueInfoIllustration(),
+        ],
+      ),
+    );
+  }
+}
+
+class _IssueInfoIllustration extends StatelessWidget {
+  const _IssueInfoIllustration();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 32,
+      height: 48,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Container(
+            width: 24,
+            height: 40,
+            decoration: BoxDecoration(
+              color: Luxe.primary.withValues(alpha: 0.08),
+              border: Border.all(
+                color: Luxe.primary.withValues(alpha: 0.22),
+                width: 1.2,
+              ),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: const Icon(
+              Icons.assignment_outlined,
+              color: Luxe.primary,
+              size: 19,
+            ),
+          ),
+          Positioned(
+            right: 0,
+            bottom: 4,
+            child: Transform.rotate(
+              angle: 0.25,
+              child: Container(
+                width: 4,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: Luxe.primary.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _IssueActionCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool isPrimary;
+  final VoidCallback onTap;
+
+  const _IssueActionCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.isPrimary = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(22);
+    final titleColor = isPrimary ? Colors.white : Luxe.ink;
+    final subtitleColor =
+        isPrimary ? Colors.white.withValues(alpha: 0.9) : Luxe.inkSoft;
+
+    return Material(
+      color: Colors.transparent,
+      borderRadius: radius,
+      clipBehavior: Clip.antiAlias,
+      child: Ink(
+        height: 108,
+        decoration: BoxDecoration(
+          gradient: isPrimary ? Luxe.lostGradient : null,
+          color: isPrimary ? null : Luxe.surface,
+          borderRadius: radius,
+          border: isPrimary
+              ? null
+              : Border.all(color: Luxe.primary.withValues(alpha: 0.06)),
+          boxShadow: isPrimary
+              ? Luxe.liftStrong(tint: Luxe.primary)
+              : Luxe.lift(tint: Luxe.primary, strength: 0.8),
+        ),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: radius,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: isPrimary
+                        ? Colors.white.withValues(alpha: 0.18)
+                        : Luxe.primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(17),
+                  ),
+                  child: Icon(
+                    icon,
+                    size: 24,
+                    color: isPrimary ? Colors.white : Luxe.primary,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SizedBox(
+                        width: double.infinity,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            title,
+                            maxLines: 1,
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 16,
+                              height: 1.18,
+                              fontWeight: FontWeight.w800,
+                              color: titleColor,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 12.5,
+                          height: 1.2,
+                          fontWeight: FontWeight.w500,
+                          color: subtitleColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: isPrimary
+                        ? Colors.white.withValues(alpha: 0.94)
+                        : Luxe.primary.withValues(alpha: 0.08),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.chevron_right_rounded,
+                    size: 22,
+                    color: Luxe.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _IssueStatCard extends StatelessWidget {
+  final String value;
+  final String label;
+  final IconData icon;
+  final Color valueColor;
+  final Color backgroundColor;
+  final Color iconBackground;
+
+  const _IssueStatCard({
+    required this.value,
+    required this.label,
+    required this.icon,
+    required this.valueColor,
+    required this.backgroundColor,
+    required this.iconBackground,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 128,
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: valueColor.withValues(alpha: 0.14)),
+        boxShadow: Luxe.lift(tint: valueColor, strength: 0.45),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: iconBackground,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: valueColor, size: 20),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            style: TextStyle(
+              fontFamily: 'Inter',
+              fontSize: 24,
+              height: 1,
+              fontWeight: FontWeight.w800,
+              color: valueColor,
+            ),
+          ),
+          const SizedBox(height: 5),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              label,
+              maxLines: 1,
+              style: const TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 12,
+                height: 1.1,
+                fontWeight: FontWeight.w500,
+                color: Luxe.inkSoft,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -647,7 +974,9 @@ class _AdminIssuesDashboardScreenState
         // The card is the active-work bucket for the documented pipeline:
         // New -> Triaged -> Assigned -> In Progress -> Resolved.
         final inProgressCount = all.where(_isIssueInProgress).length;
-        final resolvedCount = all.where((i) => i.status == 'Resolved').length;
+        final resolvedCount = all
+            .where((i) => i.status == 'Resolved' || i.status == 'Closed')
+            .length;
         final categoryData = <_AdminIssueCategoryData>[
           _AdminIssueCategoryData(
             label: 'Facilities',
@@ -1029,41 +1358,41 @@ class _AdminIssuesNotificationButton extends StatelessWidget {
       initialData: 0,
       builder: (context, snapshot) {
         final unread = snapshot.data ?? 0;
-            return Stack(
-              clipBehavior: Clip.none,
-              children: [
-                _AdminIssuesIconButton(
-                  size: size,
-                  icon: Icons.notifications_none_rounded,
-                  onTap: () => context.push('/notifications'),
-                ),
-                if (unread > 0)
-                  Positioned(
-                    top: -4,
-                    right: -4,
-                    child: IgnorePointer(
-                      child: Container(
-                        constraints:
-                            const BoxConstraints(minWidth: 17, minHeight: 17),
-                        padding: const EdgeInsets.all(3),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFB83F),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 1.5),
-                        ),
-                        child: Text(
-                          '$unread',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: _AdminIssuesPalette.gold,
-                            fontSize: 9,
-                            height: 1.1,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            _AdminIssuesIconButton(
+              size: size,
+              icon: Icons.notifications_none_rounded,
+              onTap: () => context.push('/notifications'),
+            ),
+            if (unread > 0)
+              Positioned(
+                top: -4,
+                right: -4,
+                child: IgnorePointer(
+                  child: Container(
+                    constraints:
+                        const BoxConstraints(minWidth: 17, minHeight: 17),
+                    padding: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFB83F),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                    child: Text(
+                      '$unread',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: _AdminIssuesPalette.gold,
+                        fontSize: 9,
+                        height: 1.1,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
                   ),
+                ),
+              ),
           ],
         );
       },
@@ -1670,11 +1999,27 @@ class AdminIssuesListScreen extends StatelessWidget {
     return StreamBuilder<List<Issue>>(
       stream: _stream(context),
       builder: (context, snapshot) {
-        final data = snapshot.data ?? const <Issue>[];
+        final raw = snapshot.data ?? const <Issue>[];
+        final data = raw
+            .where((it) => it.status != 'Resolved' && it.status != 'Closed')
+            .toList();
+        final archivedCount =
+            raw.where((it) => it.status == 'Resolved' || it.status == 'Closed').length;
         final isLoading = snapshot.connectionState == ConnectionState.waiting;
         final error = snapshot.error;
         return Scaffold(
           appBar: _appBar('All Issues', context),
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: () => context.push('/admin/issues/archive'),
+            icon: const Icon(Icons.archive_outlined),
+            label: Text(archivedCount > 0
+                ? 'Archive ($archivedCount)'
+                : 'Archive'),
+            backgroundColor: _AdminIssuesPalette.ink,
+            foregroundColor: Colors.white,
+            elevation: 2,
+          ),
+          floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
           body: Column(children: [
             const Padding(
                 padding: EdgeInsets.fromLTRB(16, 8, 16, 0), child: AdminBar()),
@@ -1687,16 +2032,17 @@ class AdminIssuesListScreen extends StatelessWidget {
                           : 'Something went wrong. Please try again.',
                       icon: Icons.cloud_off_rounded,
                     )
-                  : isLoading && data.isEmpty
+                  : isLoading && data.isEmpty && raw.isEmpty
                       ? const Center(
                           child: CircularProgressIndicator(color: AppTheme.red))
                       : data.isEmpty
                           ? const EmptyState(
-                              title: 'No Issues',
-                              subtitle: 'No issues have been reported yet.',
+                              title: 'No Active Issues',
+                              subtitle:
+                                  'All reported issues have been resolved or closed.',
                               icon: Icons.task_alt_rounded)
                           : ListView.builder(
-                              padding: const EdgeInsets.all(16),
+                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
                               itemCount: data.length,
                               itemBuilder: (ctx, i) {
                                 final it = data[i];
@@ -1714,6 +2060,71 @@ class AdminIssuesListScreen extends StatelessWidget {
                               }),
             ),
           ]),
+        );
+      },
+    );
+  }
+}
+
+// ── Screen 20B: Issue Archive (Admin) ────────────────────────────
+/// An admin-only read-only listing of every resolved or closed issue.
+class AdminIssuesArchiveScreen extends StatelessWidget {
+  const AdminIssuesArchiveScreen({super.key});
+
+  static Stream<List<Issue>> _stream(BuildContext ctx) =>
+      ctx.read<AppState>().watchAllIssues();
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<Issue>>(
+      stream: _stream(context),
+      builder: (context, snapshot) {
+        final raw = snapshot.data ?? const <Issue>[];
+        final data = raw
+            .where((it) => it.status == 'Resolved' || it.status == 'Closed')
+            .toList();
+        final isLoading = snapshot.connectionState == ConnectionState.waiting;
+        final error = snapshot.error;
+        return Scaffold(
+          backgroundColor: _AdminIssuesPalette.background,
+          appBar: _appBar(
+            'Issue Archive${data.isNotEmpty ? ' (${data.length})' : ''}',
+            context,
+          ),
+          body: error != null
+              ? EmptyState(
+                  title: 'Could Not Load Archive',
+                  subtitle: error is AuthFailure
+                      ? error.message
+                      : 'Something went wrong. Please try again.',
+                  icon: Icons.cloud_off_rounded,
+                )
+              : isLoading && data.isEmpty && raw.isEmpty
+                  ? const Center(
+                      child: CircularProgressIndicator(color: AppTheme.red))
+                  : data.isEmpty
+                      ? const EmptyState(
+                          title: 'Archive Empty',
+                          subtitle:
+                              'No issues have been resolved or closed yet.',
+                          icon: Icons.archive_outlined)
+                      : ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: data.length,
+                          itemBuilder: (ctx, i) {
+                            final it = data[i];
+                            return CardRow(
+                                    title: it.title,
+                                    subtitle:
+                                        '${it.studentId ?? ''} · ${it.category} · ${it.location}',
+                                    extra: fmtDate(it.createdDate),
+                                    status: it.status,
+                                    onTap: () => context.push(
+                                        '/admin/issues/detail/${it.id}'))
+                                .animate()
+                                .fadeIn(delay: (i * 55).ms)
+                                .slideY(begin: 0.12);
+                          }),
         );
       },
     );

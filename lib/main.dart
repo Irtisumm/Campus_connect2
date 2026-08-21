@@ -278,6 +278,9 @@ void _buildRouter(AppState appState) {
           path: '/admin/issues/list',
           builder: (_, __) => const AdminIssuesListScreen()),
       GoRoute(
+          path: '/admin/issues/archive',
+          builder: (_, __) => const AdminIssuesArchiveScreen()),
+      GoRoute(
           path: '/admin/issues/detail/:id',
           builder: (_, s) =>
               AdminIssueDetailScreen(id: s.pathParameters['id']!)),
@@ -404,13 +407,15 @@ class AppShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final idx = _activeIndex(context);
-    final lightHeader = idx == 0;
+    final lightHeader = idx == 0 || idx == 1 || idx == 3;
     final narrowHeader = lightHeader && MediaQuery.sizeOf(context).width < 430;
     final isAdminMode = context.watch<AppState>().isAdmin;
     // The admin locker dashboard owns the same identity header as the other
     // admin dashboards. The shell continues to own the shared bottom nav.
     final isAdminDashboard = isAdminMode && (idx == 1 || idx == 2 || idx == 3);
-    final lightChrome = lightHeader || isAdminDashboard;
+    final isEventsStudentHeader = idx == 2 && !isAdminDashboard;
+    final lightChrome =
+        lightHeader || isAdminDashboard || isEventsStudentHeader;
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: lightChrome
           ? SystemUiOverlayStyle.dark
@@ -425,466 +430,535 @@ class AppShell extends StatelessWidget {
         appBar: idx == 0 || isAdminDashboard
             ? null
             : PreferredSize(
-                preferredSize:
-                    Size.fromHeight(MediaQuery.of(context).padding.top + 70),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: lightHeader ? Luxe.bg : null,
-                    gradient: lightHeader ? null : Luxe.heroGradient,
-                    boxShadow: lightHeader
-                        ? null
-                        : [
-                            BoxShadow(
-                              color: Luxe.primaryDeep.withValues(alpha: 0.26),
-                              blurRadius: 24,
-                              offset: const Offset(0, 8),
-                              spreadRadius: -4,
-                            ),
-                          ],
-                  ),
-                  child: Stack(
-                    children: [
-                      // Geometry, ambient light and campus skyline
-                      if (!lightHeader)
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child:
-                                CustomPaint(painter: HeaderBackdropPainter()),
-                          ),
+                preferredSize: Size.fromHeight(
+                    MediaQuery.of(context).padding.top +
+                        (isEventsStudentHeader ? 92 : 70)),
+                child: isEventsStudentHeader
+                    ? const _EventsReferenceHeader()
+                    : Container(
+                        decoration: BoxDecoration(
+                          color: lightHeader ? Luxe.bg : null,
+                          gradient: lightHeader ? null : Luxe.heroGradient,
+                          boxShadow: lightHeader
+                              ? null
+                              : [
+                                  BoxShadow(
+                                    color: Luxe.primaryDeep
+                                        .withValues(alpha: 0.26),
+                                    blurRadius: 24,
+                                    offset: const Offset(0, 8),
+                                    spreadRadius: -4,
+                                  ),
+                                ],
                         ),
-                      SafeArea(
-                        bottom: false,
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(
-                              Luxe.s4 + 2, Luxe.s2 + 2, Luxe.s4 + 2, Luxe.s3),
-                          child: Row(
-                            children: [
-                              // Floating logo
-                              Container(
-                                width:
-                                    lightHeader ? (narrowHeader ? 48 : 54) : 42,
-                                height:
-                                    lightHeader ? (narrowHeader ? 48 : 54) : 42,
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.96),
-                                  borderRadius:
-                                      BorderRadius.circular(Luxe.rSmall),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Luxe.primary.withValues(
-                                          alpha: lightHeader ? 0.12 : 0.30),
-                                      blurRadius: 14,
-                                      offset: const Offset(0, 5),
-                                    ),
-                                  ],
+                        child: Stack(
+                          children: [
+                            // Geometry, ambient light and campus skyline
+                            if (!lightHeader)
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: CustomPaint(
+                                      painter: HeaderBackdropPainter()),
                                 ),
-                                child: Icon(Icons.school_rounded,
-                                    color: Luxe.primary,
-                                    size: lightHeader
-                                        ? (narrowHeader ? 25 : 29)
-                                        : 23),
                               ),
-                              SizedBox(
-                                  width: lightHeader && narrowHeader
-                                      ? 12
-                                      : Luxe.s3),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                            SafeArea(
+                              bottom: false,
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(Luxe.s4 + 2,
+                                    Luxe.s2 + 2, Luxe.s4 + 2, Luxe.s3),
+                                child: Row(
                                   children: [
-                                    FittedBox(
-                                      fit: BoxFit.scaleDown,
-                                      alignment: Alignment.centerLeft,
-                                      child: Text('Campus Connect',
-                                          maxLines: 1,
-                                          style: TextStyle(
-                                            fontSize: lightHeader
-                                                ? (narrowHeader ? 18 : 21)
-                                                : 19,
-                                            fontWeight: FontWeight.w800,
-                                            color: lightHeader
-                                                ? Luxe.ink
-                                                : Colors.white,
-                                            letterSpacing: -0.5,
-                                            height: 1.1,
-                                          )),
+                                    // Floating logo
+                                    Container(
+                                      width: lightHeader
+                                          ? (narrowHeader ? 48 : 54)
+                                          : 42,
+                                      height: lightHeader
+                                          ? (narrowHeader ? 48 : 54)
+                                          : 42,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.96),
+                                        borderRadius:
+                                            BorderRadius.circular(Luxe.rSmall),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Luxe.primary.withValues(
+                                                alpha:
+                                                    lightHeader ? 0.12 : 0.30),
+                                            blurRadius: 14,
+                                            offset: const Offset(0, 5),
+                                          ),
+                                        ],
+                                      ),
+                                      child: Icon(Icons.school_rounded,
+                                          color: Luxe.primary,
+                                          size: lightHeader
+                                              ? (narrowHeader ? 25 : 29)
+                                              : 23),
                                     ),
-                                    const SizedBox(height: 2),
-                                    Row(
-                                      children: [
-                                        Flexible(
-                                          child: FittedBox(
+                                    SizedBox(
+                                        width: lightHeader && narrowHeader
+                                            ? 12
+                                            : Luxe.s3),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          FittedBox(
                                             fit: BoxFit.scaleDown,
                                             alignment: Alignment.centerLeft,
-                                            child: Text(
-                                                'City University Malaysia',
+                                            child: Text('Campus Connect',
                                                 maxLines: 1,
                                                 style: TextStyle(
-                                                  fontSize: 10.5,
+                                                  fontSize: lightHeader
+                                                      ? (narrowHeader ? 18 : 21)
+                                                      : 19,
+                                                  fontWeight: FontWeight.w800,
                                                   color: lightHeader
-                                                      ? Luxe.inkSoft
-                                                      : Colors.white.withValues(
-                                                          alpha: 0.82),
-                                                  fontWeight: FontWeight.w500,
+                                                      ? Luxe.ink
+                                                      : Colors.white,
+                                                  letterSpacing: -0.5,
+                                                  height: 1.1,
                                                 )),
                                           ),
-                                        ),
-                                        const SizedBox(width: 4),
-                                        // Verified badge
-                                        Container(
-                                          width: 13,
-                                          height: 13,
-                                          decoration: BoxDecoration(
-                                            color: lightHeader
-                                                ? Luxe.primary
-                                                    .withValues(alpha: 0.12)
-                                                : Colors.white
-                                                    .withValues(alpha: 0.92),
-                                            shape: BoxShape.circle,
+                                          const SizedBox(height: 2),
+                                          Row(
+                                            children: [
+                                              Flexible(
+                                                child: FittedBox(
+                                                  fit: BoxFit.scaleDown,
+                                                  alignment:
+                                                      Alignment.centerLeft,
+                                                  child: Text(
+                                                      'City University Malaysia',
+                                                      maxLines: 1,
+                                                      style: TextStyle(
+                                                        fontSize: 10.5,
+                                                        color: lightHeader
+                                                            ? Luxe.inkSoft
+                                                            : Colors.white
+                                                                .withValues(
+                                                                    alpha:
+                                                                        0.82),
+                                                        fontWeight:
+                                                            FontWeight.w500,
+                                                      )),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              // Verified badge
+                                              Container(
+                                                width: 13,
+                                                height: 13,
+                                                decoration: BoxDecoration(
+                                                  color: lightHeader
+                                                      ? Luxe.primary.withValues(
+                                                          alpha: 0.12)
+                                                      : Colors.white.withValues(
+                                                          alpha: 0.92),
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: const Icon(
+                                                    Icons.check_rounded,
+                                                    size: 9,
+                                                    color: Luxe.primary),
+                                              ),
+                                            ],
                                           ),
-                                          child: const Icon(Icons.check_rounded,
-                                              size: 9, color: Luxe.primary),
+                                        ],
+                                      ),
+                                    ),
+                                    SizedBox(
+                                        width: lightHeader && narrowHeader
+                                            ? 4
+                                            : Luxe.s2),
+                                    // ── Student / Admin selector (frosted glass) ──
+                                    ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        maxWidth: narrowHeader ? 78 : 180,
+                                      ),
+                                      child: FittedBox(
+                                        fit: BoxFit.scaleDown,
+                                        child: Consumer<AppState>(
+                                          builder: (context, appState, child) {
+                                            final isAdminMode =
+                                                appState.isAdmin;
+                                            return GestureDetector(
+                                              onTap: () async {
+                                                // If already admin, sign out and redirect to login.
+                                                if (isAdminMode) {
+                                                  context
+                                                      .read<AppState>()
+                                                      .logout();
+                                                  if (context.mounted) {
+                                                    context.go('/login');
+                                                  }
+                                                  return;
+                                                }
+
+                                                // Show login dialog to switch to admin
+                                                final result = await showDialog(
+                                                  context: context,
+                                                  barrierDismissible: false,
+                                                  builder: (_) =>
+                                                      const LoginScreen(
+                                                          isAdminLogin: true,
+                                                          isDialog: true),
+                                                );
+
+                                                if (result == true) {
+                                                  ScaffoldMessenger.of(context)
+                                                      .showSnackBar(
+                                                    SnackBar(
+                                                      content: const Text(
+                                                          '🛡 Admin mode activated'),
+                                                      behavior: SnackBarBehavior
+                                                          .floating,
+                                                      backgroundColor:
+                                                          AppTheme.textPrimary,
+                                                      shape:
+                                                          RoundedRectangleBorder(
+                                                              borderRadius:
+                                                                  BorderRadius
+                                                                      .circular(
+                                                                          999)),
+                                                      duration: const Duration(
+                                                          seconds: 1),
+                                                    ),
+                                                  );
+                                                }
+                                              },
+                                              child: isAdminMode
+                                                  ? Container(
+                                                      padding: const EdgeInsets
+                                                          .symmetric(
+                                                          horizontal: 11,
+                                                          vertical: 8),
+                                                      decoration: BoxDecoration(
+                                                        color: Luxe.accent,
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(
+                                                                    Luxe.rChip),
+                                                        boxShadow: [
+                                                          BoxShadow(
+                                                            color: Luxe.accent
+                                                                .withValues(
+                                                                    alpha:
+                                                                        0.45),
+                                                            blurRadius: 12,
+                                                            offset:
+                                                                const Offset(
+                                                                    0, 4),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      child: const Row(
+                                                          mainAxisSize:
+                                                              MainAxisSize.min,
+                                                          children: [
+                                                            Icon(
+                                                                Icons
+                                                                    .shield_rounded,
+                                                                size: 13,
+                                                                color: Color(
+                                                                    0xFF7A4B00)),
+                                                            SizedBox(width: 5),
+                                                            Text('Admin',
+                                                                style: TextStyle(
+                                                                    fontSize:
+                                                                        11.5,
+                                                                    fontWeight:
+                                                                        FontWeight
+                                                                            .w700,
+                                                                    color: Color(
+                                                                        0xFF7A4B00))),
+                                                          ]),
+                                                    )
+                                                  : lightHeader
+                                                      ? Container(
+                                                          padding: EdgeInsets
+                                                              .symmetric(
+                                                                  horizontal:
+                                                                      narrowHeader
+                                                                          ? 9
+                                                                          : 15,
+                                                                  vertical:
+                                                                      narrowHeader
+                                                                          ? 8
+                                                                          : 11),
+                                                          decoration:
+                                                              BoxDecoration(
+                                                            color: Luxe.primary
+                                                                .withValues(
+                                                                    alpha: .08),
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(Luxe
+                                                                        .rChip),
+                                                            border: Border.all(
+                                                                color: Luxe
+                                                                    .primary
+                                                                    .withValues(
+                                                                        alpha:
+                                                                            .10)),
+                                                          ),
+                                                          child: Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              Icon(
+                                                                  Icons
+                                                                      .school_rounded,
+                                                                  size: 14,
+                                                                  color: Luxe
+                                                                      .primary),
+                                                              SizedBox(
+                                                                  width: 4),
+                                                              Text('Student',
+                                                                  style: TextStyle(
+                                                                      fontSize:
+                                                                          11.5,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .w700,
+                                                                      color: Luxe
+                                                                          .primary)),
+                                                              SizedBox(
+                                                                  width: 1),
+                                                              Icon(
+                                                                  Icons
+                                                                      .expand_more_rounded,
+                                                                  size: 15,
+                                                                  color: Luxe
+                                                                      .primary),
+                                                            ],
+                                                          ),
+                                                        )
+                                                      : const GlassSurface(
+                                                          radius: Luxe.rChip,
+                                                          padding: EdgeInsets
+                                                              .symmetric(
+                                                                  horizontal:
+                                                                      11,
+                                                                  vertical: 8),
+                                                          child: Row(
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              Icon(
+                                                                  Icons
+                                                                      .school_rounded,
+                                                                  size: 13,
+                                                                  color: Colors
+                                                                      .white),
+                                                              SizedBox(
+                                                                  width: 5),
+                                                              Text('Student',
+                                                                  style: TextStyle(
+                                                                      fontSize:
+                                                                          11.5,
+                                                                      fontWeight:
+                                                                          FontWeight
+                                                                              .w700,
+                                                                      color: Colors
+                                                                          .white)),
+                                                              SizedBox(
+                                                                  width: 2),
+                                                              Icon(
+                                                                  Icons
+                                                                      .expand_more_rounded,
+                                                                  size: 14,
+                                                                  color: Colors
+                                                                      .white),
+                                                            ],
+                                                          ),
+                                                        ),
+                                            );
+                                          },
                                         ),
-                                      ],
+                                      ),
+                                    ),
+                                    SizedBox(
+                                        width: lightHeader && narrowHeader
+                                            ? 4
+                                            : 7),
+                                    // ── Profile ───────────────────────────────────
+                                    lightHeader
+                                        ? Container(
+                                            decoration: BoxDecoration(
+                                              color: Luxe.surface,
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                  color: Luxe.primary
+                                                      .withValues(alpha: .12)),
+                                            ),
+                                            child: IconButton(
+                                              onPressed: () =>
+                                                  context.push('/profile'),
+                                              icon: Icon(
+                                                  Icons.person_outline_rounded,
+                                                  color: Luxe.ink,
+                                                  size: narrowHeader ? 20 : 24),
+                                              padding: EdgeInsets.all(
+                                                  narrowHeader ? 6 : 10),
+                                              constraints:
+                                                  const BoxConstraints(),
+                                            ),
+                                          )
+                                        : GlassSurface(
+                                            radius: Luxe.rChip,
+                                            padding: const EdgeInsets.all(9),
+                                            onTap: () =>
+                                                context.push('/profile'),
+                                            child: const Icon(
+                                                Icons.person_rounded,
+                                                color: Colors.white,
+                                                size: 19),
+                                          ),
+                                    SizedBox(
+                                        width: lightHeader && narrowHeader
+                                            ? 4
+                                            : 7),
+                                    // ── Notifications ─────────────────────────────
+                                    Consumer<AppState>(
+                                      builder: (context, appState, child) {
+                                        return StreamBuilder<int>(
+                                          stream: appState
+                                              .watchUnreadCampusNotifications(),
+                                          initialData: 0,
+                                          builder: (context, snap) {
+                                            final unreadCount = snap.data ?? 0;
+                                            return Stack(
+                                              clipBehavior: Clip.none,
+                                              children: [
+                                                lightHeader
+                                                    ? Container(
+                                                        decoration:
+                                                            BoxDecoration(
+                                                          color: Luxe.surface,
+                                                          shape:
+                                                              BoxShape.circle,
+                                                          border: Border.all(
+                                                              color: Luxe
+                                                                  .primary
+                                                                  .withValues(
+                                                                      alpha:
+                                                                          .12)),
+                                                        ),
+                                                        child: IconButton(
+                                                          onPressed: () =>
+                                                              context.push(
+                                                                  '/notifications'),
+                                                          icon: Icon(
+                                                              Icons
+                                                                  .notifications_none_rounded,
+                                                              color: Luxe.ink,
+                                                              size: narrowHeader
+                                                                  ? 20
+                                                                  : 24),
+                                                          padding:
+                                                              EdgeInsets.all(
+                                                                  narrowHeader
+                                                                      ? 6
+                                                                      : 10),
+                                                          constraints:
+                                                              const BoxConstraints(),
+                                                        ),
+                                                      )
+                                                    : GlassSurface(
+                                                        radius: Luxe.rChip,
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .all(9),
+                                                        onTap: () => context.push(
+                                                            '/notifications'),
+                                                        child: const Icon(
+                                                            Icons
+                                                                .notifications_rounded,
+                                                            color: Colors.white,
+                                                            size: 19),
+                                                      ),
+                                                if (unreadCount > 0)
+                                                  Positioned(
+                                                    top: -3,
+                                                    right: -3,
+                                                    child: IgnorePointer(
+                                                      child: Container(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .all(3),
+                                                        constraints:
+                                                            const BoxConstraints(
+                                                                minWidth: 18,
+                                                                minHeight: 18),
+                                                        decoration:
+                                                            BoxDecoration(
+                                                          color: Luxe.accent,
+                                                          shape:
+                                                              BoxShape.circle,
+                                                          border: Border.all(
+                                                              color: Colors
+                                                                  .white
+                                                                  .withValues(
+                                                                      alpha:
+                                                                          0.9),
+                                                              width: 1.5),
+                                                          boxShadow: [
+                                                            BoxShadow(
+                                                              color: Luxe.accent
+                                                                  .withValues(
+                                                                      alpha:
+                                                                          0.6),
+                                                              blurRadius: 8,
+                                                            ),
+                                                          ],
+                                                        ),
+                                                        child: Text(
+                                                            '$unreadCount',
+                                                            textAlign: TextAlign
+                                                                .center,
+                                                            style: const TextStyle(
+                                                                fontSize: 9,
+                                                                height: 1.15,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w800,
+                                                                color: Color(
+                                                                    0xFF7A4B00))),
+                                                      )
+                                                          .animate(
+                                                              onPlay: (c) =>
+                                                                  c.repeat(
+                                                                      reverse:
+                                                                          true))
+                                                          .scaleXY(
+                                                              begin: 1.0,
+                                                              end: 1.14,
+                                                              duration: 1100.ms,
+                                                              curve: Curves
+                                                                  .easeInOut),
+                                                    ),
+                                                  ),
+                                              ],
+                                            );
+                                          },
+                                        );
+                                      },
                                     ),
                                   ],
                                 ),
                               ),
-                              SizedBox(
-                                  width: lightHeader && narrowHeader
-                                      ? 4
-                                      : Luxe.s2),
-                              // ── Student / Admin selector (frosted glass) ──
-                              ConstrainedBox(
-                                constraints: BoxConstraints(
-                                  maxWidth: narrowHeader ? 78 : 180,
-                                ),
-                                child: FittedBox(
-                                  fit: BoxFit.scaleDown,
-                                  child: Consumer<AppState>(
-                                    builder: (context, appState, child) {
-                                      final isAdminMode = appState.isAdmin;
-                                      return GestureDetector(
-                                        onTap: () async {
-                                          // If already admin, sign out and redirect to login.
-                                          if (isAdminMode) {
-                                            context.read<AppState>().logout();
-                                            if (context.mounted) {
-                                              context.go('/login');
-                                            }
-                                            return;
-                                          }
-
-                                          // Show login dialog to switch to admin
-                                          final result = await showDialog(
-                                            context: context,
-                                            barrierDismissible: false,
-                                            builder: (_) => const LoginScreen(
-                                                isAdminLogin: true,
-                                                isDialog: true),
-                                          );
-
-                                          if (result == true) {
-                                            ScaffoldMessenger.of(context)
-                                                .showSnackBar(
-                                              SnackBar(
-                                                content: const Text(
-                                                    '🛡 Admin mode activated'),
-                                                behavior:
-                                                    SnackBarBehavior.floating,
-                                                backgroundColor:
-                                                    AppTheme.textPrimary,
-                                                shape: RoundedRectangleBorder(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            999)),
-                                                duration:
-                                                    const Duration(seconds: 1),
-                                              ),
-                                            );
-                                          }
-                                        },
-                                        child: isAdminMode
-                                            ? Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                        horizontal: 11,
-                                                        vertical: 8),
-                                                decoration: BoxDecoration(
-                                                  color: Luxe.accent,
-                                                  borderRadius:
-                                                      BorderRadius.circular(
-                                                          Luxe.rChip),
-                                                  boxShadow: [
-                                                    BoxShadow(
-                                                      color: Luxe.accent
-                                                          .withValues(
-                                                              alpha: 0.45),
-                                                      blurRadius: 12,
-                                                      offset:
-                                                          const Offset(0, 4),
-                                                    ),
-                                                  ],
-                                                ),
-                                                child: const Row(
-                                                    mainAxisSize:
-                                                        MainAxisSize.min,
-                                                    children: [
-                                                      Icon(Icons.shield_rounded,
-                                                          size: 13,
-                                                          color: Color(
-                                                              0xFF7A4B00)),
-                                                      SizedBox(width: 5),
-                                                      Text('Admin',
-                                                          style: TextStyle(
-                                                              fontSize: 11.5,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w700,
-                                                              color: Color(
-                                                                  0xFF7A4B00))),
-                                                    ]),
-                                              )
-                                            : lightHeader
-                                                ? Container(
-                                                    padding:
-                                                        EdgeInsets.symmetric(
-                                                            horizontal:
-                                                                narrowHeader
-                                                                    ? 9
-                                                                    : 15,
-                                                            vertical:
-                                                                narrowHeader
-                                                                    ? 8
-                                                                    : 11),
-                                                    decoration: BoxDecoration(
-                                                      color: Luxe.primary
-                                                          .withValues(
-                                                              alpha: .08),
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                              Luxe.rChip),
-                                                      border: Border.all(
-                                                          color: Luxe.primary
-                                                              .withValues(
-                                                                  alpha: .10)),
-                                                    ),
-                                                    child: Row(
-                                                      mainAxisSize:
-                                                          MainAxisSize.min,
-                                                      children: [
-                                                        Icon(
-                                                            Icons
-                                                                .school_rounded,
-                                                            size: 14,
-                                                            color:
-                                                                Luxe.primary),
-                                                        SizedBox(width: 4),
-                                                        Text('Student',
-                                                            style: TextStyle(
-                                                                fontSize: 11.5,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w700,
-                                                                color: Luxe
-                                                                    .primary)),
-                                                        SizedBox(width: 1),
-                                                        Icon(
-                                                            Icons
-                                                                .expand_more_rounded,
-                                                            size: 15,
-                                                            color:
-                                                                Luxe.primary),
-                                                      ],
-                                                    ),
-                                                  )
-                                                : const GlassSurface(
-                                                    radius: Luxe.rChip,
-                                                    padding:
-                                                        EdgeInsets.symmetric(
-                                                            horizontal: 11,
-                                                            vertical: 8),
-                                                    child: Row(
-                                                      mainAxisSize:
-                                                          MainAxisSize.min,
-                                                      children: [
-                                                        Icon(
-                                                            Icons
-                                                                .school_rounded,
-                                                            size: 13,
-                                                            color:
-                                                                Colors.white),
-                                                        SizedBox(width: 5),
-                                                        Text('Student',
-                                                            style: TextStyle(
-                                                                fontSize: 11.5,
-                                                                fontWeight:
-                                                                    FontWeight
-                                                                        .w700,
-                                                                color: Colors
-                                                                    .white)),
-                                                        SizedBox(width: 2),
-                                                        Icon(
-                                                            Icons
-                                                                .expand_more_rounded,
-                                                            size: 14,
-                                                            color:
-                                                                Colors.white),
-                                                      ],
-                                                    ),
-                                                  ),
-                                      );
-                                    },
-                                  ),
-                                ),
-                              ),
-                              SizedBox(
-                                  width: lightHeader && narrowHeader ? 4 : 7),
-                              // ── Profile ───────────────────────────────────
-                              lightHeader
-                                  ? Container(
-                                      decoration: BoxDecoration(
-                                        color: Luxe.surface,
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                            color: Luxe.primary
-                                                .withValues(alpha: .12)),
-                                      ),
-                                      child: IconButton(
-                                        onPressed: () =>
-                                            context.push('/profile'),
-                                        icon: Icon(Icons.person_outline_rounded,
-                                            color: Luxe.ink,
-                                            size: narrowHeader ? 20 : 24),
-                                        padding: EdgeInsets.all(
-                                            narrowHeader ? 6 : 10),
-                                        constraints: const BoxConstraints(),
-                                      ),
-                                    )
-                                  : GlassSurface(
-                                      radius: Luxe.rChip,
-                                      padding: const EdgeInsets.all(9),
-                                      onTap: () => context.push('/profile'),
-                                      child: const Icon(Icons.person_rounded,
-                                          color: Colors.white, size: 19),
-                                    ),
-                              SizedBox(
-                                  width: lightHeader && narrowHeader ? 4 : 7),
-                              // ── Notifications ─────────────────────────────
-                              Consumer<AppState>(
-                                builder: (context, appState, child) {
-                                  return StreamBuilder<int>(
-                                    stream: appState
-                                        .watchUnreadCampusNotifications(),
-                                    initialData: 0,
-                                    builder: (context, snap) {
-                                      final unreadCount = snap.data ?? 0;
-                                      return Stack(
-                                        clipBehavior: Clip.none,
-                                        children: [
-                                          lightHeader
-                                              ? Container(
-                                                  decoration: BoxDecoration(
-                                                    color: Luxe.surface,
-                                                    shape: BoxShape.circle,
-                                                    border: Border.all(
-                                                        color: Luxe.primary
-                                                            .withValues(
-                                                                alpha: .12)),
-                                                  ),
-                                                  child: IconButton(
-                                                    onPressed: () => context
-                                                        .push('/notifications'),
-                                                    icon: Icon(
-                                                        Icons
-                                                            .notifications_none_rounded,
-                                                        color: Luxe.ink,
-                                                        size: narrowHeader
-                                                            ? 20
-                                                            : 24),
-                                                    padding: EdgeInsets.all(
-                                                        narrowHeader ? 6 : 10),
-                                                    constraints:
-                                                        const BoxConstraints(),
-                                                  ),
-                                                )
-                                              : GlassSurface(
-                                                  radius: Luxe.rChip,
-                                                  padding:
-                                                      const EdgeInsets.all(9),
-                                                  onTap: () => context
-                                                      .push('/notifications'),
-                                                  child: const Icon(
-                                                      Icons
-                                                          .notifications_rounded,
-                                                      color: Colors.white,
-                                                      size: 19),
-                                                ),
-                                          if (unreadCount > 0)
-                                            Positioned(
-                                              top: -3,
-                                              right: -3,
-                                              child: IgnorePointer(
-                                                child: Container(
-                                                  padding:
-                                                      const EdgeInsets.all(3),
-                                                  constraints:
-                                                      const BoxConstraints(
-                                                          minWidth: 18,
-                                                          minHeight: 18),
-                                                  decoration: BoxDecoration(
-                                                    color: Luxe.accent,
-                                                    shape: BoxShape.circle,
-                                                    border: Border.all(
-                                                        color: Colors.white
-                                                            .withValues(
-                                                                alpha: 0.9),
-                                                        width: 1.5),
-                                                    boxShadow: [
-                                                      BoxShadow(
-                                                        color: Luxe.accent
-                                                            .withValues(
-                                                                alpha: 0.6),
-                                                        blurRadius: 8,
-                                                      ),
-                                                    ],
-                                                  ),
-                                                  child: Text('$unreadCount',
-                                                      textAlign:
-                                                          TextAlign.center,
-                                                      style: const TextStyle(
-                                                          fontSize: 9,
-                                                          height: 1.15,
-                                                          fontWeight:
-                                                              FontWeight.w800,
-                                                          color: Color(
-                                                              0xFF7A4B00))),
-                                                )
-                                                    .animate(
-                                                        onPlay: (c) => c.repeat(
-                                                            reverse: true))
-                                                    .scaleXY(
-                                                        begin: 1.0,
-                                                        end: 1.14,
-                                                        duration: 1100.ms,
-                                                        curve:
-                                                            Curves.easeInOut),
-                                              ),
-                                            ),
-                                        ],
-                                      );
-                                    },
-                                  );
-                                },
-                              ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
-                ),
               ),
         // ── Adaptive body ─────────────────────────────────────────
         body: Consumer<AppState>(
@@ -1022,6 +1096,351 @@ class AppShell extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Events-only identity header. The Events hub used to receive the shell's
+/// red gradient header, while the reference uses a soft light identity row.
+/// Keeping this as a separate widget prevents the old header branches from
+/// leaking into the Events screen while preserving their other tab behavior.
+class _EventsReferenceHeader extends StatelessWidget {
+  const _EventsReferenceHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    final narrow = MediaQuery.sizeOf(context).width < 430;
+    final logoSize = narrow ? 52.0 : 58.0;
+    final controlSize = narrow ? 38.0 : 44.0;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFAFB),
+        boxShadow: [
+          BoxShadow(
+            color: Luxe.primary.withValues(alpha: 0.035),
+            blurRadius: 18,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            narrow ? 16 : 20,
+            14,
+            narrow ? 14 : 18,
+            12,
+          ),
+          child: Row(
+            children: [
+              _EventsHeaderLogo(size: logoSize),
+              SizedBox(width: narrow ? 8 : 11),
+              Expanded(child: _EventsBrandLockup(narrow: narrow)),
+              SizedBox(width: narrow ? 5 : 8),
+              _EventsRoleSelector(narrow: narrow),
+              SizedBox(width: narrow ? 5 : 8),
+              _EventsHeaderCircleButton(
+                icon: Icons.person_outline_rounded,
+                tooltip: 'Profile',
+                size: controlSize,
+                onTap: () => context.push('/profile'),
+              ),
+              SizedBox(width: narrow ? 5 : 8),
+              _EventsNotificationButton(size: controlSize),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EventsHeaderLogo extends StatelessWidget {
+  final double size;
+
+  const _EventsHeaderLogo({required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Luxe.primary.withValues(alpha: 0.035)),
+        boxShadow: [
+          BoxShadow(
+            color: Luxe.primary.withValues(alpha: 0.10),
+            blurRadius: 13,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Icon(
+        Icons.school_rounded,
+        color: Luxe.primary,
+        size: size * 0.52,
+      ),
+    );
+  }
+}
+
+class _EventsBrandLockup extends StatelessWidget {
+  final bool narrow;
+
+  const _EventsBrandLockup({required this.narrow});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'Campus Connect',
+            maxLines: 1,
+            style: TextStyle(
+              fontFamily: 'Inter',
+              fontSize: narrow ? 20 : 24,
+              height: 1.1,
+              fontWeight: FontWeight.w800,
+              color: Luxe.ink,
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'City University Malaysia',
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: narrow ? 12.5 : 14,
+                    height: 1.1,
+                    fontWeight: FontWeight.w500,
+                    color: Luxe.ink,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 5),
+            Container(
+              width: 17,
+              height: 17,
+              decoration: const BoxDecoration(
+                color: Luxe.primary,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.check_rounded,
+                size: 11,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _EventsRoleSelector extends StatelessWidget {
+  final bool narrow;
+
+  const _EventsRoleSelector({required this.narrow});
+
+  Future<void> _handleTap(BuildContext context, bool isAdmin) async {
+    if (isAdmin) {
+      context.read<AppState>().logout();
+      if (context.mounted) context.go('/login');
+      return;
+    }
+
+    final result = await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const LoginScreen(isAdminLogin: true, isDialog: true),
+    );
+
+    if (result == true && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Admin mode activated'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppTheme.textPrimary,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(999),
+          ),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<AppState>(
+      builder: (context, appState, _) {
+        final isAdmin = appState.isAdmin;
+        return InkWell(
+          onTap: () => _handleTap(context, isAdmin),
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            constraints: BoxConstraints(maxWidth: narrow ? 100 : 124),
+            padding: EdgeInsets.symmetric(
+              horizontal: narrow ? 9 : 13,
+              vertical: narrow ? 9 : 11,
+            ),
+            decoration: BoxDecoration(
+              color:
+                  isAdmin ? Luxe.accent.withValues(alpha: 0.20) : Colors.white,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: isAdmin
+                    ? Luxe.accent.withValues(alpha: 0.30)
+                    : Luxe.primary.withValues(alpha: 0.18),
+                width: 1.2,
+              ),
+            ),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    isAdmin ? Icons.shield_rounded : Icons.school_rounded,
+                    size: narrow ? 14 : 16,
+                    color: isAdmin ? const Color(0xFF7A4B00) : Luxe.primary,
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    isAdmin ? 'Admin' : 'Student',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: narrow ? 11 : 12,
+                      fontWeight: FontWeight.w800,
+                      color: isAdmin ? const Color(0xFF7A4B00) : Luxe.ink,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                  Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    size: narrow ? 16 : 17,
+                    color: isAdmin ? const Color(0xFF7A4B00) : Luxe.ink,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _EventsHeaderCircleButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final double size;
+  final VoidCallback onTap;
+
+  const _EventsHeaderCircleButton({
+    required this.icon,
+    required this.tooltip,
+    required this.size,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        border: Border.all(color: Luxe.primary.withValues(alpha: 0.14)),
+        boxShadow: [
+          BoxShadow(
+            color: Luxe.primary.withValues(alpha: 0.035),
+            blurRadius: 9,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        child: InkWell(
+          onTap: onTap,
+          customBorder: const CircleBorder(),
+          child: Tooltip(
+            message: tooltip,
+            child: Center(
+              child: Icon(icon, size: size * 0.53, color: Luxe.ink),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EventsNotificationButton extends StatelessWidget {
+  final double size;
+
+  const _EventsNotificationButton({required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<AppState>(
+      builder: (context, appState, _) {
+        return StreamBuilder<int>(
+          stream: appState.watchUnreadCampusNotifications(),
+          initialData: 0,
+          builder: (context, snapshot) {
+            final unread = snapshot.data ?? 0;
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                _EventsHeaderCircleButton(
+                  icon: Icons.notifications_none_rounded,
+                  tooltip: 'Notifications',
+                  size: size,
+                  onTap: () => context.push('/notifications'),
+                ),
+                if (unread > 0)
+                  Positioned(
+                    top: -1,
+                    right: -1,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: 11,
+                        height: 11,
+                        decoration: BoxDecoration(
+                          color: Luxe.primary,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 1.5),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }

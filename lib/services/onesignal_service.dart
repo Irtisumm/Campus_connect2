@@ -65,10 +65,20 @@ class OneSignalService {
   /// Associates the OneSignal device subscription with the given
   /// Firebase Auth UID. Called after a successful login.
   ///
-  /// Safe to call multiple times for the same user — OneSignal's `login`
-  /// is idempotent per external ID.
+  /// Safe to call multiple times for the same user.  Logs out any
+  /// previously-mapped external ID first to avoid 409 alias conflicts
+  /// that occur when the same UID is still claimed by another device
+  /// (or by a previous session that was killed without a clean logout).
   Future<void> setExternalUserId(String uid) async {
     if (uid.isEmpty) return;
+    try {
+      // Clear any previous external-user mapping so OneSignal never
+      // rejects the new login with a 409 alias conflict.
+      await OneSignal.logout();
+    } catch (_) {
+      // logout may fail if no user is currently logged in — that is
+      // expected on first launch and safe to ignore.
+    }
     try {
       await OneSignal.login(uid);
       debugPrint('[OneSignal] login: $uid');

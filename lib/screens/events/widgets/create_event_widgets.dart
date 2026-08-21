@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -846,6 +848,197 @@ class PdfSecurityNote extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Dashed-border tappable card for uploading a cover image for the event.
+///
+/// Mirrors the admin `_AdminCreateUploadCard` but draws every visual value
+/// from [CreateEventTokens] so it stays consistent with the student screen's
+/// design system. Shows a preview when [file] is non-null, an empty cloud
+/// upload state otherwise. Progress text renders while [uploading].
+class CoverImageUploadCard extends StatelessWidget {
+  const CoverImageUploadCard({
+    super.key,
+    required this.file,
+    this.imageUrl,
+    this.removed = false,
+    this.uploading = false,
+    this.progress,
+    required this.onPick,
+    required this.onRemove,
+  });
+
+  final File? file;
+  final String? imageUrl;
+  final bool removed;
+  final bool uploading;
+  final double? progress;
+  final VoidCallback onPick;
+  final VoidCallback onRemove;
+
+  bool get hasPreview =>
+      file != null ||
+      (!removed && imageUrl != null && imageUrl!.isNotEmpty);
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(CreateEventTokens.cardRadius),
+      child: CustomPaint(
+        painter: const _CoverImageDashedPainter(),
+        child: Material(
+          color: CreateEventTokens.coverUploadColor,
+          child: InkWell(
+            onTap: uploading ? null : onPick,
+            child: SizedBox(
+              height: CreateEventTokens.coverUploadHeight,
+              child: hasPreview ? _preview() : _emptyState(),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _emptyState() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: <Widget>[
+        const Icon(
+          Icons.image_outlined,
+          color: CreateEventTokens.coverUploadIconColor,
+          size: CreateEventTokens.coverUploadIconEmptySize,
+        ),
+        const SizedBox(height: 9),
+        const Text(
+          'Upload Cover Image',
+          style: TextStyle(
+            color: CreateEventTokens.coverUploadLabelColor,
+            fontSize: 16,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'PNG, JPG or WEBP (Max 5 MB)',
+          style: TextStyle(
+            color: CreateEventTokens.coverUploadHintColor,
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _preview() {
+    final Widget image;
+    if (file != null) {
+      image = Image.file(
+        file!,
+        fit: BoxFit.cover,
+        width: double.infinity,
+      );
+    } else {
+      image = Image.network(
+        imageUrl!,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        errorBuilder: (_, __, ___) => const Center(
+          child: Icon(
+            Icons.broken_image_outlined,
+            color: CreateEventTokens.coverUploadHintColor,
+            size: 38,
+          ),
+        ),
+      );
+    }
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        image,
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: <Color>[
+                CreateEventTokens.coverUploadOverlayStart,
+                CreateEventTokens.coverUploadOverlayEnd,
+              ],
+            ),
+          ),
+        ),
+        Positioned(
+          left: 14,
+          bottom: 13,
+          child: Text(
+            uploading
+                ? 'Uploading${progress == null ? '' : ' ${(progress! * 100).round()}%'}'
+                : 'Tap to replace image',
+            style: const TextStyle(
+              color: CreateEventTokens.coverUploadProgressLabelColor,
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        Positioned(
+          top: 8,
+          right: 8,
+          child: Material(
+            color: CreateEventTokens.coverUploadRemoveBg,
+            shape: const CircleBorder(),
+            child: InkWell(
+              onTap: uploading ? null : onRemove,
+              customBorder: const CircleBorder(),
+              child: const SizedBox(
+                width: CreateEventTokens.coverUploadRemoveButtonSize,
+                height: CreateEventTokens.coverUploadRemoveButtonSize,
+                child: Icon(
+                  Icons.close_rounded,
+                  color: CreateEventTokens.coverUploadRemoveIconColor,
+                  size: CreateEventTokens.coverUploadRemoveIconSize,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Private dashed rounded-rectangle border for the cover image upload card.
+class _CoverImageDashedPainter extends CustomPainter {
+  const _CoverImageDashedPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint paint = Paint()
+      ..color = CreateEventTokens.coverUploadDashedBorderColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = CreateEventTokens.coverUploadDashedBorderWidth;
+
+    final Path path = Path()
+      ..addRRect(RRect.fromRectAndRadius(
+        Offset.zero & size,
+        const Radius.circular(CreateEventTokens.cardRadius),
+      ));
+
+    for (final metric in path.computeMetrics()) {
+      double distance = 0;
+      while (distance < metric.length) {
+        final double end = (distance + CreateEventTokens.coverUploadDashedDashWidth)
+            .clamp(0.0, metric.length);
+        canvas.drawPath(metric.extractPath(distance, end), paint);
+        distance = end + CreateEventTokens.coverUploadDashedDashGap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 /// 56 px full-width gradient submit button with loading state.

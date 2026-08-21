@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -232,28 +234,132 @@ class _RegistrationCard extends StatelessWidget {
   }
 
   void _showRejectDialog(BuildContext context, UserProfile reg) {
+    // Opens a warning dialog with a 3-second countdown before the Reject
+    // action becomes available, so the admin can't reject by accident.
     showDialog(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Reject Registration', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-        content: Text('Reject registration for ${reg.name} (${reg.studentId})?\n\nThe student will not be able to log in.', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary, height: 1.5)),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(dialogCtx).pop(), child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted))),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () async {
-              Navigator.of(dialogCtx).pop();
-              final ok = await context.read<AppState>().rejectRegistration(reg.uid);
-              if (!context.mounted) return;
-              _toast(context, ok
-                  ? '${reg.name} registration rejected.'
-                  : 'Could not reject ${reg.name}. Please try again.');
-            },
-            child: const Text('Reject', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+      builder: (_) => _RejectRegistrationDialog(reg: reg),
+    );
+  }
+}
+
+/// Warning dialog shown before rejecting a student registration.
+///
+/// The Reject button stays disabled and a 3→1 countdown is shown so the admin
+/// cannot reject by accident. After the countdown reaches zero the Reject
+/// button enables and calls `AppState.rejectRegistration`, which writes
+/// `users/{uid}.status = Rejected` to Firestore.
+class _RejectRegistrationDialog extends StatefulWidget {
+  const _RejectRegistrationDialog({required this.reg});
+
+  final UserProfile reg;
+
+  @override
+  State<_RejectRegistrationDialog> createState() => _RejectRegistrationDialogState();
+}
+
+class _RejectRegistrationDialogState extends State<_RejectRegistrationDialog> {
+  static const int _warningSeconds = 3;
+
+  late int _remaining = _warningSeconds;
+  Timer? _timer;
+
+  bool get _locked => _remaining > 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() {
+        _remaining -= 1;
+        if (_remaining <= 0) _timer?.cancel();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _confirm() async {
+    final reg = widget.reg;
+    Navigator.of(context).pop();
+    final ok = await context.read<AppState>().rejectRegistration(reg.uid);
+    if (!mounted) return;
+    _toast(context, ok
+        ? '${reg.name} registration rejected.'
+        : 'Could not reject ${reg.name}. Please try again.');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final reg = widget.reg;
+    final remaining = _remaining;
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Row(children: [
+        Icon(Icons.warning_amber_rounded, color: AppTheme.danger, size: 22),
+        SizedBox(width: 8),
+        Text('Reject Registration', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+      ]),
+      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('You are about to reject ${reg.name} (${reg.studentId}).\nThe student will NOT be able to log in.',
+            style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary, height: 1.5)),
+        const SizedBox(height: 14),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(color: AppTheme.red.withOpacity(0.06), borderRadius: BorderRadius.circular(10)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('Student ID: ${reg.studentId}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            Text('Faculty: ${reg.faculty}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            Text('Email: ${reg.email}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          ]),
+        ),
+        const SizedBox(height: 14),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: _locked ? AppTheme.danger.withOpacity(0.10) : AppTheme.danger.withOpacity(0.18),
+            border: Border.all(color: AppTheme.danger.withOpacity(0.4)),
+            borderRadius: BorderRadius.circular(12),
           ),
-        ],
-      ),
+          child: _locked
+              ? Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  SizedBox(
+                    width: 32, height: 32,
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween(begin: 0.0, end: remaining * 1.0),
+                      duration: const Duration(seconds: 1),
+                      builder: (context, value, child) =>
+                          CircularProgressIndicator(value: value / _warningSeconds, strokeWidth: 3, color: AppTheme.danger, backgroundColor: AppTheme.danger.withOpacity(0.15)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Reject enabled in ${remaining}s', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.danger)),
+                    Text('Please be sure before rejecting.', style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+                  ]),
+                ])
+              : Row(mainAxisAlignment: MainAxisAlignment.center, children: const [
+                  Icon(Icons.verified_user_outlined, color: AppTheme.danger, size: 20),
+                  SizedBox(width: 8),
+                  Text('You may now reject', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppTheme.danger)),
+                ]),
+        ),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Cancel', style: TextStyle(color: AppTheme.textMuted))),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: _locked ? AppTheme.danger.withOpacity(0.45) : AppTheme.danger),
+          onPressed: _locked ? null : () => _confirm(),
+          child: Text(_locked ? 'Wait ${remaining}s' : 'Reject', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        ),
+      ],
     );
   }
 }

@@ -29,6 +29,11 @@ class PushService {
   FirebaseFirestore get _firestore => _customFirestore ?? FirebaseFirestore.instance;
   SharedPreferences? _prefs;
 
+  // Held so it can be cancelled at logout — otherwise a lingering
+  // subscription from user A would try to update user A's deviceToken
+  // document while user B is authenticated, triggering PERMISSION_DENIED.
+  StreamSubscription<String>? _tokenRefreshSub;
+
   static const String _deviceIdKey = 'push_device_id';
   static const String _permissionAskedKey = 'push_permission_asked';
 
@@ -126,8 +131,12 @@ class PushService {
   /// Listens for FCM token rotations.  When the token changes the
   /// existing device document is updated in-place so the Cloud Function
   /// always targets the active token.
+  ///
+  /// The subscription is cancelled at logout so a lingering listener from
+  /// a previous session never tries to write with the wrong auth identity.
   void listenToTokenRefresh(String uid) {
-    _messaging.onTokenRefresh.listen((newToken) async {
+    _tokenRefreshSub?.cancel();
+    _tokenRefreshSub = _messaging.onTokenRefresh.listen((newToken) async {
       if (uid.isEmpty || newToken.isEmpty) return;
       try {
         final dId = await deviceId;
@@ -148,9 +157,12 @@ class PushService {
     });
   }
 
-  /// Removes this device's token document.  Called at logout so the
-  /// logged-out device stops receiving private notifications.
+  /// Removes this device's token document and cancels the onTokenRefresh
+  /// subscription. Called at logout so the logged-out device stops
+  /// receiving private notifications and stale listeners don't leak.
   Future<void> unregisterToken(String uid) async {
+    _tokenRefreshSub?.cancel();
+    _tokenRefreshSub = null;
     if (uid.isEmpty) return;
     try {
       final dId = await deviceId;

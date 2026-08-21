@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -77,6 +79,10 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
   AutovalidateMode _autovalidateMode = AutovalidateMode.disabled;
   bool _pdfError = false;
   bool _discardConfirmed = false;
+
+  // Cover image state (only the *selected* local file; no edit flow).
+  File? _coverImageFile;
+  double? _uploadProgress;
 
   @override
   void dispose() {
@@ -171,6 +177,26 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
     _model.approvalPdf = file;
   }
 
+  Future<void> _pickCoverImage(AppState appState) async {
+    try {
+      final File? file = await appState.pickEventCoverImage();
+      if (file == null || !mounted) return;
+      if (await file.length() > 5 * 1024 * 1024) {
+        _toast(context, 'Please choose an image smaller than 5 MB');
+        return;
+      }
+      setState(() => _coverImageFile = file);
+    } catch (_) {
+      if (mounted) {
+        _toast(context, 'Unable to select image. Please try again.');
+      }
+    }
+  }
+
+  void _removeCover() {
+    setState(() => _coverImageFile = null);
+  }
+
   // ── Discard confirmation (lead decision #8) ────────────────────
 
   Future<void> _confirmDiscard() async {
@@ -202,7 +228,7 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
   }
 
   void _handleCancel() {
-    if (_model.isDirty) {
+    if (_model.isDirty || _coverImageFile != null) {
       _confirmDiscard();
     } else {
       context.pop();
@@ -279,15 +305,43 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
     }
 
     model.submitting = true;
+
+    // Upload cover image first when one was selected.
+    String? coverImageUrl;
+    String? coverImagePublicId;
+    if (_coverImageFile != null) {
+      try {
+        final upload = await appState.uploadEventCoverToCloudinary(
+          _coverImageFile!,
+          onProgress: (int sent, int total) {
+            if (!mounted || total <= 0) return;
+            setState(() => _uploadProgress = sent / total);
+          },
+        );
+        coverImageUrl = upload.url;
+        coverImagePublicId = upload.publicId;
+      } catch (_) {
+        if (mounted) {
+          _toast(context, 'Unable to upload cover image. Please try again.');
+          model.submitting = false;
+          setState(() => _uploadProgress = null);
+        }
+        return;
+      }
+    }
+
     final Event draft = model.buildDraftEvent(
       hostStudentId: appState.userId!,
       today: DateTime.now(),
+      coverImageUrl: coverImageUrl,
+      coverImagePublicId: coverImagePublicId,
     );
     final Event? created = await appState.createEvent(draft);
     if (!mounted) return;
     if (created == null) {
       _toast(context, 'Unable to submit event. Please try again.');
       model.submitting = false;
+      setState(() => _uploadProgress = null);
     } else {
       model.done = true; // leave `submitting` true; button must never re-enable
     }
@@ -304,7 +358,9 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
           return _buildSuccessScreen(context);
         }
         return PopScope(
-          canPop: !_model.isDirty || _model.done || _discardConfirmed,
+          canPop: !_model.isDirty && _coverImageFile == null ||
+              _model.done ||
+              _discardConfirmed,
           onPopInvokedWithResult: (bool didPop, Object? result) {
             if (!didPop) {
               _confirmDiscard();
@@ -402,6 +458,10 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         _organizerCard(),
         const SizedBox(height: CreateEventTokens.fieldGap),
         _descriptionCard(),
+        const SizedBox(height: CreateEventTokens.sectionGapTop),
+        const CreateEventSectionHeader(label: 'COVER IMAGE'),
+        const SizedBox(height: CreateEventTokens.sectionGapBottom),
+        _coverImageCard(),
         const SizedBox(height: CreateEventTokens.sectionGapTop),
         const CreateEventSectionHeader(label: 'APPROVAL LETTER (PDF)'),
         const SizedBox(height: CreateEventTokens.sectionGapBottom),
@@ -624,6 +684,17 @@ class _CreateEventScreenState extends State<CreateEventScreen> {
         textInputAction: TextInputAction.newline,
         keyboardType: TextInputType.multiline,
       ),
+    );
+  }
+
+  Widget _coverImageCard() {
+    final AppState appState = context.read<AppState>();
+    return CoverImageUploadCard(
+      file: _coverImageFile,
+      uploading: _model.submitting && _coverImageFile != null,
+      progress: _uploadProgress,
+      onPick: () => _pickCoverImage(appState),
+      onRemove: _removeCover,
     );
   }
 

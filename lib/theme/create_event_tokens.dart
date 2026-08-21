@@ -117,6 +117,25 @@ abstract final class CreateEventTokens {
   static const Color uploadHintColor = Color(0xFF7A7386);
   static const Color uploadErrorTextColor = Color(0xFF9C0F4B);
 
+  // Cover image upload card.
+  static const Color coverUploadColor = Color(0xFFFFF7FA);
+  static const Color coverUploadDashedBorderColor = Color(0xFFED7B9A);
+  static const Color coverUploadIconColor = Color(0xFFB01255);
+  static const Color coverUploadLabelColor = Color(0xFF1B1523);
+  static const Color coverUploadHintColor = Color(0xFF6A7894);
+  static const Color coverUploadOverlayStart = Color(0x00000000);
+  static const Color coverUploadOverlayEnd = Color(0x94000000);
+  static const Color coverUploadRemoveBg = Color(0x61000000);
+  static const Color coverUploadRemoveIconColor = Color(0xFFFFFFFF);
+  static const Color coverUploadProgressLabelColor = Color(0xFFFFFFFF);
+  static const double coverUploadHeight = 172;
+  static const double coverUploadIconEmptySize = 42;
+  static const double coverUploadRemoveButtonSize = 38;
+  static const double coverUploadRemoveIconSize = 20;
+  static const double coverUploadDashedBorderWidth = 1.4;
+  static const double coverUploadDashedDashWidth = 7;
+  static const double coverUploadDashedDashGap = 5;
+
   // Choose PDF outlined button.
   static const Color choosePdfLabelColor = Color(0xFFB01255);
   static const Color choosePdfBorderColor = Color(0x4DB01255); // 30% raspberry
